@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 import yaml
@@ -24,6 +24,7 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import NoBearer
 from pydocs_mcp.harness.ask_your_docs.chat_request import (
     NO_REQUEST_SETTINGS,
     ProviderRoutingProfileError,
+    stream_chunk_timeout_kwargs,
 )
 from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     ConnectionOverride,
@@ -36,7 +37,13 @@ from pydocs_mcp.harness.ask_your_docs.llm_connection import (
 from pydocs_mcp.retrieval.config.ask_your_docs_models import LlmConnectionConfig
 
 from ._connection_fakes import RecordingTransport, chat_model_kwargs_built
-from ._reasoning_fakes import FakeStallingStreamEndpoint, chat_model_kwargs_built_with_timer_field
+from ._reasoning_fakes import (
+    STREAM_CHUNK_TIMEOUT_ENV,
+    UPSTREAM_STREAM_CHUNK_TIMEOUT_SECONDS,
+    FakeStallingStreamEndpoint,
+    chat_model_kwargs_built_with_timer_field,
+    needs_the_stream_chunk_timer,
+)
 
 _OPENROUTER = "https://openrouter.ai/api/v1"
 _ROUTE = {"order": ["deepinfra/bf16"], "allow_fallbacks": False}
@@ -58,13 +65,6 @@ _PINNED_BLOCK_FILE = (
 )
 _needs_the_eval_tree = pytest.mark.skipif(
     not _PINNED_BLOCK_FILE.exists(), reason="benchmarks tree not present"
-)
-# langchain-openai 1.2+ ends an async stream silent for `stream_chunk_timeout` seconds;
-# 1.1.x has neither the field nor the timer, so the tests that need them skip there.
-_TIMER_ENV = "LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S"
-_needs_the_stream_chunk_timer = pytest.mark.skipif(
-    "stream_chunk_timeout" not in langchain_openai.ChatOpenAI.model_fields,
-    reason="this langchain-openai has no stream-chunk timer (added in 1.2)",
 )
 
 
@@ -212,11 +212,12 @@ def test_the_pinned_block_files_route_lands_in_the_request_body(
     assert json.loads(recorder.requests[-1].content)["provider"] == _ROUTE
 
 
-# --- the block's timeout also bounds a silent live stream -------------------------------
+# --- a longer block timeout extends a silent live stream's limit, never shortens it ---
 
 
 def test_a_block_timeout_is_also_the_stream_chunk_timeout_keyword() -> None:
-    """One value, two limits: the request timeout and the live stream's silence limit."""
+    """The block's value reaches the factory as the stream keyword too; the factory decides
+    whether it extends upstream's limit."""
     kwargs = _connection(_ROUTED_BLOCK).request_settings.chat_factory_kwargs()
 
     assert kwargs.get("stream_chunk_timeout_seconds") == kwargs["timeout_seconds"] == 300.0
@@ -228,17 +229,54 @@ def test_a_block_without_a_timeout_emits_no_stream_chunk_timeout_keyword() -> No
     assert "stream_chunk_timeout_seconds" not in kwargs.request_settings.chat_factory_kwargs()
 
 
-@_needs_the_stream_chunk_timer
-def test_the_real_chat_model_takes_the_blocks_timeout_as_its_stream_chunk_timeout() -> None:
-    """T15(a): on the real class, the field the timer reads holds the block's value."""
-    connection = _connection(_ROUTED_BLOCK)
+def _real_model_for_block_timeout(timeout_seconds: float):
+    """The real class, built through block -> request settings -> factory."""
+    block = {"base_url": _OPENROUTER, "model": "m", "timeout_seconds": timeout_seconds}
+    connection = _connection(block)
     request = connection.request_settings.chat_factory_kwargs()
+    transport = RecordingTransport([]).transport
+    return build_chat_model(connection, NoBearer(), transport=transport, **request)
 
-    llm = build_chat_model(
-        connection, NoBearer(), transport=RecordingTransport([]).transport, **request
-    )
 
-    assert llm.stream_chunk_timeout == 300.0
+@needs_the_stream_chunk_timer
+def test_the_real_chat_model_takes_the_blocks_timeout_as_its_stream_chunk_timeout() -> None:
+    """T15(a): a block value longer than upstream's 120 s extends the timer to it."""
+    assert _real_model_for_block_timeout(300).stream_chunk_timeout == 300.0
+
+
+@needs_the_stream_chunk_timer
+def test_a_block_timeout_shorter_than_upstreams_leaves_upstreams_limit() -> None:
+    """A fast-fail 30 s must not cut a keepalive-only reasoning phase shorter than plain
+    upstream would: the model keeps upstream's 120 s."""
+    llm = _real_model_for_block_timeout(30)
+
+    assert llm.stream_chunk_timeout == UPSTREAM_STREAM_CHUNK_TIMEOUT_SECONDS
+
+
+@needs_the_stream_chunk_timer
+def test_a_timer_turned_off_by_the_environment_stays_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(STREAM_CHUNK_TIMEOUT_ENV, "0")
+
+    assert _real_model_for_block_timeout(300).stream_chunk_timeout == 0
+
+
+@needs_the_stream_chunk_timer
+def test_an_environment_limit_longer_than_the_block_is_kept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(STREAM_CHUNK_TIMEOUT_ENV, "600")
+
+    assert _real_model_for_block_timeout(300).stream_chunk_timeout == 600.0
+
+
+def test_a_field_entry_that_is_not_a_pydantic_field_sends_nothing() -> None:
+    """A stand-in whose ``model_fields`` entry is a plain value has no default to read, so
+    nothing can be shown to extend it: nothing is sent, and nothing crashes."""
+
+    class PlainValueFieldStandIn:
+        model_fields: ClassVar[dict[str, object]] = {"stream_chunk_timeout": None}
+
+    assert stream_chunk_timeout_kwargs(PlainValueFieldStandIn, 300.0) == {}
 
 
 def test_a_class_declaring_the_timer_field_is_built_with_the_blocks_timeout(
@@ -275,30 +313,29 @@ def _comparable(kwargs: dict) -> dict:
     return {key: type(value) if key in clients else value for key, value in kwargs.items()}
 
 
-@_needs_the_stream_chunk_timer
+@needs_the_stream_chunk_timer
 def test_a_live_stream_silent_past_the_blocks_timeout_ends_at_that_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """T16: block -> request settings -> factory -> real model over a stalled stream. The
-    block's 0.3 s fires well inside the 2 s stall; upstream's 120 s default would not."""
+    """T16: block -> request settings -> factory -> real model over a stalled stream. A small
+    environment limit (0.1 s) stands in for upstream's default; the block's longer 0.4 s
+    extends it, so the error the stall raises names the block's value, not the default's."""
     import openai
 
-    monkeypatch.delenv(_TIMER_ENV, raising=False)  # the upstream default, not a shell's value
-    connection = _connection({"base_url": _OPENROUTER, "model": "m", "timeout_seconds": 0.3})
+    monkeypatch.setenv(STREAM_CHUNK_TIMEOUT_ENV, "0.1")
+    connection = _connection({"base_url": _OPENROUTER, "model": "m", "timeout_seconds": 0.4})
     request = connection.request_settings.chat_factory_kwargs()
-    endpoint = FakeStallingStreamEndpoint(stall_seconds=2.0)
+    endpoint = FakeStallingStreamEndpoint(stall_seconds=3.0)
     llm = build_chat_model(connection, NoBearer(), transport=endpoint.transport, **request)
 
     async def stream_reply() -> None:
         async for _chunk in llm.astream("hi"):
             pass
 
-    started = time.monotonic()
     with pytest.raises(langchain_openai.StreamChunkTimeoutError) as excinfo:
         asyncio.run(stream_reply())
-    elapsed = time.monotonic() - started
 
     assert isinstance(excinfo.value, TimeoutError)
     assert not isinstance(excinfo.value, openai.APIError)
-    assert excinfo.value.timeout_s == 0.3
-    assert elapsed < 1.5, f"the stall ended the stream, not the block's limit: {elapsed:.2f}s"
+    assert excinfo.value.timeout_s == 0.4  # the block's limit fired, not the 0.1 s default
+    assert excinfo.value.chunks_received == 1  # the first frame arrived; the stall did the rest

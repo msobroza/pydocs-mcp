@@ -43,7 +43,11 @@ from pydocs_mcp.harness.ask_your_docs.llm_connection import (
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AuthMode, LlmConnectionConfig
 
 from ._connection_fakes import FakeClock, FakeTokenService, RecordingTransport, RotatingBearer
-from ._reasoning_fakes import FakeStallingStreamEndpoint
+from ._reasoning_fakes import (
+    STREAM_CHUNK_TIMEOUT_ENV,
+    FakeStallingStreamEndpoint,
+    needs_the_stream_chunk_timer,
+)
 
 _URL = "http://llm.test/v1"
 _TOKEN_URL = "http://localhost:8899/access-token"
@@ -467,20 +471,13 @@ def test_never_the_responses_route(monkeypatch) -> None:
     assert recorder.requests[-1].url.path.endswith("/chat/completions")
 
 
-_TIMER_ENV = "LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S"
-_needs_the_stream_chunk_timer = pytest.mark.skipif(
-    "stream_chunk_timeout" not in langchain_openai.ChatOpenAI.model_fields,
-    reason="this langchain-openai has no stream-chunk timer (added in 1.2)",
-)
-
-
-@_needs_the_stream_chunk_timer
+@needs_the_stream_chunk_timer
 def test_a_real_stalled_stream_is_labelled_did_not_answer_in_time(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No block, so upstream's timer runs at the env var's small limit and raises its real
     StreamChunkTimeoutError, which the panel labels through its TimeoutError base."""
-    monkeypatch.setenv(_TIMER_ENV, "0.3")
+    monkeypatch.setenv(STREAM_CHUNK_TIMEOUT_ENV, "0.3")
     endpoint = FakeStallingStreamEndpoint(stall_seconds=2.0)
     connection = _connection({"base_url": _URL, "model": "m"})
     llm = build_chat_model(connection, NoBearer(), transport=endpoint.transport)
@@ -493,6 +490,8 @@ def test_a_real_stalled_stream_is_labelled_did_not_answer_in_time(
         asyncio.run(stream_reply())
 
     assert type(excinfo.value).__name__ == "StreamChunkTimeoutError"
+    assert excinfo.value.timeout_s == 0.3  # the env var's limit fired, not the stall's end
+    assert excinfo.value.chunks_received == 1
     assert failure_reason(labelled_failure_class_name(excinfo.value)) == (
         "the model endpoint did not answer in time"
     )
