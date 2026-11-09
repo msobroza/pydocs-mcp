@@ -8,6 +8,7 @@ test_multimodal_detection.py when the seams widened to ``(connection, bearer)``)
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
@@ -111,18 +112,23 @@ class FakeTokenService:
         return httpx.MockTransport(self)
 
 
+ScriptItem = int | Exception | tuple[int, Mapping[str, str]]
+
+
 class RecordingTransport:
     """The chat endpoint (and ``/models``) as an ``httpx.MockTransport`` handler.
 
     Answers the scripted statuses in order (200 after the script runs out; an
-    ``Exception`` item is raised instead of answered), records every request,
-    and — with ``echo_bearer_in_401`` — puts the presented bearer into the 401
-    body, the way gateways do (AC-35).
+    ``Exception`` item is raised instead of answered; a ``(status, headers)``
+    item answers that status carrying those response headers, e.g.
+    ``(429, {"retry-after": "121"})``), records every request, and — with
+    ``echo_bearer_in_401`` — puts the presented bearer into the 401 body, the
+    way gateways do (AC-35).
     """
 
     def __init__(
         self,
-        script: list[int | Exception] | None = None,
+        script: list[ScriptItem] | None = None,
         *,
         echo_bearer_in_401: bool = False,
         model_ids: tuple[str, ...] = ("model-a", "model-b"),
@@ -154,16 +160,20 @@ class RecordingTransport:
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.record(request)
-        status = self.script.pop(0) if self.script else 200
-        if isinstance(status, Exception):
-            raise status
+        item = self.script.pop(0) if self.script else 200
+        if isinstance(item, Exception):
+            raise item
+        status, headers = item if isinstance(item, tuple) else (item, {})
         if status == 200 and request.url.path.endswith("/models"):
-            return httpx.Response(200, json={"data": [{"id": i} for i in self.model_ids]})
+            body: dict = {"data": [{"id": i} for i in self.model_ids]}
+            return httpx.Response(200, headers=headers, json=body)
         if status == 200:
-            return httpx.Response(200, json=chat_completion_body(self.reply, self.finish_reason))
+            body = chat_completion_body(self.reply, self.finish_reason)
+            return httpx.Response(200, headers=headers, json=body)
         presented = request.headers.get("Authorization", "")
         message = f"rejected {presented}" if self.echo_bearer_in_401 else "rejected"
-        return httpx.Response(status, json={"error": {"message": message, "type": "auth"}})
+        body = {"error": {"message": message, "type": "auth"}}
+        return httpx.Response(status, headers=headers, json=body)
 
     @property
     def transport(self) -> httpx.MockTransport:
@@ -196,6 +206,48 @@ class RotatingBearer:
 
     def describe(self) -> BearerStatus:
         return BearerStatus(AuthMode.ENV_KEY, None, last_four_of(self.last))
+
+
+class EmptyAtRequestBearer:
+    """A ``BearerSource`` that passes the factory's eager non-empty check, then reads empty.
+
+    The no-block listing path calls ``current()`` once at build time to decide
+    between a real bearer and the strip-auth placeholder (``connection_auth_kwargs``);
+    every later call — the SDK's request-time read — returns ``""``. That is the
+    one shape in which openai 2's default security for a raw request would fall
+    back to ``OPENAI_ADMIN_KEY``.
+    """
+
+    def __init__(self, checked: str = "sk-checked-SYNTHETIC") -> None:
+        self.checked = checked
+        self.calls = 0
+
+    def current(self) -> str:
+        self.calls += 1
+        return self.checked if self.calls == 1 else ""
+
+    def peek(self) -> str:
+        return ""
+
+    def renew(self, rejected: str | None = None, *, reason: str = "manual") -> str:
+        return self.current()
+
+    def describe(self) -> BearerStatus:
+        return BearerStatus(AuthMode.ENV_KEY, None, "")
+
+
+class SleepRecorder:
+    """A ``time.sleep`` stand-in (``async_sleep``: the ``anyio.sleep`` one) that records each
+    requested delay and never waits."""
+
+    def __init__(self) -> None:
+        self.delays: list[float] = []
+
+    def __call__(self, seconds: float) -> None:
+        self.delays.append(seconds)
+
+    async def async_sleep(self, seconds: float) -> None:
+        self.delays.append(seconds)
 
 
 class FakeBearer:

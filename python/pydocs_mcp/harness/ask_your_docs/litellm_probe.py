@@ -134,8 +134,13 @@ async def _group_info_payload(
     import httpx  # heavy-ish; lazy by contract (cli.py must not import it)
 
     client = _listing_client(connection, bearer, transport)
-    # An absolute URL: LiteLLM serves the route beside /v1, not under it.
-    response = await client.get(_group_info_url(connection.base_url), cast_to=httpx.Response)
+    # An absolute URL: LiteLLM serves the route beside /v1, not under it. Bearer-only, as every
+    # SDK resource call is: from openai 2.34 a raw request's default falls back to OPENAI_ADMIN_KEY.
+    response = await client.get(
+        _group_info_url(connection.base_url),
+        cast_to=httpx.Response,
+        options={"security": {"bearer_auth": True}},
+    )
     return response.json()
 
 

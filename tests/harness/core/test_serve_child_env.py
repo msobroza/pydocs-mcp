@@ -183,6 +183,19 @@ def test_sealed_tier_withholds_endpoint_variables(caplog: pytest.LogCaptureFixtu
     assert serve_child_env(environ=environ) == environ
 
 
+def test_sealed_tier_withholds_openai_custom_headers(caplog: pytest.LogCaptureFixture) -> None:
+    # openai 2 parses OPENAI_CUSTOM_HEADERS into every client's default headers (an
+    # Authorization line there even replaces the bearer), so it moves what an arm measures.
+    environ = {"OPENAI_CUSTOM_HEADERS": "X-Synthetic: shell-header-value"}
+    sealed = serve_child_env(environ=environ, seal_config_tier=True)
+    assert "OPENAI_CUSTOM_HEADERS" not in sealed
+    (record,) = _warnings(caplog)
+    payload = json.loads(record.getMessage())
+    assert payload["withheld"] == {"endpoint_tier_sealed": ["OPENAI_CUSTOM_HEADERS"]}
+    assert "shell-header-value" not in caplog.text
+    assert serve_child_env(environ=environ) == environ
+
+
 def test_config_prefix_matches_appconfig_env_prefix() -> None:
     assert AppConfig.model_config["env_prefix"] == policy._CONFIG_TIER_PREFIX
     assert policy._TRACE_SECTION_ENV_VAR == "PYDOCS_TRACE"
