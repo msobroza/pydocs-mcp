@@ -367,3 +367,55 @@ def test_an_arm_without_a_forced_reuse_prints_no_serving_line(
     _code, report = _run(capsys, baseline, _write_arm(tmp_path, "faster", _rows()))
 
     assert "- serving," not in report
+
+
+# --- review fixes: an unfinished arm, and the A/A twin's settings digest ----
+
+
+def _restamped(arm_dir: Path, **fields: object) -> Path:
+    """``arm_dir`` with its ``arm.json`` rewritten under ``fields``."""
+    write_arm_summary(arm_dir, dataclasses.replace(read_arm_summary(arm_dir), **fields))
+    return arm_dir
+
+
+def test_compare_refuses_an_arm_still_in_progress(
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A killed arm's checkpoint holds k of N rows: a verdict over them reads as finished."""
+    baseline = _write_arm(tmp_path, "baseline", _rows())
+    running = _restamped(_write_arm(tmp_path, "running", _rows()), halt_reason="in_progress")
+
+    code, report = _run(capsys, baseline, running)
+
+    assert code == 2
+    assert f"{running} " in report and "halt_reason in_progress" in report
+    assert "10 task(s)" in report and "--confirm-spend" in report
+
+
+def test_a_same_commit_variant_is_not_accepted_as_the_aa_replicate(
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A variant on the baseline's commit differs by a treatment, not by noise."""
+    baseline = _restamped(_write_arm(tmp_path, "baseline", _rows()), settings_digest="a" * 64)
+    variant = _restamped(_write_arm(tmp_path, "variant", _rows()), settings_digest="b" * 64)
+
+    code, report = _run(capsys, baseline, variant, replicate=variant)
+
+    assert code == 2
+    assert "is not the baseline's A/A twin" in report
+    assert "a" * 64 in report and "b" * 64 in report
+    assert "one settings digest" in report
+
+
+def test_two_arms_that_recorded_no_digest_still_pair(
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Arms written before variant arms both read ``""``: still the A/A twins they were."""
+    baseline = _write_arm(tmp_path, "baseline", _rows())
+    replicate = _write_arm(tmp_path, "replicate", _rows())
+
+    faster = _write_arm(tmp_path, "faster", _rows(turns=(5,) * 10))
+
+    code, report = _run(capsys, baseline, faster, replicate=replicate)
+
+    assert (code, _verdict_of(report, faster)) == (0, "PASS (Q10)")

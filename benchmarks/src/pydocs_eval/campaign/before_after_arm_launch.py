@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
-from dataclasses import replace
 from pathlib import Path
 
 from pydocs_eval.campaign.before_after import (
@@ -28,9 +27,13 @@ from pydocs_eval.campaign.before_after_arm import (
     ArmSummary,
     read_arm_summary,
     write_arm_settings,
-    write_arm_summary,
 )
-from pydocs_eval.campaign.before_after_arm_records import ALLOW_SERVING_MISMATCH_FLAG
+from pydocs_eval.campaign.before_after_arm_records import (
+    ALLOW_SERVING_MISMATCH_FLAG,
+    ServingMismatchOverride,
+    write_serving_override,
+)
+from pydocs_eval.campaign.before_after_arm_resume import refuse_rows_of_another_run
 from pydocs_eval.campaign.before_after_arm_settings import ARM_OVERLAY_SHAPE, load_arm_overlay
 from pydocs_eval.campaign.before_after_arm_variant import ArmVariants, arm_variants
 from pydocs_eval.campaign.before_after_product import arm_environment, product_worktree
@@ -74,7 +77,7 @@ def add_variant_arm_arguments(parser: argparse.ArgumentParser) -> None:
         ALLOW_SERVING_MISMATCH_FLAG,
         action="store_true",
         help="force a --reuse-baseline whose serving fingerprint differs or was never "
-        "recorded; logged, and named in the plan, the candidate's arm.json and the report",
+        "recorded; logged, and named in the plan, beside the candidate's arm.json and in the report",
     )
 
 
@@ -90,6 +93,15 @@ def variants_from_args(
         )
     )
     return arm_variants(baseline, candidate, llm_block=llm_block, serving_turns=serving_turns)
+
+
+def overlay_flags_given(args: argparse.Namespace) -> dict[ArmRole, str]:
+    """Each role whose overlay flag was given, mapped to that flag's name."""
+    given = (
+        (ArmRole.BASELINE, _BASELINE_SETTINGS_FLAG, args.baseline_settings),
+        (ArmRole.CANDIDATE, _CANDIDATE_SETTINGS_FLAG, args.candidate_settings),
+    )
+    return {role: flag for role, flag, path in given if path is not None}
 
 
 def run_one_arm(args: argparse.Namespace, plan: MeasurementPlan, role: ArmRole) -> ArmSummary:
@@ -109,9 +121,11 @@ def run_one_arm(args: argparse.Namespace, plan: MeasurementPlan, role: ArmRole) 
     settings = arm_settings_for(args, plan, role=role, arm_dir=arm_dir)
     write_arm_settings(arm_dir, settings)
     _record_serving_fingerprint(plan, role, arm_dir)
+    # Before the spawn, so a parent that dies after the arm still leaves it on disk.
+    write_serving_override(arm_dir, _forced_reuse(plan, role))
     with product_worktree(args.repo, settings.commit, Path(args.out) / "worktrees") as worktree:
         _spawn_arm(worktree, arm_dir=arm_dir, split=args.split, limit=args.limit)
-    return _stamped_with_forced_reuse(plan, role, arm_dir)
+    return read_arm_summary(arm_dir)
 
 
 def _record_serving_fingerprint(plan: MeasurementPlan, role: ArmRole, arm_dir: Path) -> None:
@@ -147,14 +161,52 @@ def refuse_a_serving_change_on_resume(args: argparse.Namespace, plan: Measuremen
     Raises:
         MeasurementPlanError: naming each arm and key that differs.
     """
-    roles = (ArmRole.CANDIDATE,) if plan.reused_baseline else tuple(ArmRole)
-    changes = [line for role in roles for line in _serving_changes(args, plan, role)]
+    changes = [line for role in _roles_run(plan) for line in _serving_changes(args, plan, role)]
     if changes:
         raise MeasurementPlanError(
             f"{args.out} already holds arms served differently ({'; '.join(changes)}); "
             "resuming would keep their answered rows under this serving setup — "
             "choose a fresh --out, or restore the setup they ran under"
         )
+
+
+def refuse_a_foreign_resume(args: argparse.Namespace, plan: MeasurementPlan) -> None:
+    """Before ANY write to an arm dir: rows another run answered are not resumed.
+
+    The child refuses them too (``rows_to_resume``), but only after this parent
+    has written the new run's ``arm_settings.json`` and ``serving.json`` beside
+    them — and the compare verb and ``--report-only`` then score the old answers
+    under the new settings' cap, gold and workspace.
+
+    Raises:
+        MeasurementPlanError: an arm dir holds rows of another role, commit,
+            model or settings digest, or of tasks outside the plan's.
+    """
+    for role in _roles_run(plan):
+        arm_dir = Path(args.out) / role
+        recorded = _recorded_summary(arm_dir)
+        if recorded is None:
+            continue
+        expected = arm_settings_for(args, plan, role=role, arm_dir=arm_dir).run_identity()
+        refuse_rows_of_another_run(recorded, expected, plan.task_ids, arm_dir)
+
+
+def _recorded_summary(arm_dir: Path) -> ArmSummary | None:
+    """The ``arm.json`` an earlier run left in ``arm_dir``; None for a fresh arm."""
+    if not (arm_dir / ARM_SUMMARY_FILENAME).is_file():
+        return None
+    try:
+        return read_arm_summary(arm_dir)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise MeasurementPlanError(
+            f"{arm_dir / ARM_SUMMARY_FILENAME} is unreadable ({exc}); expected the arm.json "
+            "an earlier run of this arm wrote, or none: give this run a fresh --out"
+        ) from exc
+
+
+def _roles_run(plan: MeasurementPlan) -> tuple[ArmRole, ...]:
+    """The arms this run spawns: the candidate alone over a reused baseline."""
+    return (ArmRole.CANDIDATE,) if plan.reused_baseline else tuple(ArmRole)
 
 
 def _serving_changes(args: argparse.Namespace, plan: MeasurementPlan, role: ArmRole) -> list[str]:
@@ -171,21 +223,18 @@ def _serving_changes(args: argparse.Namespace, plan: MeasurementPlan, role: ArmR
     ]
 
 
-def _stamped_with_forced_reuse(plan: MeasurementPlan, role: ArmRole, arm_dir: Path) -> ArmSummary:
-    """The arm's summary; a candidate compared against a forced reuse records that it was.
+def _forced_reuse(plan: MeasurementPlan, role: ArmRole) -> ServingMismatchOverride | None:
+    """What the candidate records about a forced reuse; None for the baseline, or nothing forced.
 
-    Stamped here by the parent, not by the child: the forced reuse is a fact
-    about the COMPARISON, not about how the candidate ran — its settings, and so
-    its run identity and resume, are the same either way.
+    Recorded by the parent, not by the child: the forced reuse is a fact about
+    the COMPARISON, not about how the candidate ran — its settings, and so its
+    run identity and resume, are the same either way. None clears a record an
+    earlier run into this ``--out`` left: this comparison forced nothing.
     """
-    summary = read_arm_summary(arm_dir)
     reuse = None if plan.serving is None else plan.serving.reuse
-    override = None if reuse is None else reuse.override_record()
-    if role != ArmRole.CANDIDATE or override is None:
-        return summary
-    stamped = replace(summary, serving_override=override)
-    write_arm_summary(arm_dir, stamped)
-    return stamped
+    if role != ArmRole.CANDIDATE or reuse is None:
+        return None
+    return reuse.override_record()
 
 
 def arm_settings_for(
@@ -261,6 +310,8 @@ def _spawn_arm(worktree: Path, *, arm_dir: Path, split: str, limit: int | None) 
 __all__ = (
     "add_variant_arm_arguments",
     "arm_settings_for",
+    "overlay_flags_given",
+    "refuse_a_foreign_resume",
     "refuse_a_serving_change_on_resume",
     "run_one_arm",
     "variants_from_args",

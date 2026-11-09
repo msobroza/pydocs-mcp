@@ -55,10 +55,13 @@ from pydocs_eval.campaign.before_after_arm import (
 )
 from pydocs_eval.campaign.before_after_arm_launch import (
     add_variant_arm_arguments,
+    overlay_flags_given,
+    refuse_a_foreign_resume,
     refuse_a_serving_change_on_resume,
     run_one_arm,
     variants_from_args,
 )
+from pydocs_eval.campaign.before_after_arm_variant import ArmVariants
 from pydocs_eval.campaign.before_after_block_probe import probe_arm_block
 from pydocs_eval.campaign.before_after_corpora import (
     DEFAULT_USD_PER_1M_EMBED,
@@ -83,6 +86,10 @@ from pydocs_eval.campaign.before_after_product import assert_product_under
 from pydocs_eval.campaign.before_after_recorded_draw import (
     draw_the_arms_recorded,
     reconciled_with_flags,
+)
+from pydocs_eval.campaign.before_after_recorded_variants import (
+    accepted_because_it_already_ran,
+    recorded_variants,
 )
 from pydocs_eval.campaign.before_after_report import render_report
 from pydocs_eval.campaign.before_after_reuse import (
@@ -247,7 +254,7 @@ def _plan_from_args(
     """Resolve the two commits, the endpoint, each arm's settings and the corpora into a plan."""
     llm_block = _arm_llm_block(args)
     serving = _serving_settings(args, llm_block)
-    variants = variants_from_args(args, llm_block=llm_block, serving_turns=serving.max_agent_turns)
+    variants = _arm_variants(args, llm_block, serving.max_agent_turns)
     reuse = checked_reused_baseline(args, variants.baseline, task_ids_of(tasks), serving.basis)
     plan = build_plan(
         repo=args.repo,
@@ -277,13 +284,24 @@ def _plan_from_args(
         llm_block=llm_block,
         # The composition root wires the real probe: a pinned block or overlay
         # must be accepted by BOTH products, and only a worktree of each can say so.
-        probe_block=probe_arm_block,
+        # A re-render asks nothing: its arms already ran, so neither guard applies.
+        probe_block=accepted_because_it_already_ran if args.report_only else probe_arm_block,
         variants=variants,
-        allow_identical=args.allow_identical,
+        allow_identical=args.allow_identical or args.report_only,
         reused_baseline=None if reuse is None else reuse.arm_dir,
         task_draw=draw,
     )
     return replace(plan, serving=ServingPlan(basis=serving.basis, reuse=reuse))
+
+
+def _arm_variants(
+    args: argparse.Namespace, llm_block: ArmLlmBlock | None, serving_turns: int
+) -> ArmVariants:
+    """Each arm's variant from the flags; on ``--report-only``, the one it recorded."""
+    variants = variants_from_args(args, llm_block=llm_block, serving_turns=serving_turns)
+    if not args.report_only:
+        return variants
+    return recorded_variants(Path(args.out), variants, flagged=overlay_flags_given(args))
 
 
 def _arm_llm_block(args: argparse.Namespace) -> ArmLlmBlock | None:
@@ -312,9 +330,12 @@ def _description_token_counter(model: str) -> TokenCounter:
 def _execute(args: argparse.Namespace, plan: MeasurementPlan, answer_key: AnswerKey) -> int:
     """Build any missing workspace, run the arms in child processes, write the report.
 
-    A reused baseline is linked first — before any workspace is built — so an
-    ``--out`` that already holds another baseline stops the run while it is free.
+    An arm dir holding another run's rows is refused before anything is
+    written into it. A reused baseline is linked next — before any workspace is
+    built — so an ``--out`` that already holds another baseline stops the run
+    while it is free.
     """
+    refuse_a_foreign_resume(args, plan)
     reused = _linked_reused_baseline(args)
     refuse_a_serving_change_on_resume(args, plan)
     _settle_task_workspaces(args, plan)
@@ -347,7 +368,10 @@ def _rerender_recorded_arms(
     """
     out_dir = Path(args.out)
     summaries = [_recorded_arm_summary(out_dir, role) for role in ArmRole]
-    _write_plan(out_dir, plan)
+    # The plan the run wrote before its arms is kept: it says what the run set out
+    # to do, overlay file names included, which no arm_settings.json records.
+    if not (out_dir / _PLAN_FILENAME).exists():
+        _write_plan(out_dir, plan)
     return _write_report(args, plan, summaries, answer_key)
 
 
@@ -356,7 +380,7 @@ def _recorded_arm_summary(out_dir: Path, role: ArmRole) -> ArmSummary:
     arm_dir = out_dir / role
     try:
         summary = read_arm_summary(arm_dir)
-    except (OSError, ValueError, KeyError) as exc:
+    except (OSError, ValueError, KeyError, TypeError) as exc:
         raise MeasurementPlanError(
             f"--report-only found no readable {ARM_SUMMARY_FILENAME} in {arm_dir} ({exc}); "
             f"it re-renders a FINISHED run and runs no arm, so it expects one under "

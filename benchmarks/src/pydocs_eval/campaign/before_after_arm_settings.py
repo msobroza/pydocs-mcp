@@ -38,8 +38,12 @@ from pydocs_eval.task_rendering import DEFAULT_TASK_SCAFFOLD, TaskScaffold
 GUIDANCE_SECTIONS_KEY = "guidance_sections"
 TASK_SCAFFOLD_KEY = "task_scaffold"
 _EVAL_ONLY_KEYS = (GUIDANCE_SECTIONS_KEY, TASK_SCAFFOLD_KEY)
-_MODEL_KEY = "model"
-_LLM_KEY = "llm"
+# The ask_your_docs keys an arm carries on fields of its own, and the model key an
+# overlay may not set: spelled once, here, for every module that reads an overlay.
+ARCHITECTURE_KEY = "architecture"
+MAX_AGENT_TURNS_KEY = "max_agent_turns"
+LLM_KEY = "llm"
+MODEL_KEY = "model"
 
 # What an overlay file may hold, for the error messages and the --help text.
 ARM_OVERLAY_SHAPE = (
@@ -100,11 +104,11 @@ def _read_mapping(path: Path, origin: str) -> dict[str, Any]:
 
 def _refuse_model_keys(product: Mapping[str, object], origin: str) -> None:
     """``model`` belongs to ``--model``: one chat model, both arms, one place."""
-    llm = product.get(_LLM_KEY)
+    llm = product.get(LLM_KEY)
     for where, block in (("", product), ("llm.", llm if isinstance(llm, Mapping) else {})):
-        if _MODEL_KEY in block:
+        if MODEL_KEY in block:
             raise MeasurementPlanError(
-                f"{origin} sets {where}{_MODEL_KEY}: {block[_MODEL_KEY]!r}, but the chat "
+                f"{origin} sets {where}{MODEL_KEY}: {block[MODEL_KEY]!r}, but the chat "
                 f"model comes from --model (both arms share it); expected {ARM_OVERLAY_SHAPE}"
             )
 

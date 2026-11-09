@@ -24,6 +24,7 @@ from pydocs_eval.campaign.before_after_answers import AnswerKey, answer_key_for
 from pydocs_eval.campaign.before_after_arm import (
     ARM_SETTINGS_FILENAME,
     ARM_SUMMARY_FILENAME,
+    ArmSummary,
     read_arm_settings,
     read_arm_summary,
 )
@@ -41,6 +42,7 @@ from pydocs_eval.campaign.before_after_fresh_draw import FreshTestDraw
 from pydocs_eval.campaign.before_after_measure import measure_arm
 from pydocs_eval.campaign.before_after_recorded_draw import draw_the_arms_recorded
 from pydocs_eval.campaign.before_after_split import load_split_tasks
+from pydocs_eval.campaign.budget import HaltReason
 from pydocs_eval.judge.config import load_judge_config
 
 # Exit codes: 2 is the operator-error code the eval CLIs already use; a variant
@@ -145,6 +147,7 @@ def _read_arm(arm_dir: Path, answer_key: AnswerKey) -> LabelledArm:
             f"{arm_dir} holds no readable arm ({exc}); expected the {ARM_SUMMARY_FILENAME} and "
             f"{ARM_SETTINGS_FILENAME} a campaign arm or the chat runner writes"
         ) from exc
+    _refuse_an_unfinished_arm(arm_dir, summary)
     # The verdict reads answers and trajectories, never a description surface or
     # a commit subject, so neither is looked up.
     commit = CommitUnderTest(
@@ -163,8 +166,24 @@ def _read_arm(arm_dir: Path, answer_key: AnswerKey) -> LabelledArm:
         commit=summary.commit,
         model=summary.model,
         max_agent_turns=summary.max_agent_turns or settings.max_agent_turns,
+        settings_digest=summary.settings_digest,
     )
     return LabelledArm(label=str(arm_dir), metrics=metrics, identity=identity)
+
+
+def _refuse_an_unfinished_arm(arm_dir: Path, summary: ArmSummary) -> None:
+    """An arm killed or still running has checkpointed k of its N rows (issue #385).
+
+    The verdict pairs over the tasks both arms hold, so k rows would read as a
+    finished arm. A guard-halted arm is a separate, older question, left as it was.
+    """
+    if summary.halt_reason != HaltReason.IN_PROGRESS:
+        return
+    raise ComparisonInputError(
+        f"{arm_dir} is not finished (halt_reason {HaltReason.IN_PROGRESS.value}, "
+        f"{len(summary.tasks)} task(s) checkpointed); expected a finished arm, halt_reason "
+        f"{HaltReason.COMPLETED.value}: resume it with before-after --confirm-spend"
+    )
 
 
 def _exit_status(comparison: Comparison) -> int:

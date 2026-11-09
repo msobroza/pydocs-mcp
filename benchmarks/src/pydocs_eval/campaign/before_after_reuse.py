@@ -20,7 +20,8 @@ named. An arm that recorded no fingerprint (written before it existed) is
 refused the same way, as "not recorded". ``--allow-serving-mismatch`` forces a
 serving mismatch through — never a commit, model, turn-cap, digest, halt or
 task-set one — and a forced reuse is never silent: one structured log line, the
-plan text and the candidate's ``arm.json`` (hence every report) name its keys.
+plan text and the ``serving_override.json`` beside the candidate's ``arm.json``
+(hence every report) name its keys.
 
 An arm the vendored chat runner wrote (``benchmarks/tools/run_example_needle_chat_repro.py``)
 is read like any other: it records the same four fields and the same fingerprint.
@@ -101,7 +102,7 @@ class ServingReuse:
         return self.forced is None or self.forced.fingerprint_recorded
 
     def override_record(self) -> ServingMismatchOverride | None:
-        """What the candidate's ``arm.json`` records; None when nothing was forced."""
+        """What the candidate's ``serving_override.json`` records; None when nothing was forced."""
         return self.forced
 
     def plan_lines(self) -> list[str]:

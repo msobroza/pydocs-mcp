@@ -12,14 +12,20 @@ from __future__ import annotations
 
 import pytest
 
-from pydocs_eval.campaign import before_after_command, before_after_compare_command
+from pydocs_eval.campaign import (
+    before_after_arm_launch,
+    before_after_command,
+    before_after_compare_command,
+)
 
 from ._fakes import (
     COMPARE_TASK_IDS,
     FakeArmBlockProbe,
     FakeArmRun,
     FakeSplitTasks,
+    no_worktree,
     stub_serving_settings,
+    write_finished_summary_from_settings,
 )
 from ._outcome_fixtures import GOLD
 
@@ -49,6 +55,14 @@ def stub_command(monkeypatch: pytest.MonkeyPatch, before_after_split: FakeSplitT
         before_after_command, "_description_token_counter", lambda model: lambda text: 10
     )
     return fake
+
+
+@pytest.fixture
+def real_launch(stub_command: FakeArmRun, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real ``run_one_arm`` (settings, fingerprint, forced-reuse record) over a fake child."""
+    monkeypatch.setattr(before_after_command, "run_one_arm", before_after_arm_launch.run_one_arm)
+    monkeypatch.setattr(before_after_arm_launch, "product_worktree", no_worktree)
+    monkeypatch.setattr(before_after_arm_launch, "_spawn_arm", write_finished_summary_from_settings)
 
 
 @pytest.fixture

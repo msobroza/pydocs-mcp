@@ -29,9 +29,12 @@ from pydocs_eval.campaign.before_after import (
     MeasurementPlanError,
     flat_settings,
 )
-from pydocs_eval.campaign.before_after_arm import ARM_ARCHITECTURE
+from pydocs_eval.campaign.before_after_arm import ARM_ARCHITECTURE, ArmSettings
 from pydocs_eval.campaign.before_after_arm_settings import (
+    ARCHITECTURE_KEY,
     GUIDANCE_SECTIONS_KEY,
+    LLM_KEY,
+    MAX_AGENT_TURNS_KEY,
     TASK_SCAFFOLD_KEY,
     ArmOverlay,
 )
@@ -39,10 +42,7 @@ from pydocs_eval.task_rendering import DEFAULT_TASK_SCAFFOLD, TaskScaffold, task
 
 # The overlay keys an arm carries on fields of its own; every OTHER product key
 # rides the runner settings' ``harness`` mapping (``harness_block``).
-_ARCHITECTURE_KEY = "architecture"
-_TURNS_KEY = "max_agent_turns"
-_LLM_KEY = "llm"
-_OWN_FIELD_KEYS = (_ARCHITECTURE_KEY, _TURNS_KEY, _LLM_KEY)
+_OWN_FIELD_KEYS = (ARCHITECTURE_KEY, MAX_AGENT_TURNS_KEY, LLM_KEY)
 
 # How a plan line spells a key one arm leaves at its default.
 _UNSET = "(default)"
@@ -66,6 +66,35 @@ class ArmVariant:
     task_scaffold: TaskScaffold = DEFAULT_TASK_SCAFFOLD
     # The overlay file, or None for an arm that names none.
     source: str | None = None
+    # The digest a finished arm recorded (``--report-only``); "" = compute it here.
+    # Recorded wins: it is what the arm ran under, even if this checkout's product
+    # would now validate its harness keys differently.
+    recorded_digest: str = ""
+    # Set once in ``__post_init__``: computing it validates the harness keys against
+    # the product config, and a plan reads it 6-8 times.
+    _digest: str = field(default="", init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_digest", self.recorded_digest or self._computed_digest())
+
+    @classmethod
+    def from_arm_settings(cls, settings: ArmSettings, *, source: str) -> ArmVariant:
+        """The variant a finished arm ran, as its ``arm_settings.json`` recorded it."""
+        return cls(
+            max_agent_turns=settings.max_agent_turns,
+            architecture=settings.architecture,
+            llm_block=None if settings.llm_block is None else dict(settings.llm_block),
+            harness_block=dict(settings.harness_block),
+            guidance_sections_path=settings.guidance_sections_path,
+            guidance_sections=dict(settings.guidance_sections),
+            task_scaffold=settings.task_scaffold,
+            source=source,
+            recorded_digest=settings.settings_digest,
+        )
+
+    def _computed_digest(self) -> str:
+        canonical = json.dumps(self._digested(), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     @property
     def digest(self) -> str:
@@ -75,14 +104,13 @@ class ArmVariant:
             >>> len(ArmVariant(max_agent_turns=12).digest)
             64
         """
-        canonical = json.dumps(self._digested(), sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        return self._digest
 
     def _digested(self) -> dict[str, object]:
         return {
-            _ARCHITECTURE_KEY: self.architecture,
-            _TURNS_KEY: self.max_agent_turns,
-            _LLM_KEY: dict(self.llm_block or {}),
+            ARCHITECTURE_KEY: self.architecture,
+            MAX_AGENT_TURNS_KEY: self.max_agent_turns,
+            LLM_KEY: dict(self.llm_block or {}),
             "harness": harness_keys_off_default(self.harness_block),
             GUIDANCE_SECTIONS_KEY: dict(self.guidance_sections),
             TASK_SCAFFOLD_KEY: task_scaffold_version(self.task_scaffold),
@@ -91,9 +119,9 @@ class ArmVariant:
     def flat(self) -> dict[str, object]:
         """The settings as the overlay spells them, flattened to dotted keys."""
         nested = {
-            _ARCHITECTURE_KEY: self.architecture,
-            _TURNS_KEY: self.max_agent_turns,
-            _LLM_KEY: dict(self.llm_block or {}),
+            ARCHITECTURE_KEY: self.architecture,
+            MAX_AGENT_TURNS_KEY: self.max_agent_turns,
+            LLM_KEY: dict(self.llm_block or {}),
             **harness_keys_off_default(self.harness_block),
             GUIDANCE_SECTIONS_KEY: self.guidance_sections_path,
             TASK_SCAFFOLD_KEY: str(self.task_scaffold),
@@ -128,8 +156,8 @@ def variant_of(
         return ArmVariant(max_agent_turns=serving_turns, llm_block=settings)
     product = overlay.product
     return ArmVariant(
-        max_agent_turns=int(product.get(_TURNS_KEY, serving_turns)),  # type: ignore[call-overload]
-        architecture=str(product.get(_ARCHITECTURE_KEY, ARM_ARCHITECTURE)),
+        max_agent_turns=int(product.get(MAX_AGENT_TURNS_KEY, serving_turns)),  # type: ignore[call-overload]
+        architecture=str(product.get(ARCHITECTURE_KEY, ARM_ARCHITECTURE)),
         llm_block=_merged_llm(overlay, llm_block),
         harness_block={key: value for key, value in product.items() if key not in _OWN_FIELD_KEYS},
         guidance_sections_path=overlay.guidance_sections_path,
@@ -163,7 +191,7 @@ def harness_keys_off_default(keys: Mapping[str, object]) -> dict[str, object]:
 def _merged_llm(overlay: ArmOverlay, llm_block: ArmLlmBlock | None) -> dict[str, object] | None:
     """The ``--llm-block`` file with the overlay's ``llm`` merged over it, re-validated."""
     base = None if llm_block is None else dict(llm_block.settings)
-    over = overlay.product.get(_LLM_KEY)
+    over = overlay.product.get(LLM_KEY)
     if not isinstance(over, Mapping):
         return base
     merged = _deep_merged(base or {}, over)

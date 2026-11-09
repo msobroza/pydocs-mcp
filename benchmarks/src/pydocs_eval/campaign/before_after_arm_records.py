@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,8 @@ from pydocs_eval.trajectory.ask_outcome import UNKNOWN_TURN_BUDGET, TaskOutcome
 
 ARM_SUMMARY_FILENAME = "arm.json"
 _SERVING_OVERRIDE_FIELD = "serving_override"
+# The forced-reuse record's sidecar beside a candidate's ``arm.json``.
+SERVING_OVERRIDE_FILENAME = "serving_override.json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,9 +79,10 @@ ALLOW_SERVING_MISMATCH_FLAG = "--allow-serving-mismatch"
 class ServingMismatchOverride:
     """A reuse ``--allow-serving-mismatch`` forced: which baseline, and past which keys.
 
-    Recorded on the CANDIDATE's ``arm.json`` (and nowhere when no reuse was
-    forced), so every report that reads the candidate shows the comparison was
-    made against a baseline served differently — or one that never said.
+    Recorded beside the CANDIDATE's ``arm.json``, in ``serving_override.json``
+    (and nowhere when no reuse was forced), so every report that reads the
+    candidate shows the comparison was made against a baseline served
+    differently — or one that never said.
     """
 
     reused_baseline: str
@@ -162,7 +165,9 @@ class ArmSummary:
     guidance_sections_path: str | None = None
     settings_digest: str = ""
     # Set only on a candidate compared against a reuse forced past a serving
-    # mismatch; left out of ``arm.json`` otherwise, so that file's bytes stay put.
+    # mismatch, read from the ``serving_override.json`` sidecar beside it. Never
+    # written into ``arm.json`` (whose bytes then stay put); an ``arm.json`` an
+    # earlier build stamped inline still loads it.
     serving_override: ServingMismatchOverride | None = None
 
     def to_dict(self) -> dict[str, object]:
@@ -211,9 +216,37 @@ def _recorded_variant(payload: Mapping[str, object]) -> dict[str, Any]:
 
 
 def read_arm_summary(out_dir: Path) -> ArmSummary:
-    """Load the summary an arm process wrote into ``out_dir``."""
+    """Load the summary an arm process wrote into ``out_dir``, with any forced-reuse record."""
     payload = json.loads((out_dir / ARM_SUMMARY_FILENAME).read_text(encoding="utf-8"))
-    return ArmSummary.from_dict(payload)
+    summary = ArmSummary.from_dict(payload)
+    override = read_serving_override(out_dir)
+    return summary if override is None else replace(summary, serving_override=override)
+
+
+def write_serving_override(arm_dir: Path, override: ServingMismatchOverride | None) -> None:
+    """Record (or, for None, clear) the forced reuse the arm in ``arm_dir`` is compared against.
+
+    A sidecar the parent writes BEFORE it spawns the arm, never a field it
+    stamps into ``arm.json`` afterwards: a parent killed between the child's
+    last write and the stamp lost it, and the child rewrites ``arm.json``
+    after every task. The run identity stays untouched — the override is a
+    fact about the comparison, not about how the candidate ran.
+    """
+    path = arm_dir / SERVING_OVERRIDE_FILENAME
+    if override is None:
+        path.unlink(missing_ok=True)
+        return
+    # Atomic like arm.json: every reader of the arm parses this file, so a
+    # truncated one would make a finished arm unreadable.
+    _write_json_atomically(path, asdict(override))
+
+
+def read_serving_override(arm_dir: Path) -> ServingMismatchOverride | None:
+    """The forced-reuse record beside an arm's ``arm.json``; None when no reuse was forced."""
+    path = arm_dir / SERVING_OVERRIDE_FILENAME
+    if not path.is_file():
+        return None
+    return ServingMismatchOverride.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
 
 def write_arm_summary(out_dir: Path, summary: ArmSummary) -> Path:
@@ -224,7 +257,12 @@ def write_arm_summary(out_dir: Path, summary: ArmSummary) -> Path:
     checkpoint whole rather than a truncated file that loses every row.
     """
     path = out_dir / ARM_SUMMARY_FILENAME
-    partial = path.with_name(f"{ARM_SUMMARY_FILENAME}.partial")
-    partial.write_text(json.dumps(summary.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
-    partial.replace(path)
+    _write_json_atomically(path, summary.to_dict())
     return path
+
+
+def _write_json_atomically(path: Path, payload: Mapping[str, object]) -> None:
+    """``payload`` as JSON at ``path`` through a sibling file and a rename, never truncated."""
+    partial = path.with_name(f"{path.name}.partial")
+    partial.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    partial.replace(path)

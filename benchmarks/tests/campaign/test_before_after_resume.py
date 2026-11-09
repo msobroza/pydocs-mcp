@@ -86,9 +86,10 @@ def test_a_killed_arm_has_already_recorded_every_task_it_finished(tmp_path: Path
     assert checkpoint.halt_reason == "in_progress"
 
 
-def test_a_row_whose_trace_lost_its_sidecar_is_dropped_and_logged(
+def test_a_row_whose_trace_lost_its_sidecar_is_dropped_logged_and_answered_again(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """Its task stays DONE in the ledger, so without a re-queue the arm finishes short."""
     settings = arm_settings(tmp_path)
     _killed_at_t3(settings)
     lost = read_arm_summary(Path(settings.out_dir)).tasks[0]
@@ -97,8 +98,8 @@ def test_a_row_whose_trace_lost_its_sidecar_is_dropped_and_logged(
     with caplog.at_level(logging.WARNING):
         summary, runner = _resumed(settings)
 
-    assert [task.task_id for task in summary.tasks] == ["t2", "t3"]
-    assert [sample["record_id"] for sample in runner.samples] == ["t3"]
+    assert [task.task_id for task in summary.tasks] == ["t1", "t2", "t3"]
+    assert [sample["record_id"] for sample in runner.samples] == ["t1", "t3"]
     (event,) = [json.loads(r.getMessage()) for r in caplog.records if "dropped" in r.getMessage()]
     assert event["event"] == "before_after_resume_dropped_untraced_rows"
     assert event["task_ids"] == ["t1"] and event["role"] == settings.role
@@ -163,3 +164,43 @@ def test_report_only_refuses_an_arm_that_was_killed_mid_run(
 
     error = capsys.readouterr().err
     assert "in_progress" in error and str(tmp_path / "out" / "candidate") in error
+
+
+# --- review fixes: a resume under another task set ---------------------------
+
+
+def _run_over(settings: ArmSettings, task_ids: tuple[str, ...]) -> FakeHarnessRunner:
+    runner = FakeHarnessRunner(Path(settings.trace_root))
+    tasks = tuple(eval_task(task_id) for task_id in task_ids)
+    asyncio.run(run_arm(settings, tasks, make_runner=lambda s, w: runner))
+    return runner
+
+
+@pytest.mark.parametrize(
+    ("again", "foreign"),
+    [(("c", "d"), "'a', 'b'"), (("a",), "'b'")],
+    ids=["another draw", "a shorter --limit"],
+)
+def test_a_resume_under_another_task_set_is_refused_and_keeps_the_rows(
+    tmp_path: Path, again: tuple[str, ...], foreign: str
+) -> None:
+    """Its first checkpoint would rewrite ``arm.json`` without the paid rows outside it."""
+    settings = arm_settings(tmp_path)
+    _run_over(settings, ("a", "b"))
+
+    with pytest.raises(MeasurementPlanError, match=rf"(?s)task\(s\) outside.*{foreign}"):
+        _run_over(settings, again)
+
+    kept = read_arm_summary(Path(settings.out_dir))
+    assert [task.task_id for task in kept.tasks] == ["a", "b"]
+
+
+def test_a_longer_limit_resumes_and_answers_only_the_new_tasks(tmp_path: Path) -> None:
+    settings = arm_settings(tmp_path)
+    _run_over(settings, ("a", "b"))
+
+    runner = _run_over(settings, ("a", "b", "c"))
+
+    assert [sample["record_id"] for sample in runner.samples] == ["c"]
+    kept = read_arm_summary(Path(settings.out_dir))
+    assert [task.task_id for task in kept.tasks] == ["a", "b", "c"]

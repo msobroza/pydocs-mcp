@@ -44,7 +44,11 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     probe also refuses an architecture the arm's product does not register.
   - **`arm_settings.json`, `arm.json` and the report's provenance carry the
     architecture, scaffold, guidance path and digest**, and the compare verb's
-    arm lines carry the digest. Files written before these fields still load:
+    arm lines carry the digest, which its A/A twin check also compares (two
+    arms that recorded none still pair). `--report-only` re-renders each arm
+    under the variant its `arm_settings.json` recorded (an overlay flag, if
+    given, must name that digest), probes nothing, and keeps the run's
+    `plan.txt`. Files written before these fields still load:
     an old settings file reads as the pinned arm it ran, an old summary as
     "not recorded".
   - **`--reuse-baseline <arm dir>`** compares the candidate against a finished
@@ -65,16 +69,21 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     the llm block key by key), and the reuse is refused naming each key that
     differs, or as "not recorded" for an arm without one, unless
     `--allow-serving-mismatch` forces it (a forced reuse is logged as one JSON
-    line and named in the plan, the candidate's `arm.json` and every report),
+    line and named in the plan, in a `serving_override.json` the parent writes
+    beside the candidate's `arm.json` before it runs, and in every report),
     and an `--out` whose arms were served differently is not resumed.
   - **A resumed arm keeps its finished tasks.** The arm rewrites `arm.json`
     atomically after every answered task, before the ledger marks the task DONE.
     The checkpoint's halt reason is `in_progress`. A restart seeds its rows
     from that file and drops any row whose trace directory no longer holds
     `server_events.jsonl`, logging each drop as a
-    `before_after_resume_dropped_untraced_rows` event. Rows answered under
-    another role, commit, model or settings digest are refused by name, never
-    restamped. `--report-only` refuses an arm that still reads `in_progress`
+    `before_after_resume_dropped_untraced_rows` event; every DONE task left
+    without a row is queued again one attempt later (one
+    `before_after_resume_requeued_untraced_rows` event), and exclusions are
+    counted off the ledger, so an earlier process's survive. Rows answered under
+    another role, commit, model or settings digest, or for tasks outside the
+    plan's (another `--split`, a shorter `--limit`, another draw), are refused
+    by name before the parent writes into the arm dir, never restamped. `--report-only` and `before-after-compare` refuse an arm that still reads `in_progress`
     (`HaltReason.IN_PROGRESS`). Before this, a restart wrote an `arm.json`
     holding only its own process's tasks.
   - **`TaskScaffold`** (`task_rendering.py`) names `citing` and `bare` and

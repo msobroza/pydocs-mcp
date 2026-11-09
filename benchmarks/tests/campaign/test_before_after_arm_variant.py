@@ -9,6 +9,8 @@ file happens to live.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -20,6 +22,7 @@ from pydocs_eval.campaign.before_after_arm_variant import (
     ArmVariant,
     ArmVariants,
     arm_variants,
+    harness_keys_off_default,
     refuse_identical_arms,
     variant_of,
 )
@@ -221,3 +224,29 @@ def test_a_variant_round_trips_into_the_arm_settings_fields() -> None:
     assert fields["settings_digest"] == variant.digest
     assert fields["guidance_sections"] == {"BACKBONE": "x"}
     assert fields["task_scaffold"] is TaskScaffold.CITING
+
+
+@dataclass
+class CountingHarnessKeyCheck:
+    """``harness_keys_off_default`` that counts its calls, each one a product-config validation."""
+
+    calls: list[Mapping[str, object]] = field(default_factory=list)
+
+    def __call__(self, keys: Mapping[str, object]) -> dict[str, object]:
+        self.calls.append(keys)
+        return harness_keys_off_default(keys)
+
+
+def test_the_digest_validates_the_harness_keys_once_per_variant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plan reads each digest 6-8 times; each read used to re-validate the product config."""
+    from pydocs_eval.campaign import before_after_arm_variant
+
+    check = CountingHarnessKeyCheck()
+    monkeypatch.setattr(before_after_arm_variant, "harness_keys_off_default", check)
+    variant = variant_of(_overlay(seed_search_with_question=True), llm_block=None, serving_turns=4)
+
+    digests = {variant.digest for _ in range(3)}
+
+    assert len(digests) == 1 and len(check.calls) == 1

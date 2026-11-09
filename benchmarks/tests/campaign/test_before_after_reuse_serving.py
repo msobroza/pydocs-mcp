@@ -4,15 +4,18 @@ The settings digest says what the agent ran under. A baseline served under
 another retrieval YAML, endpoint or index — or one that recorded no serving
 fingerprint at all — still measured a different experiment, so its reuse is
 refused key by key. ``--allow-serving-mismatch`` forces it, and a forced reuse
-is never silent: one structured log line, the plan text, the candidate's
-``arm.json`` and the report all name the keys it forced past.
+is never silent: one structured log line, the plan text, the
+``serving_override.json`` beside the candidate's ``arm.json`` (written before
+the candidate runs) and the report all name the keys it forced past.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import subprocess
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
@@ -268,14 +271,6 @@ def test_the_gate_records_no_override_for_a_match(tmp_path: Path) -> None:
 # --- what the run writes: each arm's fingerprint, the candidate's override ----
 
 
-@pytest.fixture
-def real_launch(stub_command: FakeArmRun, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The real ``run_one_arm`` (settings, fingerprint, stamp) over a fake child."""
-    monkeypatch.setattr(before_after_command, "run_one_arm", before_after_arm_launch.run_one_arm)
-    monkeypatch.setattr(before_after_arm_launch, "product_worktree", no_worktree)
-    monkeypatch.setattr(before_after_arm_launch, "_spawn_arm", write_finished_summary_from_settings)
-
-
 def test_every_arm_records_its_serving_fingerprint(tmp_path: Path, real_launch: None) -> None:
     repo = git_repo_with_two_descriptions(tmp_path)
 
@@ -369,3 +364,49 @@ def test_an_arm_dir_from_before_fingerprints_is_resumed_but_stays_unrecorded(
 
     for role in ("baseline", "candidate"):
         assert read_serving_fingerprint(tmp_path / "out" / role) is None
+
+
+# --- review fix: the forced-reuse record survives a parent that dies after the arm ---
+
+
+class ParentKilled(BaseException):
+    """A Ctrl-C or an OOM kill of the parent: nothing after it gets to run."""
+
+
+@contextlib.contextmanager
+def _dying_worktree(repo: Path, sha: str, root: Path) -> Iterator[Path]:
+    """The worktree's cleanup is where the parent dies, after the child's last write."""
+    yield root / sha[:12]
+    raise ParentKilled(sha)
+
+
+def test_a_forced_reuse_is_recorded_even_if_the_parent_dies_after_the_arm(
+    tmp_path: Path,
+    real_launch: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo = git_repo_with_two_descriptions(tmp_path)
+    reused = _reused(tmp_path, repo, endpoint="http://other")
+    monkeypatch.setattr(before_after_arm_launch, "product_worktree", _dying_worktree)
+    with pytest.raises(ParentKilled):
+        main(_argv(tmp_path, repo, reused, _FLAG, "--confirm-spend"))
+
+    assert main(_argv(tmp_path, repo, reused, _FLAG, "--report-only")) == 0
+
+    report = (tmp_path / "out" / "before_after.md").read_text(encoding="utf-8")
+    assert f"- serving, candidate: reuse of `{reused}` forced by `{_FLAG}`" in report
+
+
+def test_a_later_run_that_forces_nothing_drops_the_forced_reuse_record(
+    tmp_path: Path, real_launch: None
+) -> None:
+    """The record is about the comparison: a resume against a matching baseline forced nothing."""
+    repo = git_repo_with_two_descriptions(tmp_path)
+    forced = _reused(tmp_path, repo, endpoint="http://other")
+    assert main(_argv(tmp_path, repo, forced, _FLAG, "--confirm-spend")) == 0
+    write_serving_fingerprint(forced, STUB_SERVING.fingerprint(None))
+
+    assert main(_argv(tmp_path, repo, forced, "--confirm-spend")) == 0
+
+    assert read_arm_summary(tmp_path / "out" / "candidate").serving_override is None
