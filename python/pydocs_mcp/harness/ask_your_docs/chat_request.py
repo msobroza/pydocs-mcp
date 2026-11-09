@@ -16,6 +16,15 @@ record, so a build that is not the agent's stays byte-identical. The price of th
 rule: with a route set, the image probe asks whichever upstream OpenRouter picks, not
 the pinned one.
 
+The live chat streams, and langchain-openai 1.2+ ends an async stream that sends no
+parsed chunk for a while. Without ``timeout_seconds`` that limit is upstream's 120 s,
+counted from the response headers; server keepalive comments do not reset it. The
+environment variable ``LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S`` tunes it (``0`` turns it
+off), and ``ui.activity.live: false`` avoids streaming altogether. With
+``timeout_seconds`` set, the block's value governs both limits: it also travels as
+``stream_chunk_timeout_seconds``, apart from the factory's own ``timeout_seconds``, so
+the probes' short bounds never reach a timer they do not stream through.
+
 Example:
     >>> NO_REQUEST_SETTINGS.chat_factory_kwargs()
     {}
@@ -42,6 +51,7 @@ class ChatFactoryKwargs(TypedDict, total=False):
     """``build_chat_model``'s keywords for the request settings a block set — only those."""
 
     timeout_seconds: float
+    stream_chunk_timeout_seconds: float
     max_retries: int
     extra_body: dict[str, Any]
 
@@ -71,6 +81,7 @@ class ChatRequestSettings:
         kwargs: ChatFactoryKwargs = {}
         if self.timeout_seconds is not None:
             kwargs["timeout_seconds"] = self.timeout_seconds
+            kwargs["stream_chunk_timeout_seconds"] = self.timeout_seconds
         if self.max_retries is not None:
             kwargs["max_retries"] = self.max_retries
         if self.provider_routing is not None:
