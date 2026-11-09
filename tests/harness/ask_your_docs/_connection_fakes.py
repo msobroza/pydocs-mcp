@@ -236,20 +236,6 @@ class EmptyAtRequestBearer:
         return BearerStatus(AuthMode.ENV_KEY, None, "")
 
 
-class SleepRecorder:
-    """A ``time.sleep`` stand-in (``async_sleep``: the ``anyio.sleep`` one) that records each
-    requested delay and never waits."""
-
-    def __init__(self) -> None:
-        self.delays: list[float] = []
-
-    def __call__(self, seconds: float) -> None:
-        self.delays.append(seconds)
-
-    async def async_sleep(self, seconds: float) -> None:
-        self.delays.append(seconds)
-
-
 class FakeBearer:
     """A fixed token-service bearer for page tests: fixed renewal time, renew counter, optional failure.
 

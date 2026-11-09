@@ -15,13 +15,13 @@ on openai 2.26–2.33, which send the request with no ``Authorization`` header.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, patch
 
 import openai
 import pytest
 
+from pydocs_mcp.retrieval.llm_clients import openai as llm_client_module
 from pydocs_mcp.retrieval.llm_clients.openai import _RETRY_BACKOFF, OpenAiLlmClient
-from tests._fakes import FakeOpenAIWire
+from tests._fakes import FakeOpenAIWire, SleepRecorder
 
 _MESSAGES = [{"role": "user", "content": "héllo"}]
 _STANDARD_MODEL = "gpt-4o-mini"
@@ -94,33 +94,33 @@ async def test_null_content_reply_yields_empty_string(path: str) -> None:
     assert reply == ""
 
 
-async def test_async_429_then_200_is_retried_by_the_client_itself() -> None:
+async def test_async_429_then_200_is_retried_by_the_client_itself(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # The injected SDK client has max_retries=0, so the second request on the
     # wire can only come from OpenAiLlmClient's own RateLimitError loop.
     wire = FakeOpenAIWire(chat_statuses=[429, 200])
     client = _wired_client(wire)
-    with patch(
-        "pydocs_mcp.retrieval.llm_clients.openai.asyncio.sleep",
-        new=AsyncMock(return_value=None),
-    ) as fake_sleep:
-        reply = await client.chat(_MESSAGES)
+    sleeps = SleepRecorder()
+    monkeypatch.setattr(llm_client_module.asyncio, "sleep", sleeps.async_sleep)
+    reply = await client.chat(_MESSAGES)
     assert reply == "wire-reply"
     assert len(wire.requests) == 2
     assert wire.requests[0].body == wire.requests[1].body
-    assert [c.args[0] for c in fake_sleep.call_args_list] == [_RETRY_BACKOFF]
+    assert sleeps.delays == [_RETRY_BACKOFF]
 
 
-def test_sync_429_then_200_is_retried_by_the_client_itself() -> None:
+def test_sync_429_then_200_is_retried_by_the_client_itself(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     wire = FakeOpenAIWire(chat_statuses=[429, 200])
     client = _wired_client(wire)
-    with patch(
-        "pydocs_mcp.retrieval.llm_clients.openai.time.sleep",
-        return_value=None,
-    ) as fake_sleep:
-        reply = client.chat_sync(_MESSAGES)
+    sleeps = SleepRecorder()
+    monkeypatch.setattr(llm_client_module.time, "sleep", sleeps)
+    reply = client.chat_sync(_MESSAGES)
     assert reply == "wire-reply"
     assert len(wire.requests) == 2
-    assert [c.args[0] for c in fake_sleep.call_args_list] == [_RETRY_BACKOFF]
+    assert sleeps.delays == [_RETRY_BACKOFF]
 
 
 def test_real_sdk_clients_take_the_base_url_from_the_environment(

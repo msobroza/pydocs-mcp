@@ -22,8 +22,9 @@ openai = pytest.importorskip("openai")
 import openai._base_client as sdk_base
 
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import StripAuthorizationAuth
+from tests._fakes import SleepRecorder
 
-from ._connection_fakes import RecordingTransport, RotatingBearer, SleepRecorder
+from ._connection_fakes import RecordingTransport, RotatingBearer
 
 _URL = "http://llm.test/v1"
 

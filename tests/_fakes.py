@@ -1956,6 +1956,25 @@ class FakeOpenAIWire:
         return [float(x) for x in vector]
 
 
+class SleepRecorder:
+    """A sleep stand-in that records each requested delay and never waits.
+
+    Call the instance where ``time.sleep`` is expected; ``async_sleep`` stands in
+    for an async sleep (``asyncio.sleep`` / ``anyio.sleep``). One shared fake for
+    every retry test: the core LLM client's own ``RateLimitError`` backoff and the
+    harness's pins of the openai SDK's retry policy.
+    """
+
+    def __init__(self) -> None:
+        self.delays: list[float] = []
+
+    def __call__(self, seconds: float) -> None:
+        self.delays.append(seconds)
+
+    async def async_sleep(self, seconds: float) -> None:
+        self.delays.append(seconds)
+
+
 @dataclass
 class RecordingGitLogReader:
     """Stands in for ``extraction.decisions._git.read_git_log``: records every
