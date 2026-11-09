@@ -1,0 +1,112 @@
+before/after measurement plan (NOTHING HAS BEEN SPENT)
+
+split:      repoqa-qa/small_test — 2 task(s)
+baseline:   <short>  <subject>  (10 description tokens)
+candidate:  <short>  <subject>  (10 description tokens)
+model:      qwen/qwen3.8-27b @ https://openrouter.ai/api/v1
+workspace:  <tmp>/ws — the root the per-corpus workspaces are built under; searched directly by the 2 task(s) that name no corpus
+corpora:    no task carries (repo, commit) coordinates — every task searches <tmp>/ws directly
+turns:      12 agent turn(s) per task (the harness budget)
+llm block:  <repo>/benchmarks/configs/ask_openrouter_qwen3_8_27b_llm.yaml (arm-side, byte-identical for both arms)
+            auth.api_key_env: OPENROUTER_API_KEY
+            base_url: https://openrouter.ai/api/v1
+            max_retries: 2
+            params.max_tokens: 16384
+            params.temperature: 1.0
+            params.thinking: auto
+            params.top_p: 0.95
+            provider: openrouter
+            provider_routing.allow_fallbacks: False
+            provider_routing.order: ['deepinfra/bf16']
+            timeout_seconds: 300
+            baseline <short>: accepts the block
+            candidate <short>: accepts the block
+
+estimate:   4 rollout(s), up to 48 model turn(s), ~88 tool call(s)
+            ~192480 input + ~19200 output tokens
+            ~$0.00 — no price given; pass --usd-per-1m-input / --usd-per-1m-output
+assumptions (none of these is measured):
+  - every rollout spends its full 12-turn budget
+  - 2.0 tool call(s) per tool-calling turn
+  - 4000 context tokens per turn, plus that arm's description surface
+  - 400 output tokens per turn
+
+metrics reported for both arms:
+  - budget-exhausted rate
+  - answered-within-budget rate
+  - outcome: unrecorded
+  - outcome: timeout
+  - outcome: budget_exhausted
+  - outcome: exhausted_finalized
+  - outcome: starved_reply
+  - outcome: unanswered_empty
+  - outcome: answered
+  - near cap
+  - finalize format failures
+  - turns-to-answer (penalised, exhausted = cap+1)
+  - turns-to-answer (answered only)
+  - turns after needle
+  - turns (per task)
+  - tool calls (per task)
+  - calls after first gold (total)
+  - calls after first gold (per task)
+  - calls after first gold (p90)
+  - calls after first gold read (total)
+  - calls after first gold read (per task)
+  - calls after first gold read (p90)
+  - tool calls to first gold read
+  - needle cited
+  - gold-site coverage at stop
+  - cited-path precision
+  - answers over the judge cap
+  - needless-call rate
+  - — resurfacing calls
+  - — zero-yield calls
+  - — fan-out-where-batch calls
+  - — tool-mismatch calls
+  - pointer-followed rate
+  - parallel calls per turn
+  - batch-versus-fan-out ratio
+  - gold-reached rate
+  - visible gold rate
+  - tool calls to first gold
+  - tool calls to first visible gold
+  - visible-hit rate per search call
+  - calls to full coverage
+  - trajectory (union) recall@1
+  - trajectory (union) recall@5
+  - trajectory (union) recall@10
+  - best search call recall@1
+  - best search call recall@5
+  - best search call recall@10
+  - first search call recall@1
+  - first search call recall@5
+  - first search call recall@10
+  - best search call MRR
+  - first search call MRR
+  - search calls
+  - reformulations
+  - tool calls (total)
+  - distinct tools used
+  - tool calls used
+  - used/total call ratio
+  - tokens in (total)
+  - tokens out (total)
+  - reasoning tokens (total)
+  - cached tokens (total)
+  - estimated USD (total)
+  - reported USD (total)
+  - tokens in (per task)
+  - tokens out (per task)
+  - reasoning tokens (per task)
+  - cached tokens (per task)
+  - estimated USD (per task)
+  - reported USD (per task)
+  - uncached tokens in (total)
+  - uncached tokens in (per turn)
+  - wall seconds (per task)
+  - description tokens
+
+reported as: each arm's mean with a 95% bootstrap CI, plus the PAIRED delta with its bootstrap CI and a one-sided p (Wilcoxon signed-rank; McNemar exact for the 0/1 rates), paired by task id; counts, totals and p90 tails per arm, untested
+
+re-run with --confirm-spend to execute both arms.

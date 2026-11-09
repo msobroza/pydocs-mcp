@@ -1,0 +1,16 @@
+{
+  "architecture": "text_react",
+  "commit": "<sha>",
+  "estimated_usd": 0.0,
+  "excluded": 2,
+  "guidance_sections_path": null,
+  "halt_reason": "completed",
+  "index_steps": [],
+  "max_agent_turns": 12,
+  "model": "qwen/qwen3.8-27b",
+  "role": "candidate",
+  "settings_digest": "f320c3b7c1df918c88449615e90cb1bc09282729bf4321be4675a42845d68c3a",
+  "task_scaffold": "citing",
+  "tasks": [],
+  "trace_root": "<tmp>/out/candidate/traces"
+}

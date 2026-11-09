@@ -61,7 +61,11 @@ from pydocs_eval.optimize.rubric.gates import (
     _all_gate_candidates,
     gate_registry,
 )
-from pydocs_eval.optimize.rubric.model import GateCheck
+from pydocs_eval.optimize.rubric.model import (
+    GOLD_KEYS_PARAM,
+    GateCheck,
+    refuse_reference_answer_keys,
+)
 from pydocs_eval.registries import _Registry
 
 if TYPE_CHECKING:
@@ -119,6 +123,9 @@ class Check:
     applies_to: tuple[str, ...] = ()
     #: Per-task-type weight overrides; falls back to ``weight``.
     weight_by_type: Mapping[str, float] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        refuse_reference_answer_keys(self.params.get(GOLD_KEYS_PARAM))
 
     def applicable(self, task_type: str) -> bool:
         """Whether this check is meaningful for ``task_type`` (empty = all)."""
@@ -390,7 +397,7 @@ class GoldRecall:
     def __call__(
         self, task: EvalTask, trajectory: Trajectory, params: Mapping[str, object]
     ) -> float:
-        candidates = _all_gate_candidates(task, params.get("keys"))
+        candidates = _all_gate_candidates(task, params.get(GOLD_KEYS_PARAM))
         if not candidates:
             return 1.0
         return sum(1 for c in candidates if c in trajectory.answer) / len(candidates)

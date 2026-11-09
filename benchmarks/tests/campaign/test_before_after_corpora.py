@@ -187,6 +187,16 @@ def test_the_preflight_names_the_corpora_the_missing_count_and_the_cost(tmp_path
     assert "--build-indexes" in text
 
 
+def test_the_preflight_names_every_corpus_with_its_tasks_and_state(tmp_path: Path) -> None:
+    lines = plan_workspaces(tmp_path).preflight_lines()
+
+    named = [line.strip() for line in lines if "@" in line and "task(s)" in line]
+    assert named == [
+        "openai/openai-python@bbbbbbbbbbbb — 1 task(s), to build",
+        "psf/black@aaaaaaaaaaaa — 2 task(s), to build",
+    ]
+
+
 # --- the embedder a task's gold was authored against ----------------------
 
 

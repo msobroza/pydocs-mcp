@@ -37,10 +37,12 @@ from pydocs_eval.campaign.before_after_block_probe import (
     acceptance_from_json,
     child_command,
     probe_arm_block,
+    probe_request,
     refused_keys,
     run_child,
     verdict_here,
 )
+from pydocs_eval.campaign.before_after_arm_variant import ArmVariant, ArmVariants
 from pydocs_eval.campaign.before_after_corpora import TaskWorkspaces
 from pydocs_eval.campaign.before_after_llm_block import load_arm_llm_block
 from pydocs_eval.campaign.before_after_product import arm_environment
@@ -77,7 +79,7 @@ def test_a_block_key_one_arm_rejects_is_refused_at_plan_time(tmp_path: Path) -> 
     message = str(refused.value)
     assert "baseline" in message and REJECTED_KEY in message
     assert str(_LLM_BLOCK) in message
-    assert "remove the key from the block, or pick a baseline that knows it" in message
+    assert "remove the key from the block or overlay, or pick a baseline that knows it" in message
 
 
 def test_a_block_both_arms_accept_prints_one_line_per_arm(tmp_path: Path) -> None:
@@ -101,7 +103,8 @@ def test_every_arm_is_asked_about_the_byte_identical_block(tmp_path: Path) -> No
 
     assert [role for role, _sha, _block in probe.asked] == ["baseline", "candidate"]
     assert [sha for _role, sha, _block in probe.asked] == [plan.baseline.sha, plan.candidate.sha]
-    assert probe.asked[0][2] == probe.asked[1][2] == dict(plan.llm_block.settings)
+    blocks = [variant.llm_block for _role, _sha, variant in probe.asked]
+    assert blocks == [dict(plan.llm_block.settings)] * 2
 
 
 def test_a_plan_that_pins_no_block_asks_no_arm(tmp_path: Path) -> None:
@@ -153,7 +156,8 @@ def test_the_child_prints_exactly_one_json_verdict(
 ) -> None:
     """The child's whole contract: assert the product, print one verdict, exit 0."""
     block_file = tmp_path / "block.json"
-    block_file.write_text(json.dumps({"nonsense_knob": 1}), encoding="utf-8")
+    request = probe_request(ArmVariant(max_agent_turns=1, llm_block={"nonsense_knob": 1}))
+    block_file.write_text(json.dumps(request), encoding="utf-8")
 
     code = run_child(_child_argv(block_file, product=_installed_product_root(), sha="c" * 40))
 
@@ -224,7 +228,11 @@ def test_a_worktree_that_cannot_answer_is_a_plan_error_not_a_verdict(tmp_path: P
     ).stdout.strip()
 
     with pytest.raises(MeasurementPlanError, match="probe child exited"):
-        probe_arm_block(repo, _commit("baseline", head), {"base_url": "http://endpoint/v1"})
+        probe_arm_block(
+            repo,
+            _commit("baseline", head),
+            ArmVariant(max_agent_turns=1, llm_block={"base_url": "http://endpoint/v1"}),
+        )
 
 
 # --- helpers ---------------------------------------------------------------
@@ -291,3 +299,70 @@ def _git_repo_with_a_stub_product(tmp_path: Path) -> Path:
     run_git(repo, "add", "-A")
     run_git(repo, "commit", "-qm", "a stub product")
     return repo
+
+
+# --- each arm is probed under its own variant ------------------------------
+
+
+def test_each_arm_is_probed_under_its_own_architecture_and_harness_keys(tmp_path: Path) -> None:
+    """Overlays alone (no --llm-block) still reach the runner settings, so they are probed."""
+    repo = git_repo_with_two_descriptions(tmp_path)
+    probe = FakeArmBlockProbe()
+    candidate = ArmVariant(
+        max_agent_turns=3, architecture="auto", harness_block={"seed_search_with_question": True}
+    )
+    variants = ArmVariants(
+        baseline=ArmVariant(max_agent_turns=3), candidate=candidate, overlaid=True
+    )
+
+    _build_plan(repo, tmp_path, probe_block=probe, variants=variants)
+
+    assert [variant for _role, _sha, variant in probe.asked] == [variants.baseline, candidate]
+
+
+def test_the_probe_request_carries_what_the_runner_is_built_from() -> None:
+    variant = ArmVariant(
+        max_agent_turns=3,
+        architecture="auto",
+        llm_block={"provider": "openrouter"},
+        harness_block={"seed_search_with_question": True},
+    )
+
+    assert probe_request(variant) == {
+        "architecture": "auto",
+        "llm": {"provider": "openrouter"},
+        "harness": {"seed_search_with_question": True},
+    }
+
+
+@_needs_ask_extra
+def test_this_product_accepts_the_auto_architecture_and_the_seed_key() -> None:
+    acceptance = verdict_here(
+        None,
+        role="candidate",
+        sha="b",
+        architecture="auto",
+        harness_block={"seed_search_with_question": True},
+    )
+
+    assert acceptance.verdict is ArmBlockVerdict.ACCEPTS
+
+
+@_needs_ask_extra
+def test_this_product_rejects_an_architecture_it_does_not_register() -> None:
+    acceptance = verdict_here(None, role="baseline", sha="a", architecture="nonsense_arch")
+
+    assert acceptance.rejected
+    assert acceptance.keys == ("architecture",)
+    assert "'nonsense_arch'" in acceptance.detail and "text_react" in acceptance.detail
+
+
+@_needs_ask_extra
+def test_this_product_rejects_a_harness_key_it_does_not_know() -> None:
+    """The guidance_task knob is refused by a product that predates it (issue #391)."""
+    acceptance = verdict_here(
+        None, role="baseline", sha="a", harness_block={"guidance_task": "repo_qa"}
+    )
+
+    assert acceptance.rejected
+    assert acceptance.keys == ("harness.guidance_task",)

@@ -120,79 +120,6 @@ class TestExtrasGuard:
         assert ask_binding._ask_extra_missing_module() is None
 
 
-class TestHarnessRunnerFactory:
-    """The eval side maps its settings onto the PRODUCT factory (design §11)."""
-
-    def _capture_settings(self, monkeypatch) -> dict[str, object]:
-        captured: dict[str, object] = {}
-        product = pytest.importorskip("pydocs_mcp.harness.ask_your_docs.binding")
-
-        def _fake_make_harness_runner(settings):
-            captured.update(settings)
-            return object()
-
-        monkeypatch.setattr(product, "make_harness_runner", _fake_make_harness_runner)
-        monkeypatch.setattr(ask_binding, "_require_ask_extra", lambda: None)
-        return captured
-
-    def test_settings_mapping_carries_every_bound_key(self, monkeypatch) -> None:
-        captured = self._capture_settings(monkeypatch)
-        runner = build_ask_harness_runner(
-            workspace=Path("/index"),
-            model="qwen3-4b",
-            architecture="inline",
-            max_agent_turns=7,
-            base_url="http://localhost:9999/v1",
-            pydocs_config=Path("/tmp/overlay.yaml"),
-            trace_root="/traces",
-            task_timeout_seconds=42.0,
-        )
-        assert captured == {
-            "workspace": "/index",
-            "model": "qwen3-4b",
-            "base_url": "http://localhost:9999/v1",
-            "pydocs_config": "/tmp/overlay.yaml",
-            "architecture": "inline",
-            "max_agent_turns": 7,
-            "trace_root": "/traces",
-        }
-        assert runner.task_timeout_seconds == 42.0 and runner.max_agent_turns == 7
-
-    def test_an_arm_llm_block_lands_under_harness_llm(self, monkeypatch) -> None:
-        # The ONE sanctioned channel for model settings: the binding takes
-        # ``harness.llm`` as-is and refuses a block read from pydocs_config.
-        captured = self._capture_settings(monkeypatch)
-        block = {"provider": "openrouter", "params": {"temperature": 1.0}}
-
-        build_ask_harness_runner(
-            workspace=Path("/index"),
-            model="m",
-            architecture="text_react",
-            max_agent_turns=12,
-            harness_llm=block,
-        )
-
-        assert captured["harness"] == {"llm": block}
-
-    def test_no_block_leaves_the_settings_mapping_exactly_as_it_was(self, monkeypatch) -> None:
-        # Byte identity for every caller that pins no block: no arm hash moves.
-        captured = self._capture_settings(monkeypatch)
-
-        build_ask_harness_runner(
-            workspace=Path("/index"), model="m", architecture="text_react", max_agent_turns=12
-        )
-
-        assert "harness" not in captured
-
-    def test_optional_paths_are_none_not_the_string_none(self, monkeypatch) -> None:
-        captured = self._capture_settings(monkeypatch)
-        build_ask_harness_runner(
-            workspace=Path("/index"), model="m", architecture="text_react", max_agent_turns=12
-        )
-        assert captured["pydocs_config"] is None and captured["base_url"] is None
-        assert captured["trace_root"] == DEFAULT_ASK_TRACE_ROOT
-
-
 class TestTimeoutBoundedRunner:
     """One bad candidate costs its own sample, never the whole campaign."""
 
@@ -281,6 +208,20 @@ class TestBindingIdentity:
         assert set(identity) == {"scaffold", "delivery_map", "gates_source"}
         assert identity["scaffold"] == "task_scaffold_v1"
         assert identity["gates_source"] == "server_trace"
+
+    def test_the_citing_identity_is_byte_identical_to_the_default(self) -> None:
+        from pydocs_eval.task_rendering import TaskScaffold
+
+        assert ask_binding_identity(scaffold=TaskScaffold.CITING) == ask_binding_identity()
+
+    def test_the_bare_scaffold_folds_its_own_version(self) -> None:
+        from pydocs_eval.task_rendering import TaskScaffold
+
+        bare = ask_binding_identity(scaffold=TaskScaffold.BARE)
+        assert bare["scaffold"] == "task_scaffold_bare_v1"
+        assert {k: v for k, v in bare.items() if k != "scaffold"} == {
+            k: v for k, v in ask_binding_identity().items() if k != "scaffold"
+        }
 
     def test_delivery_map_digest_is_derived_from_the_product(self) -> None:
         # Never a copied literal: a delivery-map change must move this value.

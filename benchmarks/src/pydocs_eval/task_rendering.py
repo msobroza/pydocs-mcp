@@ -20,6 +20,10 @@ black-box agent track's console scripts import this module (ADR 0009's
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from enum import StrEnum
+from types import MappingProxyType
+
 # ONE scaffold every execution path runs (run-contract design §8; originally
 # the agent-track-private ``_command._SCAFFOLD``). Keeping the bare scaffold in
 # its own constant is what makes ``task_prompt(q, skill="")`` byte-identical to
@@ -39,15 +43,69 @@ _SCAFFOLD = (
 TASK_SCAFFOLD_VERSION = "task_scaffold_v1"
 
 
-def render_task_prompt(question: str) -> str:
-    """Render ``question`` into the shared task scaffold.
+class TaskScaffold(StrEnum):
+    """How a question reaches the agent: inside the citing scaffold, or bare.
+
+    ``BARE`` is what the chat page sends: the question alone. A before/after
+    arm selects it with its overlay's ``task_scaffold`` key, and the vendored
+    chat runner records it. Each scaffold has its own template and its own
+    version (:func:`task_scaffold_version`), so a bare arm's settings digest, and
+    the ask binding identity of a bare objective, never equal a citing one's
+    (issue #386).
+    """
+
+    CITING = "citing"
+    BARE = "bare"
+
+
+# The scaffold every caller renders under unless it names another: the ONE
+# spelling of that default (arm settings, overlays, sample rows, identities).
+DEFAULT_TASK_SCAFFOLD = TaskScaffold.CITING
+
+# One template per scaffold. A lookup, never an ``if``: a scaffold added without
+# its own text must fail loudly here, not render another's under its own version.
+_TASK_SCAFFOLD_TEMPLATES: Mapping[TaskScaffold, str] = MappingProxyType(
+    {
+        TaskScaffold.CITING: _SCAFFOLD,
+        # The question alone, byte for byte: the chat page's message.
+        TaskScaffold.BARE: "{question}",
+    }
+)
+
+# One version per scaffold, folded into an arm's settings digest. The citing
+# entry IS ``TASK_SCAFFOLD_VERSION``, so no recorded identity moves.
+_TASK_SCAFFOLD_VERSIONS: Mapping[TaskScaffold, str] = MappingProxyType(
+    {
+        TaskScaffold.CITING: TASK_SCAFFOLD_VERSION,
+        TaskScaffold.BARE: "task_scaffold_bare_v1",
+    }
+)
+
+
+def task_scaffold_version(scaffold: TaskScaffold) -> str:
+    """The recorded version of ``scaffold``.
+
+    Example:
+        >>> task_scaffold_version(TaskScaffold.CITING)
+        'task_scaffold_v1'
+    """
+    return _TASK_SCAFFOLD_VERSIONS[scaffold]
+
+
+def render_task_prompt(question: str, *, scaffold: TaskScaffold = DEFAULT_TASK_SCAFFOLD) -> str:
+    """Render ``question`` under ``scaffold``: the citing scaffold by default, or bare.
 
     The ONLY place the scaffold text is applied. Callers that additionally
     append candidate guidance (the agent track's ``skill`` section) build on
-    top of this return value rather than re-formatting the scaffold.
+    top of this return value rather than re-formatting the scaffold. ``BARE``
+    returns the question unchanged, byte for byte: that is the chat page's
+    message, and the arm that measures the page must send the same one.
 
     Example:
         >>> render_task_prompt("What does X do?").endswith("Question: What does X do?")
         True
+        >>> render_task_prompt("What does X do?", scaffold=TaskScaffold.BARE)
+        'What does X do?'
     """
-    return _SCAFFOLD.format(question=question)
+    # Keyed by value, so a scaffold read back as its plain string renders as its member.
+    return _TASK_SCAFFOLD_TEMPLATES[scaffold].format(question=question)

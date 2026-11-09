@@ -49,7 +49,7 @@ from pydocs_eval.optimize.protocols import OptimizableArtifact
 from pydocs_eval.registries import (
     _Registry,  # WHY: same in-repo registry mechanic as the optimize axes; a second copy would drift
 )
-from pydocs_eval.task_rendering import TASK_SCAFFOLD_VERSION
+from pydocs_eval.task_rendering import DEFAULT_TASK_SCAFFOLD, TaskScaffold, task_scaffold_version
 
 if TYPE_CHECKING:
     from pydocs_mcp.harness.core.run_contract import Trajectory
@@ -258,7 +258,7 @@ def _import_dotted(dotted_path: str) -> Callable[..., object]:
     return resolved  # type: ignore[no-any-return]
 
 
-def ask_binding_identity() -> dict[str, str]:
+def ask_binding_identity(scaffold: TaskScaffold = DEFAULT_TASK_SCAFFOLD) -> dict[str, str]:
     """What about THIS execution path can move a recorded verdict (design §8).
 
     Folded into ``rubric_config_hash(..., binding_identity=…)`` so the three
@@ -270,11 +270,19 @@ def ask_binding_identity() -> dict[str, str]:
     WHY no ``_require_ask_extra()``: the digest is a pure product constant,
     and the zero-spend dry run must be able to compute the objective hash on a
     machine without langgraph.
+
+    ``scaffold`` folds THAT scaffold's version (issue #386). The citing default
+    folds ``task_scaffold_v1``, exactly what this identity held before the
+    per-scaffold map, so every existing ledger stays byte-identical; the bare
+    scaffold folds ``task_scaffold_bare_v1``, so an objective rendered bare could
+    never resume a citing verdict. Today every caller (``ask_objective_hash``) runs
+    the citing ask-rubric objective; a before/after arm's identity is its settings
+    digest, which folds the same per-scaffold version.
     """
     from pydocs_mcp.harness.ask_your_docs.binding import delivery_map_digest
 
     return {
-        "scaffold": TASK_SCAFFOLD_VERSION,
+        "scaffold": task_scaffold_version(scaffold),
         "delivery_map": delivery_map_digest(),
         "gates_source": _GATES_OBSERVATION_SOURCE,
     }
@@ -392,6 +400,7 @@ def build_ask_harness_runner(
     trace_root: str = DEFAULT_ASK_TRACE_ROOT,
     task_timeout_seconds: float = DEFAULT_TASK_TIMEOUT_SECONDS,
     harness_llm: Mapping[str, object] | None = None,
+    harness_block: Mapping[str, object] | None = None,
 ) -> TimeoutBoundedAskRunner:
     """Build the timeout-bounded ask ``HarnessRunner`` from typed keyword args.
 
@@ -406,6 +415,11 @@ def build_ask_harness_runner(
     block read from the ``pydocs_config`` file (an arm must be deterministic).
     Omitted when None, so a caller that pins no block sends today's mapping
     byte-for-byte and no arm identity moves.
+
+    ``harness_block`` is the rest of an arm's ``ask_your_docs`` overlay — e.g.
+    ``seed_search_with_question`` — merged under the same ``harness`` mapping
+    beside ``llm``; the binding's ``AskYourDocsConfig`` validates it. Empty or
+    None adds nothing.
     """
     _require_ask_extra()
     return build_harness_runner(
@@ -418,11 +432,22 @@ def build_ask_harness_runner(
             "architecture": architecture,
             "max_agent_turns": max_agent_turns,
             "trace_root": trace_root,
-            **({} if harness_llm is None else {"harness": {"llm": dict(harness_llm)}}),
+            **_harness_settings(harness_llm, harness_block),
         },
         task_timeout_seconds=task_timeout_seconds,
         max_agent_turns=max_agent_turns,
     )
+
+
+def _harness_settings(
+    harness_llm: Mapping[str, object] | None, harness_block: Mapping[str, object] | None
+) -> dict[str, object]:
+    """The settings mapping's ``harness`` entry, or nothing when neither half is given."""
+    harness = {
+        **dict(harness_block or {}),
+        **({} if harness_llm is None else {"llm": dict(harness_llm)}),
+    }
+    return {"harness": harness} if harness else {}
 
 
 @dataclass(slots=True)

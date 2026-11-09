@@ -126,6 +126,7 @@ def _provenance_lines(
     return [
         f"- split: `{plan.split}` — {len(plan.task_ids)} task(s) per arm, "
         f"{baseline.trajectories} and {candidate.trajectories} measured",
+        *([plan.task_draw.report_line()] if plan.task_draw else []),
         f"- baseline: `{baseline.commit.sha[:12]}` {baseline.commit.subject}",
         f"- candidate: `{candidate.commit.sha[:12]}` {candidate.commit.subject}",
         f"- model: `{plan.model}` @ `{plan.endpoint}`, "
@@ -133,7 +134,32 @@ def _provenance_lines(
         f"- estimated spend: ${plan.estimated_usd:.2f} "
         "(the plan's pre-run estimate; the spend rows below are measured)",
         *(_outcome_tally_line(role, arm) for role, arm in arms),
+        *_settings_bullets(arms),
+        *_forced_reuse_bullets(arms),
         *_missing_sidecar_bullets(arms),
+    ]
+
+
+def _forced_reuse_bullets(arms: Sequence[tuple[ArmRole, ArmMetrics]]) -> list[str]:
+    """A reuse forced past a serving mismatch, from the candidate that recorded it.
+
+    The candidate only: a reused baseline that was an earlier run's forced
+    candidate still carries that run's record, which says nothing about THIS
+    comparison. None is the norm.
+    """
+    return [
+        f"- serving, {role}: {arm.variant.serving_override.provenance_text()}"
+        for role, arm in arms
+        if role == ArmRole.CANDIDATE and arm.variant.serving_override is not None
+    ]
+
+
+def _settings_bullets(arms: Sequence[tuple[ArmRole, ArmMetrics]]) -> list[str]:
+    """Each arm's settings beyond its commit; none for arms that predate recording them."""
+    return [
+        f"- settings, {role}: {arm.variant.provenance_text()}"
+        for role, arm in arms
+        if arm.variant.recorded
     ]
 
 

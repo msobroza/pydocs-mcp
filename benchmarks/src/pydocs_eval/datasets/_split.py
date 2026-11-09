@@ -101,9 +101,7 @@ def stratified_split(
     if split == "all":
         return rows
 
-    groups: dict[str, list[T]] = {}
-    for row in rows:
-        groups.setdefault(stratum_of(row), []).append(row)
+    groups = _groups_by_stratum(rows, stratum_of)
 
     # One RNG, reused across groups — re-seeding per stratum would change
     # the draw sequence and break parity with the original inline split.
@@ -114,11 +112,11 @@ def stratified_split(
     # future change in row arrival order). dev head + test tail are computed
     # the same way for every split so the shuffle draw sequence — and hence
     # dev/test membership — stays byte-identical to the original.
+    # Every stratum is shuffled before any is cut: the cut draws nothing from
+    # the RNG, so the draw sequence is the one the inline loop always made.
     dev_by_stratum: dict[str, list[T]] = {}
     test_by_stratum: dict[str, list[T]] = {}
-    for stratum in sorted(groups):
-        group = sorted(groups[stratum], key=sort_key)
-        rng.shuffle(group)
+    for stratum, group in _shuffled_strata(groups, rng, sort_key).items():
         n_dev = round(dev_fraction * len(group))
         dev_by_stratum[stratum] = group[:n_dev]
         test_by_stratum[stratum] = group[n_dev:]
@@ -134,6 +132,54 @@ def stratified_split(
     if split == "test":
         return [row for stratum in sorted(test_by_stratum) for row in test_by_stratum[stratum]]
     return _largest_remainder_subsample(test_by_stratum, target=small_test_size)
+
+
+def reseeded_stratified_subsample(
+    rows: list[T],
+    *,
+    seed: int,
+    size: int,
+    stratum_of: Callable[[T], str],
+    sort_key: Callable[[T], str],
+) -> list[T]:
+    """A fixed-size stratified subsample of ``rows`` drawn under its OWN ``seed``.
+
+    ``rows`` is a partition already cut (the fresh repoqa test draw passes the
+    ``test`` partition minus the consumed ids). Unlike ``small_test`` — which
+    takes the heads of the partition's tails, so its seed also moves the
+    partition — this redraw leaves the partition alone: each stratum is
+    stable-sorted by ``sort_key``, shuffled by ONE ``random.Random(seed)``
+    reused across strata in sorted order (``stratified_split``'s determinism
+    contract), and ``min(size, len(rows))`` rows are taken by the same
+    largest-remainder apportionment ``small_test`` uses.
+    """
+    groups = _groups_by_stratum(rows, stratum_of)
+    shuffled = _shuffled_strata(groups, random.Random(seed), sort_key)
+    return _largest_remainder_subsample(shuffled, target=size)
+
+
+def _shuffled_strata(
+    groups: dict[str, list[T]], rng: random.Random, sort_key: Callable[[T], str]
+) -> dict[str, list[T]]:
+    """Each group stable-sorted by ``sort_key``, then shuffled by ONE ``rng`` in sorted-stratum order.
+
+    The determinism contract both draws share: ordering is independent of the
+    rows' arrival, and reusing one RNG across strata (never re-seeding per
+    stratum) keeps the draw sequence — so the membership — byte-identical.
+    """
+    shuffled: dict[str, list[T]] = {}
+    for stratum in sorted(groups):
+        shuffled[stratum] = sorted(groups[stratum], key=sort_key)
+        rng.shuffle(shuffled[stratum])
+    return shuffled
+
+
+def _groups_by_stratum(rows: list[T], stratum_of: Callable[[T], str]) -> dict[str, list[T]]:
+    """``rows`` grouped by stratum, each group in arrival order."""
+    groups: dict[str, list[T]] = {}
+    for row in rows:
+        groups.setdefault(stratum_of(row), []).append(row)
+    return groups
 
 
 def _largest_remainder_subsample(

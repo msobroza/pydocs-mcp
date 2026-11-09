@@ -18,6 +18,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from pydocs_eval.datasets.base_dataset import REFERENCE_ANSWER_KEY
+
 if TYPE_CHECKING:
     # WHY TYPE_CHECKING only: ``checks`` imports ``gates``, which imports
     # ``GateCheck`` from THIS module — a runtime import here would close that
@@ -39,6 +41,30 @@ _DEFAULT_KEEP_DETERMINISTIC_ON_SKIP = False
 _WEIGHT_TOLERANCE = 1e-3
 
 
+# The params key the gold-candidate predicates (``gold_substring_all``,
+# ``gold_recall``) select gold keys by.
+GOLD_KEYS_PARAM = "keys"
+
+
+def refuse_reference_answer_keys(keys: object) -> None:
+    """Refuse a gold-keys selection (``params["keys"]``) that names the reference answer.
+
+    The reference is the judge's (spec Q24): an answer is never asked to contain
+    it, so no gate or check may select it as a substring candidate. Checked when
+    a gate or check is built and again by the candidate reader, so a predicate
+    called directly refuses it too.
+
+    Raises:
+        ValueError: ``keys`` names ``REFERENCE_ANSWER_KEY``, naming the value.
+    """
+    if isinstance(keys, (list, tuple)) and REFERENCE_ANSWER_KEY in keys:
+        raise ValueError(
+            f"params[{GOLD_KEYS_PARAM!r}] = {list(keys)!r} names {REFERENCE_ANSWER_KEY!r}, "
+            "expected only 'file_set' or gold.extra keys an answer must contain; the "
+            "reference answer is for the judge, never a substring candidate"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class GateCheck:
     """Deterministic, free, per-sample boolean predicate (spec §3.4.2).
@@ -51,6 +77,9 @@ class GateCheck:
     name: str
     kind: str
     params: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        refuse_reference_answer_keys(self.params.get(GOLD_KEYS_PARAM))
 
 
 @dataclass(frozen=True, slots=True)
