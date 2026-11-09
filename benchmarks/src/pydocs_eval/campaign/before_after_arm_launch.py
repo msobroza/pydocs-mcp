@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
-from dataclasses import replace
 from pathlib import Path
 
 from pydocs_eval.campaign.before_after import (
@@ -28,9 +27,12 @@ from pydocs_eval.campaign.before_after_arm import (
     ArmSummary,
     read_arm_summary,
     write_arm_settings,
-    write_arm_summary,
 )
-from pydocs_eval.campaign.before_after_arm_records import ALLOW_SERVING_MISMATCH_FLAG
+from pydocs_eval.campaign.before_after_arm_records import (
+    ALLOW_SERVING_MISMATCH_FLAG,
+    ServingMismatchOverride,
+    write_serving_override,
+)
 from pydocs_eval.campaign.before_after_arm_resume import refuse_rows_of_another_run
 from pydocs_eval.campaign.before_after_arm_settings import ARM_OVERLAY_SHAPE, load_arm_overlay
 from pydocs_eval.campaign.before_after_arm_variant import ArmVariants, arm_variants
@@ -75,7 +77,7 @@ def add_variant_arm_arguments(parser: argparse.ArgumentParser) -> None:
         ALLOW_SERVING_MISMATCH_FLAG,
         action="store_true",
         help="force a --reuse-baseline whose serving fingerprint differs or was never "
-        "recorded; logged, and named in the plan, the candidate's arm.json and the report",
+        "recorded; logged, and named in the plan, beside the candidate's arm.json and in the report",
     )
 
 
@@ -110,9 +112,11 @@ def run_one_arm(args: argparse.Namespace, plan: MeasurementPlan, role: ArmRole) 
     settings = arm_settings_for(args, plan, role=role, arm_dir=arm_dir)
     write_arm_settings(arm_dir, settings)
     _record_serving_fingerprint(plan, role, arm_dir)
+    # Before the spawn, so a parent that dies after the arm still leaves it on disk.
+    write_serving_override(arm_dir, _forced_reuse(plan, role))
     with product_worktree(args.repo, settings.commit, Path(args.out) / "worktrees") as worktree:
         _spawn_arm(worktree, arm_dir=arm_dir, split=args.split, limit=args.limit)
-    return _stamped_with_forced_reuse(plan, role, arm_dir)
+    return read_arm_summary(arm_dir)
 
 
 def _record_serving_fingerprint(plan: MeasurementPlan, role: ArmRole, arm_dir: Path) -> None:
@@ -210,21 +214,18 @@ def _serving_changes(args: argparse.Namespace, plan: MeasurementPlan, role: ArmR
     ]
 
 
-def _stamped_with_forced_reuse(plan: MeasurementPlan, role: ArmRole, arm_dir: Path) -> ArmSummary:
-    """The arm's summary; a candidate compared against a forced reuse records that it was.
+def _forced_reuse(plan: MeasurementPlan, role: ArmRole) -> ServingMismatchOverride | None:
+    """What the candidate records about a forced reuse; None for the baseline, or nothing forced.
 
-    Stamped here by the parent, not by the child: the forced reuse is a fact
-    about the COMPARISON, not about how the candidate ran — its settings, and so
-    its run identity and resume, are the same either way.
+    Recorded by the parent, not by the child: the forced reuse is a fact about
+    the COMPARISON, not about how the candidate ran — its settings, and so its
+    run identity and resume, are the same either way. None clears a record an
+    earlier run into this ``--out`` left: this comparison forced nothing.
     """
-    summary = read_arm_summary(arm_dir)
     reuse = None if plan.serving is None else plan.serving.reuse
-    override = None if reuse is None else reuse.override_record()
-    if role != ArmRole.CANDIDATE or override is None:
-        return summary
-    stamped = replace(summary, serving_override=override)
-    write_arm_summary(arm_dir, stamped)
-    return stamped
+    if role != ArmRole.CANDIDATE or reuse is None:
+        return None
+    return reuse.override_record()
 
 
 def arm_settings_for(
