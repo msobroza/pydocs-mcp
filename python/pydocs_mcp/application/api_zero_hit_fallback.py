@@ -43,6 +43,7 @@ from pydocs_mcp.application.suggestions import (
     API_ZERO_HIT_FALLBACK_EMPTY_SUGGESTION,
     API_ZERO_HIT_FALLBACK_SERVED_SUGGESTION,
     API_ZERO_HIT_RETRY_ANY_RULE,
+    SEARCH_ZERO_HIT_RULE,
     SEARCH_ZERO_HIT_SUGGESTION,
     api_zero_hit_retry_any_suggestion,
     log_suggestion_fired,
@@ -169,7 +170,7 @@ class SearchZeroHitResponder:
         """``body`` plus the zero-hit overview pointer when Z is on (logged)."""
         if not self.suggestions.search_zero_hit:
             return body
-        log_suggestion_fired(_TOOL, "search_zero_hit")
+        log_suggestion_fired(_TOOL, SEARCH_ZERO_HIT_RULE)
         zero_hit = self.pointers.row_for(ResponseKind.ZERO_HIT)
         return f"{body}\n{render_pointer_bundle(zero_hit, '')}"
 

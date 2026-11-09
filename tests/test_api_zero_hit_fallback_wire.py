@@ -13,7 +13,7 @@ composition root, ``build_routers``, once per surface. On that bundle:
 - a dense path that already degrades today (the ``.tq`` vector sidecar
   absent) is inherited exactly as a direct ``kind="any"`` sees it.
 
-Every equality request is issued twice (determinism, R14). Outcome tests keep
+Every equality request is issued twice (determinism). Outcome tests keep
 the requested kind, the raw API zero hit (the fired rule) and the served kind
 (the label plus each row's own ``kind``) apart.
 """
@@ -108,7 +108,7 @@ def shipped_router(db_path: Path, surface: str, config: AppConfig | None = None)
 def serve_twice(
     router: ToolRouter, caplog: pytest.LogCaptureFixture, **fields: Any
 ) -> ServedSearch:
-    """Serve the request twice (R14) and return it once both responses — text,
+    """Serve the request twice (determinism) and return it once both responses — text,
     ``items[]``, ``meta``, fired rules, rendered rows — proved identical."""
     first, second = (
         asyncio.run(serve_search(router, SearchInput(**fields), caplog)) for _ in range(2)

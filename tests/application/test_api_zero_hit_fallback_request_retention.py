@@ -448,7 +448,7 @@ async def test_a_bad_selector_on_kind_api_raises_invalid_argument_and_issues_no_
     assert [r for r in caplog.records if r.name == SUGGESTIONS_LOGGER] == []
 
 
-# ── Determinism (R14): the same request twice, the same response ──────────
+# ── Determinism: the same request twice, the same response ────────────────
 
 
 @pytest.mark.parametrize(

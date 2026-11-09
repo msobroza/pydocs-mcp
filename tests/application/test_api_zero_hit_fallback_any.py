@@ -50,7 +50,7 @@ from ._router_fakes import (
     make_service,
 )
 
-# ── Pinned bytes (spec D4 / D5; #438 texts at 9b9de5a3) ───────────────────
+# ── Pinned bytes (ADR 0027 labels; #438 texts at 9b9de5a3) ────────────────
 F_SERVED = (
     '[suggestion: kind="api" matched nothing — showing kind="any" results '
     "for the same query and filters]"
@@ -161,7 +161,7 @@ async def serve_search(
         if r.name == "pydocs_mcp.application.suggestions"
     ]
     served = ServedSearch(response, [r["rule"] for r in records], records, capture.count)
-    # Contract §2.3 / D8: some rule is logged ⇔ meta.suggestion is non-null.
+    # Contract §2.3 / ADR 0027: some rule is logged ⇔ meta.suggestion is non-null.
     assert bool(served.rules) is bool(response.meta.get("suggestion"))
     return served
 
@@ -350,7 +350,7 @@ async def test_an_api_hit_is_byte_identical_with_the_fallback_on(
     footer = on.response.text.split("[truncated: ", 1)[-1]
     assert (limit == 5000) is (footer.count("limit=5000 above the configured maximum") == 1)
     if budget == 1:
-        # SC1: rows elided from the text — today's empty literal and Z/R lines show.
+        # Budget corner: rows elided from the text — today's empty literal and Z/R lines show.
         assert "No symbols found." in on.response.text and "elided by the token budget" in footer
         assert (RETRY in on.response.text) is r and on.rendered_rows == 0
         assert on.response.meta["truncated"] is True

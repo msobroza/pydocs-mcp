@@ -39,6 +39,9 @@ GREP_ZERO_HIT_SUGGESTION = (
 GREP_TRUNCATED_SUGGESTION = (
     "[suggestion: output cut by head_limit — narrow with path= or glob=, or raise head_limit=]"
 )
+# Logged by every zero-hit producer (search_codebase's responder and the
+# get_why / kind="decision" path), so the rule name has one home.
+SEARCH_ZERO_HIT_RULE = "search_zero_hit"
 SEARCH_ZERO_HIT_SUGGESTION = "[suggestion: zero hits — orient with get_overview()]"
 
 # On a ``kind="api"`` zero hit, the generic overview pointer stays (recovery,
