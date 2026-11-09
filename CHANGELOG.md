@@ -488,9 +488,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     task group raises) to its first leaf. Timeouts read "did not answer in
     time".
   - Authentication and permission rejections already read "the model endpoint
-    rejected the request" on the live path: the chat turns every 401 / 403,
-    the 1.6 wrappers included, into `BearerRejectedError` first. The hierarchy
-    lookup covers them only as a backstop.
+    rejected the request" on the live path: the chat's auth step turns a 401 /
+    403 SDK error, the 1.6 wrappers included, into `BearerRejectedError` first.
+    The hierarchy lookup covers them only as a backstop, for example for one
+    that reaches the page wrapped in an exception group.
   - The label table is unchanged. The failure caption and the `send_failed`
     log line still name the class that was raised.
 - **Reasoning capture no longer adds a pydantic serializer warning.** Given a
