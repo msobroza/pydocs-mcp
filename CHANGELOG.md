@@ -195,9 +195,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Why these bounds.** 1.1.14 is the first langchain-openai with the fix (see
     *Fixed*). openai 2.26 is the oldest openai it installs with. The cap below 3
     holds until pydocs-mcp is ported to openai 3, the same policy as `mcp<2`.
-  - **The lock moves exactly two packages:** openai 1.109.1 → 2.54.0 and
-    langchain-openai 1.1.9 → 1.3.5. Nothing is added or removed, and nothing
-    else moves; langchain-core stays at 1.4.9.
+  - **This change moves exactly two packages in the lock:** openai 1.109.1 →
+    2.54.0 and langchain-openai 1.1.9 → 1.3.5. It adds or removes nothing and
+    moves nothing else; langchain-core stays at 1.4.9.
   - **Fresh installs go further.** A new `pip install` of the extra resolves up
     to langchain-openai 1.7.4 with langchain-core 1.7.6. The range was tested
     at three points: the floor (openai 2.26.0 + langchain-openai 1.1.14), the
@@ -235,7 +235,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     lazily, that happens at the first `chat()`. openai 2.26–2.33 still accept
     an empty key and send no `Authorization` header, as 1.x did. **If you use
     a keyless OpenAI-compatible server, configure a non-empty placeholder
-    key.** The OpenAI embedder already refused an empty key itself.
+    key.** The OpenAI embedder already refused an empty key itself. With
+    `OPENAI_ADMIN_KEY` set, an empty key does not fail at build time; the
+    client is built and its resource calls fail locally when they are made.
   - **From openai 2.34.0, every client reads `OPENAI_ADMIN_KEY` and
     `OPENAI_CUSTOM_HEADERS`.**
     - Resource calls send only the bearer. A raw request whose bearer is empty
@@ -245,11 +247,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       `Authorization:` line there replaces the bearer you configured. Do not
       export the variable in a shell that runs pydocs-mcp against an endpoint
       that must not see those headers.
-    - The test suite removes both variables from every test without reading
-      them.
+    - The product test suite (`tests/`) removes both variables from every test
+      without reading them.
 - **The OpenAI SDK now honours a server's `Retry-After` for up to 120 s, from
   openai 2.52.0.** A longer wait is not retried. openai 1.x, and 2.26–2.51,
-  honoured only waits of 60 s or less and otherwise backed off for 0.5–8 s.
+  honoured only waits of 60 s or less, and otherwise used their own short
+  backoff of at most 8 s.
   Under rate limiting, a slow call may be waiting, not hung:
   - **The Connection dialog's** model listing and LiteLLM probe (10 s timeout,
     one retry) can stall for about 2 minutes on a 429 or 503 carrying
@@ -258,7 +261,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **One core `OpenAiLlmClient.chat()`** makes 3 attempts of its own around the
     SDK's 2 retries. Against a server that keeps answering 429 with a
     `Retry-After` of 61–120 s, one call can now take about 12 minutes; before,
-    it took about 9 s. Above 120 s it makes 3 requests and fails.
+    it gave up within seconds. Above 120 s it makes 3 requests and fails.
   - A test pins the 120 s ceiling, so a change to that SDK policy fails a test.
 - **A tool round's request bytes change, and cache writes are now counted.**
   - **Request bytes.** Tool results are sent as text blocks holding only `type`
@@ -266,9 +269,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     from langchain-openai 1.1.14; 1.1.9 sent the id. So the bytes of every
     multi-step request change, and so do their prompt-cache prefixes.
   - **Cache writes.** From langchain-openai 1.3.5, an endpoint's
-    `cache_write_tokens` is reported as cache-creation input tokens, so the ask
-    harness's `cache_creation_input_tokens` in `model_usage.json` goes from
-    always 0 to real values. 1.1.14–1.3.4 still report 0.
+    `cache_write_tokens` is reported as cache-creation input tokens. The ask
+    harness's `cache_creation_input_tokens` in `model_usage.json` was always 0,
+    and now carries that count. 1.1.14–1.3.4 still report 0. So does an
+    endpoint that sends no `cache_write_tokens`, and so do the `priority` and
+    `flex` service tiers, which langchain-openai reports under a
+    tier-prefixed key that the harness does not read.
   - Compare eval arms only within one dependency set (see the eval suite's
     changelog).
 - **Reasoning capture does not apply to models that langchain-openai sends to
@@ -277,13 +283,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reasoning there.
   - **Bare names now go to Responses.** With langchain-openai 1.3.5, model names
     starting `gpt-5-pro`, `gpt-5.2-pro`, `gpt-5.4-pro` or `gpt-5.5-pro`, and any
-    name containing `codex`, go to Responses. 1.1.9 sent only `gpt-5.2-pro` and
-    `codex` names there. Capture therefore stops silently for bare
+    name containing `codex`, go to Responses. 1.1.9 sent only names containing
+    `gpt-5.2-pro` or `codex` there. Capture therefore stops silently for bare
     `gpt-5-pro`, `gpt-5.4-pro` and `gpt-5.5-pro`. Later in-range releases add
     more names: 1.7.4 adds `gpt-5.6-sol`.
-  - **Vendor-prefixed slugs go back to Chat Completions.** A slug such as
+  - **Vendor-prefixed `-pro` slugs go back to Chat Completions.** The `-pro`
+    names now match only at the start of the model name. So a slug such as
     `openai/gpt-5.2-pro`, which 1.1.9 sent to Responses, goes to Chat
-    Completions again, and capture applies to it.
+    Completions again, and capture applies to it. A slug containing `codex`,
+    such as `openai/gpt-5-codex`, still goes to Responses.
   - The harness documents this routing and does not change it.
 
 ### Fixed
@@ -461,8 +469,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     vulnerabilities found, 12 ignored".
   - **The nightly fresh-install audit** now ignores nothing.
   - **CLAUDE.md's gate command** carries the same ignore set as CI.
-  - **A new test** (`tests/test_audit_ignore_hygiene.py`) keeps the three in
-    agreement and checks that every ignored ID has a WHY comment.
+  - **A new test** (`tests/test_audit_ignore_hygiene.py`) checks that
+    CLAUDE.md's ignore set equals CI's, that the fresh-install audit ignores
+    nothing CI does not, and that every ignored ID has a WHY comment.
 - **A chat question stopped by a timeout reads "the model endpoint did not
   answer in time" on every in-range langchain-openai.** The activity panel
   looked up its failure label by the exception's exact class name.

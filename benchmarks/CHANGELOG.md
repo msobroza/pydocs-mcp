@@ -823,8 +823,9 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 - **The ask harness's cache-creation figures and request bytes are not
   comparable across the openai 2 / langchain-openai 1.3.5 bump.** Two things
   change:
-  - `cache_creation_input_tokens` in `model_usage.json` goes from always 0 to
-    the endpoint's `cache_write_tokens`.
+  - `cache_creation_input_tokens` in `model_usage.json` was always 0. It now
+    carries the endpoint's `cache_write_tokens`, except on the `priority` and
+    `flex` service tiers, which stay 0.
   - A tool round no longer sends LangChain's block `id` in tool-result text
     blocks, so request bytes and prompt-cache prefixes change.
 
