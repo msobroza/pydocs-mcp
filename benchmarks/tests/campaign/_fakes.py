@@ -11,16 +11,19 @@ plan test stays offline and instant while still proving WHICH arms were asked.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydocs_eval.campaign.before_after import CommitUnderTest, MeasurementPlan
-from pydocs_eval.campaign.before_after_arm import ArmSummary
+from pydocs_eval.campaign.before_after_arm import ArmSummary, read_arm_settings, write_arm_summary
 from pydocs_eval.campaign.before_after_arm_variant import ArmVariant
 from pydocs_eval.campaign.before_after_block_probe import ArmBlockAcceptance, ArmBlockVerdict
+from pydocs_eval.campaign.before_after_corpora import IndexIdentity
+from pydocs_eval.campaign.before_after_serving import ServingBasis, ServingSettings
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.datasets.repo_qa import GOLD_SYMBOL_KEY
 from pydocs_eval.trajectory.server_capture import SERVER_EVENTS_FILENAME
@@ -29,6 +32,48 @@ from pydocs_eval.trajectory.token_accounting import ASK_MODEL_USAGE_FILENAME
 # The key that cost the 2026-09-15 run its baseline arm: the candidate knew it,
 # the baseline predated it, and the block was validated against the candidate.
 REJECTED_KEY = "harness.llm.parallel_tool_calls"
+
+# What the ``stub_command`` plan is served under: a serving config the CLI tests
+# never read, so its digest is a stand-in, and the endpoint and index it names.
+# The endpoint rides as ``--base-url`` would, so every arm resolves the same one.
+STUB_SERVING = ServingBasis(
+    config_digest="stub-serving-config",
+    cli_url="http://e",
+    file_llm=None,
+    index=IndexIdentity(embedder_model="m", embedder_dim=8, scope_id="scope"),
+)
+
+
+def stub_serving_settings(max_agent_turns: int) -> ServingSettings:
+    """``_serving_settings``' answer for :data:`STUB_SERVING`, at a turn cap."""
+    return ServingSettings(endpoint="http://e", max_agent_turns=max_agent_turns, basis=STUB_SERVING)
+
+
+@contextlib.contextmanager
+def no_worktree(repo: Path, sha: str, root: Path) -> Iterator[Path]:
+    """``product_worktree`` without git — the arm child is stubbed out anyway."""
+    yield root / sha[:12]
+
+
+def write_finished_summary_from_settings(
+    worktree: Path, *, arm_dir: Path, split: str, limit: int | None
+) -> None:
+    """Stand in for the arm child: the finished ``arm.json`` it writes from its settings,
+    through the real writer, with both plan tasks excluded (no trace to measure)."""
+    settings = read_arm_settings(arm_dir)
+    summary = ArmSummary(
+        role=settings.role,
+        commit=settings.commit,
+        model=settings.model,
+        trace_root=settings.trace_root,
+        tasks=[],
+        estimated_usd=0.0,
+        halt_reason="completed",
+        excluded=2,
+        max_agent_turns=settings.max_agent_turns,
+        **settings.summary_variant_fields(),  # type: ignore[arg-type]
+    )
+    write_arm_summary(arm_dir, summary)
 
 
 @dataclass

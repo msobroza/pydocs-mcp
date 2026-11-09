@@ -18,7 +18,7 @@ import pytest
 from pydocs_eval.campaign import before_after_arm_launch, before_after_command
 from pydocs_eval.campaign.__main__ import main
 from pydocs_eval.campaign.before_after_arm import ArmSettings, run_arm
-from pydocs_eval.campaign.before_after_command import ServingSettings
+from pydocs_eval.campaign.before_after_serving import ServingBasis, ServingSettings
 from pydocs_eval.campaign.before_after_corpora import build_missing_workspaces, plan_task_workspaces
 from pydocs_eval.datasets.base_dataset import EvalTask
 
@@ -139,7 +139,14 @@ def stub_corpora_command(monkeypatch: pytest.MonkeyPatch) -> tuple[FakeArmRecord
         before_after_command,
         "_serving_settings",
         lambda args, block: ServingSettings(
-            endpoint="http://e", max_agent_turns=2, identity=INDEX_IDENTITY
+            endpoint="http://e",
+            max_agent_turns=2,
+            basis=ServingBasis(
+                config_digest="stub-serving-config",
+                cli_url=None,
+                file_llm=None,
+                index=INDEX_IDENTITY,
+            ),
         ),
     )
     monkeypatch.setattr(

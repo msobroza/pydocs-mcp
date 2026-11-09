@@ -44,6 +44,7 @@ if TYPE_CHECKING:  # these modules import this one; only their NAMES are needed 
     from pydocs_eval.campaign.before_after_arm_variant import ArmVariant, ArmVariants
     from pydocs_eval.campaign.before_after_block_probe import ArmBlockAcceptance
     from pydocs_eval.campaign.before_after_fresh_draw import FreshTestDraw
+    from pydocs_eval.campaign.before_after_reuse import ServingPlan
 
 # One text in, its token count out — the product's tokenizer in a real run, a
 # stub in tests, so the plan never has to import a tokenizer itself.
@@ -250,6 +251,8 @@ class MeasurementPlan:
     reused_baseline: str | None = None
     # The fresh redraw ``--split-seed`` asked for; None = the split as it always loaded.
     task_draw: FreshTestDraw | None = None
+    # Each arm's serving fingerprint basis and a reuse's serving check (set by the command).
+    serving: ServingPlan | None = None
 
     @property
     def arm_variants(self) -> ArmVariants:

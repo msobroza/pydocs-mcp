@@ -334,3 +334,36 @@ def test_each_arms_provenance_line_names_its_settings_digest(
 
     assert f"- baseline: `{baseline}` (`{'a' * 12}`, digest `{'d' * 12}`), 10 task(s)" in report
     assert f"- A/A replicate: `{baseline}` (`{'a' * 12}`, digest `{'d' * 12}`)" in report
+
+
+def test_a_candidate_compared_against_a_forced_reuse_says_so(
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--allow-serving-mismatch`` stamps the candidate; the compare verb prints it."""
+    from pydocs_eval.campaign.before_after_arm_records import ServingMismatchOverride
+
+    baseline = _write_arm(tmp_path, "baseline", _rows())
+    forced = _write_arm(tmp_path, "forced", _rows(turns=(5,) * 10))
+    override = ServingMismatchOverride(
+        reused_baseline=str(baseline), differing_keys=["endpoint"], fingerprint_recorded=True
+    )
+    stamped = dataclasses.replace(read_arm_summary(forced), serving_override=override)
+    write_arm_summary(forced, stamped)
+
+    code, report = _run(capsys, baseline, forced)
+
+    assert code == 0
+    assert (
+        f"- serving, `{forced}`: reuse of `{baseline}` forced by `--allow-serving-mismatch` "
+        "over differing serving key(s): `endpoint`"
+    ) in report
+
+
+def test_an_arm_without_a_forced_reuse_prints_no_serving_line(
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
+) -> None:
+    baseline = _write_arm(tmp_path, "baseline", _rows())
+
+    _code, report = _run(capsys, baseline, _write_arm(tmp_path, "faster", _rows()))
+
+    assert "- serving," not in report

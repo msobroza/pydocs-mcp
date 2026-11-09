@@ -135,7 +135,17 @@ def _provenance_lines(
         "(the plan's pre-run estimate; the spend rows below are measured)",
         *(_outcome_tally_line(role, arm) for role, arm in arms),
         *_settings_bullets(arms),
+        *_forced_reuse_bullets(arms),
         *_missing_sidecar_bullets(arms),
+    ]
+
+
+def _forced_reuse_bullets(arms: Sequence[tuple[ArmRole, ArmMetrics]]) -> list[str]:
+    """A reuse forced past a serving mismatch, from the arm that recorded it; none is the norm."""
+    return [
+        f"- serving, {role}: {arm.variant.serving_override.provenance_text()}"
+        for role, arm in arms
+        if arm.variant.serving_override is not None
     ]
 
 

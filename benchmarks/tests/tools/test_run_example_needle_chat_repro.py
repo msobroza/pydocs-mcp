@@ -12,6 +12,7 @@ leaves an arm directory that ``read_arm_summary``, the trajectory reader and
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,11 @@ from pydocs_eval.campaign.before_after_arm import read_arm_settings, read_arm_su
 from pydocs_eval.campaign.before_after_arm_variant import ArmVariant
 from pydocs_eval.campaign.before_after_llm_block import load_arm_llm_block
 from pydocs_eval.campaign.before_after_reuse import BaselineIdentity, reusable_baseline
+from pydocs_eval.campaign.before_after_serving import (
+    ServingFingerprint,
+    read_serving_fingerprint,
+    serving_settings_from_args,
+)
 from pydocs_eval.campaign.before_after_corpora import TaskWorkspaces
 from pydocs_eval.campaign.before_after_measure import measure_arm
 from pydocs_eval.campaign.before_after_report import render_report
@@ -42,6 +48,7 @@ from pydocs_mcp.observability.trace_env import TRACE_DIR_ENV_VAR, TRACE_TRAJECTO
 
 from ._chat_runner_fakes import (
     CHAT_CONFIG,
+    CHAT_SERVE_CONFIG,
     COMMIT,
     FINALIZED_ANSWER,
     LLM_BLOCK,
@@ -333,7 +340,33 @@ async def test_a_runner_output_qualifies_as_a_reused_baseline(tmp_path: Path) ->
 
     task_ids = [task.task_id for task in summary.tasks]
 
-    assert reusable_baseline(tmp_path / "arm", expected, task_ids=task_ids) == summary
+    reuse = reusable_baseline(
+        tmp_path / "arm", expected, task_ids=task_ids, serving=_plan_serving_fingerprint()
+    )
+    assert reuse.differing_keys == () and reuse.fingerprint_recorded
+
+
+def _plan_serving_fingerprint() -> ServingFingerprint:
+    """What a ``before-after --config <CHAT_SERVE_CONFIG> --llm-block <LLM_BLOCK>`` plan's
+    bare/auto baseline is served under — computed by the plan's own code path."""
+    args = argparse.Namespace(config=CHAT_SERVE_CONFIG, base_url=None)
+    serving = serving_settings_from_args(args, load_arm_llm_block(LLM_BLOCK))
+    return serving.basis.fingerprint(_runner_variant(TaskScaffold.BARE).llm_block)
+
+
+async def test_the_runner_records_the_serving_fingerprint_a_plan_computes(
+    tmp_path: Path,
+) -> None:
+    """The runner's YAML carries its agent's settings; the plan's serving file does not.
+    Both serve the same index through the same endpoint, so the fingerprints agree."""
+    await _run(tmp_path)
+
+    recorded = read_serving_fingerprint(tmp_path / "arm")
+
+    assert recorded == _plan_serving_fingerprint()
+    assert recorded is not None and recorded.values["llm.provider_routing.order"] == [
+        "deepinfra/bf16"
+    ]
 
 
 async def test_a_citing_baseline_refuses_a_runner_output_by_its_digest(tmp_path: Path) -> None:
@@ -347,4 +380,6 @@ async def test_a_citing_baseline_refuses_a_runner_output_by_its_digest(tmp_path:
     )
 
     with pytest.raises(MeasurementPlanError, match=r"settings_digest: recorded"):
-        reusable_baseline(tmp_path / "arm", citing, task_ids=())
+        reusable_baseline(
+            tmp_path / "arm", citing, task_ids=(), serving=_plan_serving_fingerprint()
+        )

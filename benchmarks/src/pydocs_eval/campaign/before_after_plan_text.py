@@ -62,9 +62,14 @@ def _plan_scope_lines(plan: MeasurementPlan) -> list[str]:
 
 
 def _reused_baseline_lines(plan: MeasurementPlan) -> list[str]:
+    """The reused arm and how its serving compared; nothing for a plan that reuses none."""
     if plan.reused_baseline is None:
         return []
-    return [f"            reused from {plan.reused_baseline} (no baseline rollout)"]
+    reuse = None if plan.serving is None else plan.serving.reuse
+    return [
+        f"            reused from {plan.reused_baseline} (no baseline rollout)",
+        *([] if reuse is None else reuse.plan_lines()),
+    ]
 
 
 def _overlaid(plan: MeasurementPlan) -> bool:

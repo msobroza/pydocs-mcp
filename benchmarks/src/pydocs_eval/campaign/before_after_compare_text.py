@@ -88,6 +88,17 @@ def _provenance_lines(comparison: Comparison, split: str) -> list[str]:
         f"- rule: {rule}",
         "- p: one-sided Wilcoxon signed-rank (turns, calls), McNemar exact two-sided "
         f"(needle reached, needle cited), Holm-adjusted across {variant_count} variant(s)",
+        *_forced_reuse_lines(comparison),
+    ]
+
+
+def _forced_reuse_lines(comparison: Comparison) -> list[str]:
+    """Any arm compared against a baseline reuse forced past a serving mismatch."""
+    arms = (comparison.baseline, comparison.replicate, *(v.arm for v in comparison.variants))
+    return [
+        f"- serving, `{arm.label}`: {override.provenance_text()}"
+        for arm in arms
+        if (override := arm.metrics.variant.serving_override) is not None
     ]
 
 

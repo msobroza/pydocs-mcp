@@ -1,0 +1,44 @@
+{
+  "architecture": "text_react",
+  "base_url": null,
+  "bundle_sources": {},
+  "commit": "<sha>",
+  "cost_ceiling_usd": 1.0,
+  "estimated_usd_per_rollout": 0.0,
+  "guidance_sections": {},
+  "guidance_sections_path": null,
+  "harness_block": {},
+  "llm_block": {
+    "auth": {
+      "api_key_env": "OPENROUTER_API_KEY"
+    },
+    "base_url": "https://openrouter.ai/api/v1",
+    "max_retries": 2,
+    "params": {
+      "max_tokens": 16384,
+      "temperature": 1.0,
+      "thinking": "auto",
+      "top_p": 0.95
+    },
+    "provider": "openrouter",
+    "provider_routing": {
+      "allow_fallbacks": false,
+      "order": [
+        "deepinfra/bf16"
+      ]
+    },
+    "timeout_seconds": 300
+  },
+  "max_agent_turns": 12,
+  "model": "qwen/qwen3.8-27b",
+  "out_dir": "<tmp>/out/candidate",
+  "pydocs_config": "<repo>/benchmarks/configs/ask_openrouter_qwen3_4b.yaml",
+  "role": "candidate",
+  "settings_digest": "f320c3b7c1df918c88449615e90cb1bc09282729bf4321be4675a42845d68c3a",
+  "task_draw": null,
+  "task_scaffold": "citing",
+  "task_timeout_seconds": 900.0,
+  "task_workspaces": {},
+  "trace_root": "<tmp>/out/candidate/traces",
+  "workspace": "<tmp>/ws"
+}

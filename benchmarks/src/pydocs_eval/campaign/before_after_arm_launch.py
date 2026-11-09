@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from pydocs_eval.campaign.before_after import (
@@ -22,14 +23,23 @@ from pydocs_eval.campaign.before_after import (
 )
 from pydocs_eval.campaign.before_after_arm import (
     ARM_SETTINGS_FILENAME,
+    ARM_SUMMARY_FILENAME,
     ArmSettings,
     ArmSummary,
     read_arm_summary,
     write_arm_settings,
+    write_arm_summary,
 )
+from pydocs_eval.campaign.before_after_arm_records import ALLOW_SERVING_MISMATCH_FLAG
 from pydocs_eval.campaign.before_after_arm_settings import ARM_OVERLAY_SHAPE, load_arm_overlay
 from pydocs_eval.campaign.before_after_arm_variant import ArmVariants, arm_variants
 from pydocs_eval.campaign.before_after_product import arm_environment, product_worktree
+from pydocs_eval.campaign.before_after_serving import (
+    SERVING_FINGERPRINT_FILENAME,
+    ServingFingerprint,
+    read_serving_fingerprint,
+    write_serving_fingerprint,
+)
 
 _BASELINE_SETTINGS_FLAG = "--baseline-settings"
 _CANDIDATE_SETTINGS_FLAG = "--candidate-settings"
@@ -57,7 +67,14 @@ def add_variant_arm_arguments(parser: argparse.ArgumentParser) -> None:
         type=Path,
         default=None,
         help="a finished baseline arm directory to compare against instead of running "
-        "one; refused unless its commit, model, turn cap and settings digest match",
+        "one; refused unless its commit, model, turn cap, settings digest and serving "
+        "fingerprint match",
+    )
+    parser.add_argument(
+        ALLOW_SERVING_MISMATCH_FLAG,
+        action="store_true",
+        help="force a --reuse-baseline whose serving fingerprint differs or was never "
+        "recorded; logged, and named in the plan, the candidate's arm.json and the report",
     )
 
 
@@ -91,9 +108,84 @@ def run_one_arm(args: argparse.Namespace, plan: MeasurementPlan, role: ArmRole) 
     arm_dir.mkdir(parents=True, exist_ok=True)
     settings = arm_settings_for(args, plan, role=role, arm_dir=arm_dir)
     write_arm_settings(arm_dir, settings)
+    _record_serving_fingerprint(plan, role, arm_dir)
     with product_worktree(args.repo, settings.commit, Path(args.out) / "worktrees") as worktree:
         _spawn_arm(worktree, arm_dir=arm_dir, split=args.split, limit=args.limit)
-    return read_arm_summary(arm_dir)
+    return _stamped_with_forced_reuse(plan, role, arm_dir)
+
+
+def _record_serving_fingerprint(plan: MeasurementPlan, role: ArmRole, arm_dir: Path) -> None:
+    """``serving.json`` beside the arm: what a later ``--reuse-baseline`` matches it by.
+
+    Not written over an arm that already holds rows but no fingerprint (one
+    started before fingerprints existed): its earlier rows were served under a
+    setup nobody recorded, and claiming this one for them would let it qualify.
+    """
+    fingerprint = _arm_fingerprint(plan, role)
+    if fingerprint is None:
+        return
+    unrecorded_rows = (arm_dir / ARM_SUMMARY_FILENAME).exists() and (
+        read_serving_fingerprint(arm_dir) is None
+    )
+    if not unrecorded_rows:
+        write_serving_fingerprint(arm_dir, fingerprint)
+
+
+def _arm_fingerprint(plan: MeasurementPlan, role: ArmRole) -> ServingFingerprint | None:
+    if plan.serving is None:
+        return None
+    return plan.serving.basis.fingerprint(plan.arm_variants.for_role(role).llm_block)
+
+
+def refuse_a_serving_change_on_resume(args: argparse.Namespace, plan: MeasurementPlan) -> None:
+    """Before ANY arm runs: an arm dir served under another fingerprint is not resumed.
+
+    A resumed arm keeps the rows it already answered (``rows_to_resume``), whose
+    identity has no serving part — so resuming under another serving YAML,
+    endpoint or index would mix two setups under one ``serving.json``.
+
+    Raises:
+        MeasurementPlanError: naming each arm and key that differs.
+    """
+    roles = (ArmRole.CANDIDATE,) if plan.reused_baseline else tuple(ArmRole)
+    changes = [line for role in roles for line in _serving_changes(args, plan, role)]
+    if changes:
+        raise MeasurementPlanError(
+            f"{args.out} already holds arms served differently ({'; '.join(changes)}); "
+            "resuming would keep their answered rows under this serving setup — "
+            "choose a fresh --out, or restore the setup they ran under"
+        )
+
+
+def _serving_changes(args: argparse.Namespace, plan: MeasurementPlan, role: ArmRole) -> list[str]:
+    arm_dir, fingerprint = Path(args.out) / role, _arm_fingerprint(plan, role)
+    try:
+        recorded = None if fingerprint is None else read_serving_fingerprint(arm_dir)
+    except (OSError, ValueError) as exc:
+        return [f"{role}: unreadable {SERVING_FINGERPRINT_FILENAME} ({exc})"]
+    if recorded is None or fingerprint is None:
+        return []
+    label = f"this plan's {role}"
+    return [
+        f"{role} {line}" for line in recorded.difference_lines(fingerprint, expected_label=label)
+    ]
+
+
+def _stamped_with_forced_reuse(plan: MeasurementPlan, role: ArmRole, arm_dir: Path) -> ArmSummary:
+    """The arm's summary; a candidate compared against a forced reuse records that it was.
+
+    Stamped here by the parent, not by the child: the forced reuse is a fact
+    about the COMPARISON, not about how the candidate ran — its settings, and so
+    its run identity and resume, are the same either way.
+    """
+    summary = read_arm_summary(arm_dir)
+    reuse = None if plan.serving is None else plan.serving.reuse
+    override = None if reuse is None else reuse.override_record()
+    if role != ArmRole.CANDIDATE or override is None:
+        return summary
+    stamped = replace(summary, serving_override=override)
+    write_arm_summary(arm_dir, stamped)
+    return stamped
 
 
 def arm_settings_for(
@@ -169,6 +261,7 @@ def _spawn_arm(worktree: Path, *, arm_dir: Path, split: str, limit: int | None) 
 __all__ = (
     "add_variant_arm_arguments",
     "arm_settings_for",
+    "refuse_a_serving_change_on_resume",
     "run_one_arm",
     "variants_from_args",
 )

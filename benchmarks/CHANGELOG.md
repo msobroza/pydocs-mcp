@@ -59,7 +59,14 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     vendored chat runner's output now records its own variant, digest
     included: the served architecture and the bare question the chat page
     sends. A plan whose baseline runs the same settings can therefore reuse it,
-    and a citing-scaffold plan refuses it by its digest.
+    and a citing-scaffold plan refuses it by its digest. Every arm, the chat
+    runner's included, also writes a `serving.json` fingerprint (the serving
+    YAML's content, the endpoint, the served index's embedder and scope, and
+    the llm block key by key), and the reuse is refused naming each key that
+    differs, or as "not recorded" for an arm without one, unless
+    `--allow-serving-mismatch` forces it (a forced reuse is logged as one JSON
+    line and named in the plan, the candidate's `arm.json` and every report),
+    and an `--out` whose arms were served differently is not resumed.
   - **A resumed arm keeps its finished tasks.** The arm rewrites `arm.json`
     atomically after every answered task, before the ledger marks the task DONE.
     The checkpoint's halt reason is `in_progress`. A restart seeds its rows
