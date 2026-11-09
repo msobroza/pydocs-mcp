@@ -29,6 +29,9 @@ of the kind-aware retry):
 | F   | T   | no                        | yes                 | kind-aware retry string |
 | F   | F   | no                        | no                  | None (absent)           |
 
+Since ADR 0027 the table holds with ``api_zero_hit_fallback_any`` OFF (set
+explicitly); the twin at the end pins the same four combinations with it ON.
+
 No new product code. The test invokes the shipped empty-search router from
 ``test_error_empty_contract.py`` so wiring stays identical to the other
 zero-hit tests; `(False, True)` is the only new boundary assertion, and
@@ -81,7 +84,9 @@ class _EmptyApi:
         return ModuleMemberList(items=())
 
 
-def _router(gen: bool, api: bool) -> ToolRouter:
+def _router(gen: bool, api: bool, *, fallback: bool = False) -> ToolRouter:
+    """``fallback`` is the ADR 0027 zero-hit fallback flag: OFF for the #438
+    table below (its flag-off proof), ON only in the twin at the end."""
     base = make_services()[0]
     services = (
         ProjectServices(
@@ -102,6 +107,7 @@ def _router(gen: bool, api: bool) -> ToolRouter:
         suggestions=SuggestionsConfig(
             search_zero_hit=gen,
             api_zero_hit_retry_any=api,
+            api_zero_hit_fallback_any=fallback,
         ),
     )
 
@@ -160,3 +166,31 @@ def test_api_zero_hit_flag_independence_covers_four_combinations(
     else:  # absent
         # ADR 0007: every flag off ⇒ meta carries no suggestion key (not even null).
         assert "suggestion" not in response.meta
+
+
+_BOTH_EMPTY = (
+    '[suggestion: kind="api" matched nothing, and kind="any" found nothing '
+    "for the same query and filters either]"
+)
+
+
+@pytest.mark.parametrize(
+    ("gen", "api"), [(True, True), (True, False), (False, True), (False, False)]
+)
+def test_api_zero_hit_with_fallback_on_is_independent_of_the_retry_flag(
+    gen: bool, api: bool
+) -> None:
+    """ADR 0027 twin: the fallback ran (both passes empty here), so the retry
+    hint never renders and ``api_zero_hit_retry_any`` changes nothing; the
+    overview pointer still follows its own flag."""
+    response = asyncio.run(
+        _router(gen, api, fallback=True).search_codebase(
+            SearchInput(query=_WITNESS_QUERY, kind="api")
+        )
+    )
+    assert "No symbols found." in response.text
+    assert len(response.items) == 0
+    assert ("→ get_overview()" in response.text) is gen
+    assert "retry with" not in response.text
+    assert response.text.splitlines()[-1] == _BOTH_EMPTY
+    assert response.meta["suggestion"] == _BOTH_EMPTY

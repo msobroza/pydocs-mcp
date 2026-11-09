@@ -138,6 +138,13 @@ def _empty_search_router(suggestions: SuggestionsConfig | None = None) -> ToolRo
     )
 
 
+def _empty_search_router_fallback_off(**flags: bool) -> ToolRouter:
+    """:func:`_empty_search_router` with the ADR 0027 zero-hit fallback OFF —
+    the #438 ``kind="api"`` zero-hit pins below are the flag-off proof (every
+    response byte-identical to 9b9de5a3), so they name the flag explicitly."""
+    return _empty_search_router(SuggestionsConfig(api_zero_hit_fallback_any=False, **flags))
+
+
 def _missing_target_router(envelope: ResponseEnvelope) -> ToolRouter:
     """A router over projects that all miss every target, on ``envelope``."""
     services = _raising_services()
@@ -264,7 +271,9 @@ def test_api_zero_hit_offers_retry_kind_any() -> None:
     # router carries the existing overview pointer line AND the new retry
     # line at kind="any" with the preserved query VALUE (AC-2).
     resp = asyncio.run(
-        _empty_search_router().search_codebase(SearchInput(query=_WITNESS_QUERY, kind="api"))
+        _empty_search_router_fallback_off().search_codebase(
+            SearchInput(query=_WITNESS_QUERY, kind="api")
+        )
     )
     assert "No symbols found." in resp.text
     assert "→ get_overview()" in resp.text
@@ -283,7 +292,9 @@ def test_api_zero_hit_meta_carries_api_retry_suggestion() -> None:
     # string precedence: the new rule replaces the generic search_zero_hit
     # string in meta.suggestion, while the overview pointer line in text stays).
     resp = asyncio.run(
-        _empty_search_router().search_codebase(SearchInput(query=_WITNESS_QUERY, kind="api"))
+        _empty_search_router_fallback_off().search_codebase(
+            SearchInput(query=_WITNESS_QUERY, kind="api")
+        )
     )
     suggestion = resp.meta["suggestion"]
     assert suggestion.startswith("[suggestion:")
@@ -299,10 +310,12 @@ def test_api_zero_hit_flag_off_strips_retry_hint() -> None:
     # suggestion text (behaviour-preserving by construction, ADR 0007). OFF
     # carries the legacy response bytes; ON = OFF + "\n" + retry_line + "\n".
     on = asyncio.run(
-        _empty_search_router().search_codebase(SearchInput(query=_WITNESS_QUERY, kind="api"))
+        _empty_search_router_fallback_off().search_codebase(
+            SearchInput(query=_WITNESS_QUERY, kind="api")
+        )
     )
     off = asyncio.run(
-        _empty_search_router(SuggestionsConfig(api_zero_hit_retry_any=False)).search_codebase(
+        _empty_search_router_fallback_off(api_zero_hit_retry_any=False).search_codebase(
             SearchInput(query=_WITNESS_QUERY, kind="api")
         )
     )
@@ -320,8 +333,8 @@ def test_api_zero_hit_both_flags_off_bare_body() -> None:
     # AC-4: both flags off ⇒ bare empty-result body + no suggestion key
     # (byte-identical to today's double-off zero-hit).
     resp = asyncio.run(
-        _empty_search_router(
-            SuggestionsConfig(search_zero_hit=False, api_zero_hit_retry_any=False)
+        _empty_search_router_fallback_off(
+            search_zero_hit=False, api_zero_hit_retry_any=False
         ).search_codebase(SearchInput(query=_WITNESS_QUERY, kind="api"))
     )
     assert "get_overview" not in resp.text
@@ -337,7 +350,9 @@ def test_api_zero_hit_fired_rule_emits_structured_log(
     # text — AC-2 above pins the precedence). No raw query reaches the event.
     with caplog.at_level("INFO", logger="pydocs_mcp.application.suggestions"):
         asyncio.run(
-            _empty_search_router().search_codebase(SearchInput(query=_WITNESS_QUERY, kind="api"))
+            _empty_search_router_fallback_off().search_codebase(
+                SearchInput(query=_WITNESS_QUERY, kind="api")
+            )
         )
     events = [json.loads(r.message) for r in caplog.records]
     assert {
@@ -379,7 +394,7 @@ def test_api_zero_hit_preserves_non_default_selectors(
     overrides: dict[str, str], expected: str
 ) -> None:
     payload = SearchInput(query=_WITNESS_QUERY, kind="api", **overrides)
-    resp = asyncio.run(_empty_search_router().search_codebase(payload))
+    resp = asyncio.run(_empty_search_router_fallback_off().search_codebase(payload))
     assert expected in resp.meta["suggestion"]
     # And the body carries the same selector in the rendered retry line.
     retry_line = next(line for line in resp.text.splitlines() if line.startswith("[suggestion:"))
@@ -391,7 +406,9 @@ def test_api_zero_hit_omits_default_selectors() -> None:
     # the retry rendering stays concise (spec §"Safe rendering"): omitting a
     # NON-default would silently widen, but omitting defaults never widens.
     resp = asyncio.run(
-        _empty_search_router().search_codebase(SearchInput(query=_WITNESS_QUERY, kind="api"))
+        _empty_search_router_fallback_off().search_codebase(
+            SearchInput(query=_WITNESS_QUERY, kind="api")
+        )
     )
     suggestion = resp.meta["suggestion"]
     assert "scope=" not in suggestion
@@ -465,7 +482,9 @@ def _parse_rendered_query(suggestion: str) -> str:
     ],
 )
 def test_api_zero_hit_query_value_round_trips(query: str) -> None:
-    resp = asyncio.run(_empty_search_router().search_codebase(SearchInput(query=query, kind="api")))
+    resp = asyncio.run(
+        _empty_search_router_fallback_off().search_codebase(SearchInput(query=query, kind="api"))
+    )
     # The embedded call parses back to the same query string VALUE. Any
     # substitution / escape convention is allowed (spec); the pin is the
     # round-trip.
@@ -552,3 +571,47 @@ def test_api_zero_hit_renderer_scope_default_is_search_input_default() -> None:
     # Renderer emits scope when it does not.
     emitted = api_zero_hit_retry_any_suggestion("q", scope="deps")
     assert 'scope="deps"' in emitted
+
+
+# ── ADR 0027 twins: the same kind="api" zero hits with the fallback ON ─────
+# The router above serves no row on either kind, so every twin is outcome E:
+# today's zero-hit body with the retry line's text replaced by the fixed
+# "both empty" label — byte-constant, so no query or selector reaches it.
+_BOTH_EMPTY = (
+    '[suggestion: kind="api" matched nothing, and kind="any" found nothing '
+    "for the same query and filters either]"
+)
+
+
+@pytest.mark.parametrize(
+    ("generic", "retry"), [(True, True), (True, False), (False, True), (False, False)]
+)
+def test_api_zero_hit_with_fallback_on_ends_with_the_both_empty_label(
+    caplog: pytest.LogCaptureFixture, generic: bool, retry: bool
+) -> None:
+    flags = SuggestionsConfig(search_zero_hit=generic, api_zero_hit_retry_any=retry)
+    with caplog.at_level("INFO", logger="pydocs_mcp.application.suggestions"):
+        resp = asyncio.run(
+            _empty_search_router(flags).search_codebase(
+                SearchInput(query=_WITNESS_QUERY, kind="api")
+            )
+        )
+    pointer = "Together: → get_overview()\n\n" if generic else ""
+    assert resp.text == f"No symbols found.\n{pointer}{_BOTH_EMPTY}\n"
+    assert resp.meta["suggestion"] == _BOTH_EMPTY and len(resp.items) == 0
+    rules = [json.loads(r.message)["rule"] for r in caplog.records]
+    assert rules == ["search_zero_hit", "api_zero_hit_fallback_any"][(0 if generic else 1) :]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"scope": "deps"}, {"package": "fastapi"}, {"project": "solo"}, {"query": 'q " \\ \n ]'}],
+)
+def test_api_zero_hit_with_fallback_on_label_never_carries_request_text(
+    overrides: dict[str, str],
+) -> None:
+    payload = SearchInput(**{"query": _WITNESS_QUERY, "kind": "api", **overrides})
+    resp = asyncio.run(_empty_search_router().search_codebase(payload))
+    assert resp.meta["suggestion"] == _BOTH_EMPTY
+    assert resp.text.splitlines()[-1] == _BOTH_EMPTY
+    assert "retry with" not in resp.text

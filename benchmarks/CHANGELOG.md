@@ -702,6 +702,12 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Changed
 
+- **The `suggestions_off` campaign overlay also turns off the product's
+  `kind="api"` zero-hit fallback** (`output.suggestions.api_zero_hit_fallback_any:
+  false`), so its arm stays "every deterministic suggestion rule off". The
+  overlay's parity test requires every flag the product's suggestions config
+  declares. A build from before that flag existed rejects the key, so this
+  overlay needs a product that has the flag.
 - **`ci_compare` reads a resumed run file** (#420). The last `<metric>_mean` in the
   file still wins, and in a file written with `--run-id` it is the full-leg aggregate.
   A corrupt line before the file's last `run_resume` (the cut tail of an invocation

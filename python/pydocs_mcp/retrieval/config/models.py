@@ -529,9 +529,12 @@ class SuggestionsConfig(BaseModel):
 
     Each rule appends a fixed ``[suggestion: …]`` hint (grep rules) or gates
     the zero-hit overview pointer (search/why rule) and mirrors the fired text
-    as ``meta.suggestion``. Per-rule flags exist so the ablation phase can
-    measure each hint's contribution independently; fired rules log one
-    structured line each for machinery-vs-model attribution (R7).
+    as ``meta.suggestion``. ``api_zero_hit_fallback_any`` (ADR 0027) is the one
+    rule that answers instead of hinting: a ``kind="api"`` zero hit serves the
+    same request's ``kind="any"`` results under a fixed label. Per-rule flags
+    exist so the ablation phase can measure each rule's contribution
+    independently; fired rules log one structured line each for
+    machinery-vs-model attribution (R7).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -543,8 +546,15 @@ class SuggestionsConfig(BaseModel):
     # ``search_codebase(kind="any", ...)`` retry hint alongside the generic
     # overview pointer. Independently flaggable so the new rule's contribution
     # is measurable without touching ``search_zero_hit`` (ADR 0007). False ⇒
-    # byte-identical to the pre-change zero-hit body.
+    # byte-identical to the pre-change zero-hit body. Superseded while
+    # ``api_zero_hit_fallback_any`` is on: the zero hits that rule answers have
+    # already run the retry this hint would name.
     api_zero_hit_retry_any: bool = True
+    # ADR 0027: a ``kind="api"`` request whose member lookup returned no row
+    # is answered, in the same response, by the same request at ``kind="any"``
+    # under a fixed label (or a fixed "both empty" line). False ⇒ every
+    # response byte-identical to the pre-change behaviour.
+    api_zero_hit_fallback_any: bool = True
     # #311 (spec §6.11): the default selector answered from the default branch
     # because the checked-out one has no index yet — meta only, never text.
     checkout_not_indexed: bool = True

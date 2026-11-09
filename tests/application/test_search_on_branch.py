@@ -30,6 +30,7 @@ from pydocs_mcp.models import (
     SearchQuery,
     SearchResponse,
 )
+from pydocs_mcp.retrieval.config import SuggestionsConfig
 from pydocs_mcp.storage.branch_records import BranchRecord
 
 from ._router_fakes import FakeBranchDirectory, make_envelope, make_service
@@ -82,12 +83,13 @@ def _service(name: str, directory: FakeBranchDirectory) -> ProjectServices:
     )
 
 
-def _router(*services: ProjectServices) -> ToolRouter:
+def _router(*services: ProjectServices, suggestions: SuggestionsConfig | None = None) -> ToolRouter:
     return ToolRouter(
         services=services,
         envelope=make_envelope(),
         search_router=MultiProjectSearch(services=services),
         lookup_router=MultiProjectLookup(services=services),
+        suggestions=suggestions or SuggestionsConfig(),
     )
 
 
@@ -113,9 +115,25 @@ async def test_a_named_branch_is_searched_through_the_same_resolver() -> None:
 
 
 async def test_a_one_branch_bundle_searches_exactly_as_before() -> None:
+    # The kind="api" zero hit here is pinned with the ADR 0027 fallback OFF
+    # (its single member query); the twin below runs it ON.
     svc = _service("solo", _directory(MAIN))
-    response = await _router(svc).search_codebase(SearchInput(query="q", kind="api"))
+    fallback_off = SuggestionsConfig(api_zero_hit_fallback_any=False)
+    response = await _router(svc, suggestions=fallback_off).search_codebase(
+        SearchInput(query="q", kind="api")
+    )
     assert _branches_searched(svc) == [""] and response.meta["branch"] == MAIN
+
+
+async def test_a_one_branch_bundle_fallback_pins_nothing_either() -> None:
+    """ADR 0027: the zero hit's kind="any" fallback adds its chunk and member
+    queries, and every one of the three stays unpinned on a one-branch bundle."""
+    svc = _service("solo", _directory(MAIN))
+    fallback_on = SuggestionsConfig(api_zero_hit_fallback_any=True)
+    response = await _router(svc, suggestions=fallback_on).search_codebase(
+        SearchInput(query="q", kind="api")
+    )
+    assert _branches_searched(svc) == ["", "", ""] and response.meta["branch"] == MAIN
 
 
 async def test_a_project_outside_git_pins_nothing() -> None:

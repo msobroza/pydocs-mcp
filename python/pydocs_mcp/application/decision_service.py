@@ -46,6 +46,7 @@ from pydocs_mcp.application.formatting import (
 )
 from pydocs_mcp.application.pointer_bundles import render_pointer_bundle
 from pydocs_mcp.application.suggestions import (
+    SEARCH_ZERO_HIT_RULE,
     SEARCH_ZERO_HIT_SUGGESTION,
     log_suggestion_fired,
 )
@@ -236,7 +237,7 @@ class DecisionService:
         """
         if hydrated or not self.suggestions.search_zero_hit:
             return {}
-        log_suggestion_fired(tool, "search_zero_hit")
+        log_suggestion_fired(tool, SEARCH_ZERO_HIT_RULE)
         return {"suggestion": SEARCH_ZERO_HIT_SUGGESTION}
 
     async def _search_hydrated(

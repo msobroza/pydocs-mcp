@@ -29,6 +29,7 @@ from pydocs_mcp.db import open_index_database
 from pydocs_mcp.models import MemberKind, ModuleMember, ModuleMemberFilterField
 from pydocs_mcp.retrieval.config import (
     AppConfig,
+    SuggestionsConfig,
     build_member_pipeline_from_config,
 )
 from pydocs_mcp.retrieval.factories import build_retrieval_context
@@ -105,14 +106,19 @@ def _live_services(db: Path) -> tuple[ProjectServices, ...]:
     return services
 
 
-def _live_router(db: Path) -> ToolRouter:
+def _live_router(db: Path, suggestions: SuggestionsConfig | None = None) -> ToolRouter:
     services = _live_services(db)
     return ToolRouter(
         services=services,
         envelope=make_envelope(),
         search_router=MultiProjectSearch(services=services),
         lookup_router=MultiProjectLookup(services=services),
+        suggestions=suggestions or SuggestionsConfig(),
     )
+
+
+# ADR 0027: the #438 witness below is the flag-off proof — fallback OFF, named.
+_FALLBACK_OFF = SuggestionsConfig(api_zero_hit_fallback_any=False)
 
 
 @pytest.mark.asyncio
@@ -128,7 +134,7 @@ async def test_two_word_witness_returns_zero_rows_and_fires_retry_hint(
       (unchanged) + one new [suggestion: line carrying the retry at
       kind="any" with the two-word query verbatim (AC-2).
     """
-    router = _live_router(witness_db)
+    router = _live_router(witness_db, _FALLBACK_OFF)
     with caplog.at_level("INFO", logger="pydocs_mcp.application.suggestions"):
         resp = await router.search_codebase(SearchInput(query=_WITNESS_QUERY, kind="api"))
     # LIKE semantics unchanged — zero rows, "No symbols found." body literal.
@@ -172,3 +178,31 @@ async def test_two_word_witness_individual_words_match(witness_db: Path) -> None
     # Positive-control: at least one member row carries the single word, so
     # the LIKE engine is functioning — the two-word zero on the witness is a
     # phrase-boundary trap, not a dead engine.
+
+
+_BOTH_EMPTY = (
+    '[suggestion: kind="api" matched nothing, and kind="any" found nothing '
+    "for the same query and filters either]"
+)
+
+
+@pytest.mark.asyncio
+async def test_two_word_witness_with_fallback_on_reports_both_kinds_empty(
+    witness_db: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """ADR 0027 twin, on the shipped config (fallback ON). The fixture holds
+    member rows only — no chunk — so the live ``kind="any"`` fallback finds
+    nothing either (outcome E, observed by running it): the zero-hit body
+    keeps its literal and overview pointer and ends with the fixed
+    both-empty label instead of the retry line."""
+    import json as _json
+
+    with caplog.at_level("INFO", logger="pydocs_mcp.application.suggestions"):
+        resp = await _live_router(witness_db).search_codebase(
+            SearchInput(query=_WITNESS_QUERY, kind="api")
+        )
+    assert len(resp.items) == 0
+    assert resp.text == f"No symbols found.\nTogether: → get_overview()\n\n{_BOTH_EMPTY}\n"
+    assert resp.meta["suggestion"] == _BOTH_EMPTY
+    rules = [_json.loads(r.message)["rule"] for r in caplog.records]
+    assert rules == ["search_zero_hit", "api_zero_hit_fallback_any"]
