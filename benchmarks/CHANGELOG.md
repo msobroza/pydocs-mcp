@@ -74,8 +74,9 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     from that file and drops any row whose trace directory no longer holds
     `server_events.jsonl`, logging each drop as a
     `before_after_resume_dropped_untraced_rows` event. Rows answered under
-    another role, commit, model or settings digest are refused by name, never
-    restamped. `--report-only` and `before-after-compare` refuse an arm that still reads `in_progress`
+    another role, commit, model or settings digest, or for tasks outside the
+    plan's (another `--split`, a shorter `--limit`, another draw), are refused
+    by name before the parent writes into the arm dir, never restamped. `--report-only` and `before-after-compare` refuse an arm that still reads `in_progress`
     (`HaltReason.IN_PROGRESS`). Before this, a restart wrote an `arm.json`
     holding only its own process's tasks.
   - **`TaskScaffold`** (`task_rendering.py`) names `citing` and `bare` and

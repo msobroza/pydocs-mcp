@@ -268,14 +268,6 @@ def test_the_gate_records_no_override_for_a_match(tmp_path: Path) -> None:
 # --- what the run writes: each arm's fingerprint, the candidate's override ----
 
 
-@pytest.fixture
-def real_launch(stub_command: FakeArmRun, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The real ``run_one_arm`` (settings, fingerprint, stamp) over a fake child."""
-    monkeypatch.setattr(before_after_command, "run_one_arm", before_after_arm_launch.run_one_arm)
-    monkeypatch.setattr(before_after_arm_launch, "product_worktree", no_worktree)
-    monkeypatch.setattr(before_after_arm_launch, "_spawn_arm", write_finished_summary_from_settings)
-
-
 def test_every_arm_records_its_serving_fingerprint(tmp_path: Path, real_launch: None) -> None:
     repo = git_repo_with_two_descriptions(tmp_path)
 

@@ -31,6 +31,7 @@ from pydocs_eval.campaign.before_after_arm import (
     write_arm_summary,
 )
 from pydocs_eval.campaign.before_after_arm_records import ALLOW_SERVING_MISMATCH_FLAG
+from pydocs_eval.campaign.before_after_arm_resume import refuse_rows_of_another_run
 from pydocs_eval.campaign.before_after_arm_settings import ARM_OVERLAY_SHAPE, load_arm_overlay
 from pydocs_eval.campaign.before_after_arm_variant import ArmVariants, arm_variants
 from pydocs_eval.campaign.before_after_product import arm_environment, product_worktree
@@ -147,14 +148,52 @@ def refuse_a_serving_change_on_resume(args: argparse.Namespace, plan: Measuremen
     Raises:
         MeasurementPlanError: naming each arm and key that differs.
     """
-    roles = (ArmRole.CANDIDATE,) if plan.reused_baseline else tuple(ArmRole)
-    changes = [line for role in roles for line in _serving_changes(args, plan, role)]
+    changes = [line for role in _roles_run(plan) for line in _serving_changes(args, plan, role)]
     if changes:
         raise MeasurementPlanError(
             f"{args.out} already holds arms served differently ({'; '.join(changes)}); "
             "resuming would keep their answered rows under this serving setup — "
             "choose a fresh --out, or restore the setup they ran under"
         )
+
+
+def refuse_a_foreign_resume(args: argparse.Namespace, plan: MeasurementPlan) -> None:
+    """Before ANY write to an arm dir: rows another run answered are not resumed.
+
+    The child refuses them too (``rows_to_resume``), but only after this parent
+    has written the new run's ``arm_settings.json`` and ``serving.json`` beside
+    them — and the compare verb and ``--report-only`` then score the old answers
+    under the new settings' cap, gold and workspace.
+
+    Raises:
+        MeasurementPlanError: an arm dir holds rows of another role, commit,
+            model or settings digest, or of tasks outside the plan's.
+    """
+    for role in _roles_run(plan):
+        arm_dir = Path(args.out) / role
+        recorded = _recorded_summary(arm_dir)
+        if recorded is None:
+            continue
+        expected = arm_settings_for(args, plan, role=role, arm_dir=arm_dir).run_identity()
+        refuse_rows_of_another_run(recorded, expected, plan.task_ids, arm_dir)
+
+
+def _recorded_summary(arm_dir: Path) -> ArmSummary | None:
+    """The ``arm.json`` an earlier run left in ``arm_dir``; None for a fresh arm."""
+    if not (arm_dir / ARM_SUMMARY_FILENAME).is_file():
+        return None
+    try:
+        return read_arm_summary(arm_dir)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise MeasurementPlanError(
+            f"{arm_dir / ARM_SUMMARY_FILENAME} is unreadable ({exc}); expected the arm.json "
+            "an earlier run of this arm wrote, or none: give this run a fresh --out"
+        ) from exc
+
+
+def _roles_run(plan: MeasurementPlan) -> tuple[ArmRole, ...]:
+    """The arms this run spawns: the candidate alone over a reused baseline."""
+    return (ArmRole.CANDIDATE,) if plan.reused_baseline else tuple(ArmRole)
 
 
 def _serving_changes(args: argparse.Namespace, plan: MeasurementPlan, role: ArmRole) -> list[str]:
@@ -261,6 +300,7 @@ def _spawn_arm(worktree: Path, *, arm_dir: Path, split: str, limit: int | None) 
 __all__ = (
     "add_variant_arm_arguments",
     "arm_settings_for",
+    "refuse_a_foreign_resume",
     "refuse_a_serving_change_on_resume",
     "run_one_arm",
     "variants_from_args",

@@ -261,7 +261,7 @@ async def run_arm(
         settings=settings,
         make_runner=make_runner,
         tasks=tasks,
-        answered=rows_to_resume(out_dir, settings.run_identity()),
+        answered=rows_to_resume(out_dir, settings.run_identity(), [t.task_id for t in tasks]),
         index_steps=index_steps,
     )
     result = await run_campaign(

@@ -55,6 +55,7 @@ from pydocs_eval.campaign.before_after_arm import (
 )
 from pydocs_eval.campaign.before_after_arm_launch import (
     add_variant_arm_arguments,
+    refuse_a_foreign_resume,
     refuse_a_serving_change_on_resume,
     run_one_arm,
     variants_from_args,
@@ -312,9 +313,12 @@ def _description_token_counter(model: str) -> TokenCounter:
 def _execute(args: argparse.Namespace, plan: MeasurementPlan, answer_key: AnswerKey) -> int:
     """Build any missing workspace, run the arms in child processes, write the report.
 
-    A reused baseline is linked first — before any workspace is built — so an
-    ``--out`` that already holds another baseline stops the run while it is free.
+    An arm dir holding another run's rows is refused before anything is
+    written into it. A reused baseline is linked next — before any workspace is
+    built — so an ``--out`` that already holds another baseline stops the run
+    while it is free.
     """
+    refuse_a_foreign_resume(args, plan)
     reused = _linked_reused_baseline(args)
     refuse_a_serving_change_on_resume(args, plan)
     _settle_task_workspaces(args, plan)
