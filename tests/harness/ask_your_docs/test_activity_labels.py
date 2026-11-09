@@ -37,6 +37,7 @@ from pydocs_mcp.harness.ask_your_docs.activity_outcomes import (
 )
 from pydocs_mcp.harness.ask_your_docs.prompts import BUDGET_MESSAGE
 from pydocs_mcp.harness.ask_your_docs.scope_pin import CODE_SCOPE_WORDS
+from pydocs_mcp.harness.ask_your_docs.serve_session import leaf_exception
 
 _T = "fastapi.routing.APIRouter"
 
@@ -383,6 +384,16 @@ def test_the_labelled_name_is_the_nearest_known_class_else_the_raised_one() -> N
     )
     unknown = _named("OpenAIConnectionError", openai.OpenAIError)
     assert labelled_failure_class_name(unknown) == "OpenAIConnectionError"
+
+
+def test_a_grouped_timeout_is_labelled_through_its_leaf() -> None:
+    """The page unwraps an anyio task group's error with ``leaf_exception`` before the
+    lookup: the group's own MRO knows no label, its leaf's does."""
+    grouped = ExceptionGroup(
+        "unhandled errors in a TaskGroup", [_named("StreamChunkTimeoutError", TimeoutError)]
+    )
+    assert failure_reason(labelled_failure_class_name(grouped)) == _GENERIC
+    assert failure_reason(labelled_failure_class_name(leaf_exception(grouped))) == _TIMED_OUT
 
 
 def test_meta_line_summarises_the_envelope_for_technical_details() -> None:
