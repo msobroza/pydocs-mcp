@@ -1,11 +1,14 @@
-"""The suite never sees the shell's ``OPENAI_ADMIN_KEY`` or ``OPENAI_CUSTOM_HEADERS``.
+"""The suite never sees the shell's ``OPENAI_ADMIN_KEY``, ``OPENAI_CUSTOM_HEADERS`` or
+``LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S``.
 
-openai 2 reads both in every client it builds: the admin key can become the
+openai 2 reads the first two in every client it builds: the admin key can become the
 bearer of a raw request whose own key is empty, and the custom headers are merged
 into every request after authentication — an ``Authorization:`` line there
-replaces the configured bearer. A developer whose shell exports either would see
-results nobody else can reproduce, so ``tests/conftest.py`` removes both from
-every test's environment without reading them. ``OPENAI_API_KEY`` is left alone:
+replaces the configured bearer. langchain-openai 1.2+ reads the third into every
+``ChatOpenAI``'s stream limit, and an invalid value logs a WARNING. A developer whose
+shell exports any of them would see results nobody else can reproduce, so
+``tests/conftest.py`` removes all three from every test's environment without reading
+them. ``OPENAI_API_KEY`` is left alone:
 tests set it themselves, and the opt-in live integration test skips without it.
 
 Membership checks only — no test here reads a value from the environment.
@@ -17,7 +20,11 @@ import os
 
 import pytest
 
-_SHELL_ONLY_OPENAI_VARIABLES = ("OPENAI_ADMIN_KEY", "OPENAI_CUSTOM_HEADERS")
+_SHELL_ONLY_OPENAI_VARIABLES = (
+    "OPENAI_ADMIN_KEY",
+    "OPENAI_CUSTOM_HEADERS",
+    "LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S",
+)
 
 
 @pytest.mark.parametrize("name", _SHELL_ONLY_OPENAI_VARIABLES)
