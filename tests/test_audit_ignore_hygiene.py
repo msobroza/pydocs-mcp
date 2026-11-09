@@ -1,9 +1,11 @@
-"""The three pip-audit sites keep one ignore set between them.
+"""The three pip-audit sites that may ignore advisories keep one ignore set between them.
 
 ci.yml's ``security`` job audits the lock, fresh-install.yml audits what an unlocked install
 resolves, and CLAUDE.md documents the gate command a local run reproduces CI with. An ignore
 dropped in one place and kept in another, or added without a WHY, used to rely on a reviewer
-remembering "drop them in both places together"; these tests make it a failing check.
+remembering "drop them in both places together"; these tests make it a failing check. (The
+bench VM eval-lock audit ignores nothing at all; benchmarks/tests/infra/
+test_bench_vm_check_workflow.py pins that.)
 
 The langchain-openai pair GHSA-r7w7-9xr2-qq2r / PYSEC-2026-76 (CVE-2026-41488) was ignored only
 because the core ``openai<2.0`` cap held langchain-openai below its fixed 1.1.14; the cap is
@@ -24,7 +26,12 @@ _CI_WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
 _FRESH_INSTALL_WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "fresh-install.yml"
 _CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
 _IGNORED_ID = re.compile(r"--ignore-vuln\s+([A-Z]+-[\w-]+)")
-_LANGCHAIN_OPENAI_PAIR = (r"GHSA-r7w7-9xr2-qq2r\b", r"PYSEC-2026-76\b")
+_SECURITY_JOB_HEADER = "\n  security:\n"
+# Matched as an ignore (a flag, or a ``WHY --ignore-vuln`` comment arguing for one), not as
+# any mention, so prose that records the fix stays allowed.
+_LANGCHAIN_OPENAI_PAIR_IGNORED = re.compile(
+    r"--ignore-vuln\s+(?:GHSA-r7w7-9xr2-qq2r|PYSEC-2026-76)(?![\w-])"
+)
 
 
 def _named_step_run(workflow: Path, job_name: str, step_name: str) -> str:
@@ -57,7 +64,11 @@ def _claude_md_gate_command() -> str:
 def _security_job_comments() -> str:
     """Every comment line of ci.yml's ``security`` job (where each ignore's WHY lives)."""
     text = _CI_WORKFLOW.read_text(encoding="utf-8")
-    job = text.split("\n  security:\n", 1)[1]
+    assert _SECURITY_JOB_HEADER in text, (
+        f"ci.yml layout drift: expected the job header {_SECURITY_JOB_HEADER!r} "
+        "(a 2-space-indented `security:` key on its own line)"
+    )
+    job = text.split(_SECURITY_JOB_HEADER, 1)[1]
     job = re.split(r"\n  [\w-]+:\n", job, maxsplit=1)[0]
     return "\n".join(line.strip() for line in job.splitlines() if line.strip().startswith("#"))
 
@@ -85,7 +96,12 @@ def test_fresh_install_ignores_nothing_the_security_job_does_not_justify() -> No
 def test_every_security_job_ignore_is_named_in_a_why_comment() -> None:
     comments = _security_job_comments()
 
-    unexplained = [vuln for vuln in _security_job_ignored_ids() if vuln not in comments]
+    unexplained = [
+        vuln
+        for vuln in _security_job_ignored_ids()
+        # Whole IDs only: PYSEC-2026-76 must not count as explained by PYSEC-2026-7601.
+        if not re.search(rf"{re.escape(vuln)}(?![\w-])", comments)
+    ]
     assert unexplained == [], f"--ignore-vuln without a WHY comment: {unexplained}"
 
 
@@ -93,9 +109,8 @@ def test_the_fixed_langchain_openai_advisory_is_ignored_nowhere() -> None:
     sites = (_CI_WORKFLOW, _FRESH_INSTALL_WORKFLOW, _CLAUDE_MD)
 
     found = [
-        f"{site.relative_to(_REPO_ROOT)}: {pattern}"
+        f"{site.relative_to(_REPO_ROOT)}: {match}"
         for site in sites
-        for pattern in _LANGCHAIN_OPENAI_PAIR
-        if re.search(pattern, site.read_text(encoding="utf-8"))
+        for match in _LANGCHAIN_OPENAI_PAIR_IGNORED.findall(site.read_text(encoding="utf-8"))
     ]
-    assert found == [], f"GHSA-r7w7-9xr2-qq2r / PYSEC-2026-76 still present: {found}"
+    assert found == [], f"GHSA-r7w7-9xr2-qq2r / PYSEC-2026-76 still ignored: {found}"
