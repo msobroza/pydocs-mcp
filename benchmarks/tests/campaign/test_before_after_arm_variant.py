@@ -221,3 +221,24 @@ def test_a_variant_round_trips_into_the_arm_settings_fields() -> None:
     assert fields["settings_digest"] == variant.digest
     assert fields["guidance_sections"] == {"BACKBONE": "x"}
     assert fields["task_scaffold"] is TaskScaffold.CITING
+
+
+def test_the_digest_validates_the_harness_keys_once_per_variant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plan reads each digest 6-8 times; each read used to re-validate the product config."""
+    from pydocs_eval.campaign import before_after_arm_variant
+
+    calls: list[object] = []
+    real = before_after_arm_variant.harness_keys_off_default
+
+    def counting(keys: object) -> dict[str, object]:
+        calls.append(keys)
+        return real(keys)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(before_after_arm_variant, "harness_keys_off_default", counting)
+    variant = variant_of(_overlay(seed_search_with_question=True), llm_block=None, serving_turns=4)
+
+    digests = {variant.digest for _ in range(3)}
+
+    assert len(digests) == 1 and len(calls) == 1

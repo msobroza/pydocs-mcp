@@ -32,7 +32,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -40,6 +40,13 @@ from typing import TYPE_CHECKING
 
 import yaml
 
+from pydocs_eval.campaign.before_after import flat_settings
+from pydocs_eval.campaign.before_after_arm_settings import (
+    ARCHITECTURE_KEY,
+    LLM_KEY,
+    MAX_AGENT_TURNS_KEY,
+    MODEL_KEY,
+)
 from pydocs_eval.campaign.before_after_corpora import IndexIdentity
 from pydocs_eval.campaign.index_cache import resolve_scope_id
 
@@ -61,10 +68,8 @@ VENDOR_DEFAULT_ENDPOINT = "vendor default"
 # cap. Folding them would make the chat runner's YAML — which must carry its
 # agent's settings — differ from the serving file a plan points ``--config`` at,
 # though both serve the same thing.
-_AGENT_KEYS_COMPARED_ELSEWHERE = frozenset({"llm", "architecture", "max_agent_turns"})
+_AGENT_KEYS_COMPARED_ELSEWHERE = frozenset({LLM_KEY, ARCHITECTURE_KEY, MAX_AGENT_TURNS_KEY})
 _AGENT_SECTION = "ask_your_docs"
-_LLM_PREFIX = "llm"
-_MODEL_KEY = "model"
 _ABSENT = "<absent>"
 _PLANS_BASELINE = "the plan's baseline"
 # Not a JSON value, so it can never equal one a fingerprint recorded.
@@ -103,7 +108,7 @@ def _content_digest(payload: Mapping[str, object]) -> str:
 def _file_llm_block(payload: Mapping[str, object]) -> dict[str, object] | None:
     """The file's ``ask_your_docs.llm``: what an arm that pins no block is served."""
     section = payload.get(_AGENT_SECTION)
-    block = section.get("llm") if isinstance(section, Mapping) else None
+    block = section.get(LLM_KEY) if isinstance(section, Mapping) else None
     return dict(block) if isinstance(block, Mapping) else None
 
 
@@ -182,7 +187,7 @@ class ServingBasis:
         """The fingerprint of one arm, whose pinned llm block is ``arm_block`` (or None)."""
         served = dict((self.file_llm if arm_block is None else arm_block) or {})
         # The model is the identity gate's own field (``--model`` beats any block).
-        served.pop(_MODEL_KEY, None)
+        served.pop(MODEL_KEY, None)
         endpoint = self.cli_url or served.get("base_url") or VENDOR_DEFAULT_ENDPOINT
         values: dict[str, object] = {
             ServingKey.SERVING_CONFIG: self.config_digest,
@@ -190,7 +195,7 @@ class ServingBasis:
             ServingKey.EMBEDDER_MODEL: self.index.embedder_model,
             ServingKey.EMBEDDER_DIM: self.index.embedder_dim,
             ServingKey.SCOPE_ID: self.index.scope_id,
-            **dict(_flattened(_LLM_PREFIX, served)),
+            **{f"{LLM_KEY}.{key}": value for key, value in flat_settings(served)},
         }
         # Normalized through JSON, so a fresh fingerprint equals its recorded copy
         # (a tuple reads back as a list, a StrEnum key as its string).
@@ -245,15 +250,6 @@ def serving_settings_from_args(
         max_agent_turns=int(ask.max_agent_turns),
         basis=basis,
     )
-
-
-def _flattened(prefix: str, mapping: Mapping[str, object]) -> Iterator[tuple[str, object]]:
-    for key, value in mapping.items():
-        path = f"{prefix}.{key}"
-        if isinstance(value, Mapping):
-            yield from _flattened(path, value)
-        else:
-            yield path, value
 
 
 def write_serving_fingerprint(arm_dir: Path, fingerprint: ServingFingerprint) -> Path:

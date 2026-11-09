@@ -46,6 +46,7 @@ from pydocs_eval.campaign.before_after import (
     MeasurementPlanError,
 )
 from pydocs_eval.campaign.before_after_arm import ARM_ARCHITECTURE
+from pydocs_eval.campaign.before_after_arm_settings import ARCHITECTURE_KEY, LLM_KEY
 from pydocs_eval.campaign.before_after_arm_variant import ArmVariant
 from pydocs_eval.campaign.before_after_product import (
     arm_environment,
@@ -59,9 +60,8 @@ CHILD_MODULE = "pydocs_eval.campaign.before_after_block_probe"
 
 _BLOCK_FILENAME = "arm_llm_block.json"
 
-# The probe request's keys: what one arm's runner is built from beyond its commit.
-_REQUEST_ARCHITECTURE = "architecture"
-_REQUEST_LLM = "llm"
+# The probe request's keys: what one arm's runner is built from beyond its commit
+# (the overlay's own ``ARCHITECTURE_KEY`` and ``LLM_KEY``, then the harness keys).
 _REQUEST_HARNESS = "harness"
 _WORKTREE_DIRNAME = "worktrees"
 
@@ -196,8 +196,8 @@ def _child_verdict(
 def probe_request(variant: ArmVariant) -> dict[str, object]:
     """The child's input: what this arm's runner is built from beyond its commit."""
     return {
-        _REQUEST_ARCHITECTURE: variant.architecture,
-        _REQUEST_LLM: None if variant.llm_block is None else dict(variant.llm_block),
+        ARCHITECTURE_KEY: variant.architecture,
+        LLM_KEY: None if variant.llm_block is None else dict(variant.llm_block),
         _REQUEST_HARNESS: dict(variant.harness_block),
     }
 
@@ -245,7 +245,7 @@ def verdict_here(
 
     unknown = _unknown_architecture(architecture)
     if unknown is not None:
-        return _rejected(role, sha, unknown, keys=(_REQUEST_ARCHITECTURE,))
+        return _rejected(role, sha, unknown, keys=(ARCHITECTURE_KEY,))
     try:
         build_ask_harness_runner(
             workspace=Path(_PROBE_UNUSED),
@@ -309,10 +309,10 @@ def run_child(argv: Sequence[str] | None = None) -> int:
         return _EXIT_INPUT_ERROR
     request = json.loads(args.block.read_text(encoding="utf-8"))
     acceptance = verdict_here(
-        request[_REQUEST_LLM],
+        request[LLM_KEY],
         role=args.role,
         sha=args.commit,
-        architecture=request[_REQUEST_ARCHITECTURE],
+        architecture=request[ARCHITECTURE_KEY],
         harness_block=request[_REQUEST_HARNESS],
     )
     sys.stdout.write(acceptance.to_json())

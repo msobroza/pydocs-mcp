@@ -214,3 +214,19 @@ def test_a_sidecar_that_is_not_a_mapping_is_refused_by_name(tmp_path: Path) -> N
 
     with pytest.raises(ValueError, match=r"holds \[\]; expected \{'fingerprint'"):
         read_serving_fingerprint(tmp_path)
+
+
+def test_the_serving_llm_keys_are_the_plan_diffs_dotted_keys() -> None:
+    """One flattener: the reuse gate and the plan's settings diff name a key alike."""
+    basis = ServingBasis(config_digest="d", cli_url=None, file_llm=None, index=_INDEX)
+
+    values = basis.fingerprint(_BLOCK).values
+
+    llm_keys = {key for key in values if key.startswith("llm.")}
+    assert llm_keys == {
+        "llm.provider",
+        "llm.params.temperature",
+        "llm.params.top_p",
+        "llm.provider_routing.order",
+        "llm.provider_routing.allow_fallbacks",
+    }
