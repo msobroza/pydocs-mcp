@@ -117,6 +117,7 @@ from pydocs_mcp.harness.ask_your_docs.scope_strip import (
     render_composer_row,
     store_strip_state,
 )
+from pydocs_mcp.harness.ask_your_docs.serve_session import leaf_exception
 from pydocs_mcp.harness.ask_your_docs.strip_state import compile_strip_scope
 from pydocs_mcp.harness.ask_your_docs.theme import theme_css
 from pydocs_mcp.harness.ask_your_docs.transcript import (
@@ -389,7 +390,9 @@ def _end_turn_with_redacted_failure(
         refuse(question, caption, bearer)
     # A failure once the page released its agent is the page going away: "stopped".
     released = handle is not None and handle.closed
-    fail_turn(panel, question, caption, labelled_failure_class_name(exc), released=released)
+    # The label reads the group's leaf (anyio task groups wrap errors); the caption keeps exc's.
+    label_class = labelled_failure_class_name(leaf_exception(exc))
+    fail_turn(panel, question, caption, label_class, released=released)
 
 
 def _run_turn(

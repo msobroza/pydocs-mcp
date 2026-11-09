@@ -8,6 +8,9 @@ SSE body, the rest get the JSON body. The recorded OpenRouter bodies under
 FakeStallingStreamEndpoint and ``chat_model_kwargs_built_with_timer_field`` are the
 stream-chunk timer's seams: a stream that goes silent after its first frame, and a kwargs
 spy whose class declares ``stream_chunk_timeout`` (AC-19's own spy declares no field).
+``needs_the_stream_chunk_timer`` and ``STREAM_CHUNK_TIMEOUT_ENV`` are the ONE "does this
+release have the timer" check and the variable upstream reads its default from, shared by
+every test module that exercises the timer so the checks cannot drift apart.
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from typing import Any, ClassVar
 
 import httpx
 import pytest
+from pydantic import Field
 
 FIXTURES = Path(__file__).parent / "fixtures" / "openrouter_reasoning"
 
@@ -78,6 +82,26 @@ def _completion_chunk(delta: dict[str, Any], finish_reason: str | None = None) -
     }
 
 
+# langchain-openai 1.2+ ends an async stream silent for `stream_chunk_timeout` seconds and
+# reads the field's default from this variable; 1.1.x has neither the field nor the timer.
+STREAM_CHUNK_TIMEOUT_ENV = "LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S"
+UPSTREAM_STREAM_CHUNK_TIMEOUT_SECONDS = 120.0  # upstream's default with the variable unset
+
+
+def _release_has_the_stream_chunk_timer() -> bool:
+    try:
+        from langchain_openai import ChatOpenAI  # the harness extra: absent in a core install
+    except ImportError:
+        return False
+    return "stream_chunk_timeout" in ChatOpenAI.model_fields
+
+
+needs_the_stream_chunk_timer = pytest.mark.skipif(
+    not _release_has_the_stream_chunk_timer(),
+    reason="this langchain-openai has no stream-chunk timer (added in 1.2)",
+)
+
+
 class FakeStallingStreamEndpoint:
     """A streamed reply that sends its first frame, then goes silent for ``stall_seconds``.
 
@@ -110,8 +134,9 @@ def chat_model_kwargs_built_with_timer_field(
     """The kwargs ``build_chat_model`` hands a class that DECLARES ``stream_chunk_timeout``.
 
     AC-19's spy (``chat_model_kwargs_built``) stands in for a release without the field;
-    this one stands in for 1.2+, where the field is a declared model field, so the factory's
-    field check sends it. It keeps the kwargs and builds nothing, like its sibling.
+    this one stands in for 1.2+, where the field is a declared pydantic field whose default
+    is upstream's 120 s, so the factory reads that default and sends a longer block value.
+    It keeps the kwargs and builds nothing, like its sibling.
     """
     import langchain_openai  # the harness extra: lazy, so core tests still import this module
 
@@ -121,7 +146,9 @@ def chat_model_kwargs_built_with_timer_field(
     constructed: list[dict[str, Any]] = []
 
     class ChatOpenAITimerFieldKwargsSpy:
-        model_fields: ClassVar[Mapping[str, Any]] = {"stream_chunk_timeout": None}
+        model_fields: ClassVar[Mapping[str, Any]] = {
+            "stream_chunk_timeout": Field(default=UPSTREAM_STREAM_CHUNK_TIMEOUT_SECONDS)
+        }
 
         def __init__(self, **kwargs: Any) -> None:
             constructed.append(kwargs)

@@ -44,19 +44,24 @@ def _isolate_bundle_cache_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _remove_shell_openai_admin_key_and_custom_headers(monkeypatch):
-    """Drop ``OPENAI_ADMIN_KEY`` and ``OPENAI_CUSTOM_HEADERS`` for every test.
+def _remove_shell_openai_admin_key_custom_headers_and_stream_limit(monkeypatch):
+    """Drop ``OPENAI_ADMIN_KEY``, ``OPENAI_CUSTOM_HEADERS`` and
+    ``LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S`` for every test.
 
-    WHY: openai 2 reads both in every client it builds — the admin key becomes
-    the bearer of a raw request whose own key is empty, and the custom headers
-    reach every request, an ``Authorization:`` line replacing the configured
-    bearer. A developer's shell exporting either would make results depend on
-    that shell. The values are never read; ``OPENAI_API_KEY`` is left alone
-    (tests set it themselves, and the opt-in live test skips without it). A
-    test that needs one of the two sets a synthetic value through monkeypatch.
+    WHY: openai 2 reads the first two in every client it builds — the admin key
+    becomes the bearer of a raw request whose own key is empty, and the custom
+    headers reach every request, an ``Authorization:`` line replacing the
+    configured bearer. langchain-openai 1.2+ reads the third into every
+    ``ChatOpenAI``'s async stream limit (an invalid value logs a WARNING), so a
+    small exported value would end streaming tests early. A developer's shell
+    exporting any of them would make results depend on that shell. The values
+    are never read; ``OPENAI_API_KEY`` is left alone (tests set it themselves,
+    and the opt-in live test skips without it). A test that needs one of the
+    three sets a synthetic value through monkeypatch.
     """
     monkeypatch.delenv("OPENAI_ADMIN_KEY", raising=False)
     monkeypatch.delenv("OPENAI_CUSTOM_HEADERS", raising=False)
+    monkeypatch.delenv("LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S", raising=False)
 
 
 @pytest.fixture(autouse=True)

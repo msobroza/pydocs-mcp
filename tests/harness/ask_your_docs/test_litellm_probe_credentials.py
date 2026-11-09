@@ -11,10 +11,13 @@ core-importable modules), so this runs in GitHub CI's dev-group-only install.
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
+from typing import Any
 
 import pytest
 
-pytest.importorskip("openai")
+openai_models = pytest.importorskip("openai._models")
 
 from pydocs_mcp.harness.ask_your_docs import litellm_probe
 from pydocs_mcp.harness.ask_your_docs.llm_connection import (
@@ -26,6 +29,10 @@ from ._connection_fakes import EmptyAtRequestBearer, FakeBearer, RecordingTransp
 
 _URL = "http://llm.test/v1"
 _ADMIN_KEY = "sk-admin-SYNTHETIC-t10"
+_PROBE_LOGGER = "pydocs-mcp.harness.ask-your-docs"
+# openai 2.34+ takes a per-request ``security`` option: the bearer-only probe then refuses an
+# empty bearer locally, before any request. Older releases have no option and send the GET.
+_SDK_HAS_PER_REQUEST_SECURITY = "security" in openai_models.FinalRequestOptions.model_fields
 
 
 @pytest.fixture(autouse=True)
@@ -43,28 +50,66 @@ def _no_block_connection():
     )
 
 
+class GroupInfoFailureRecorder:
+    """The probe's own fetch behind its ``group_info`` seam, recording what it raises.
+
+    WHY: the probe fails soft, and its ``litellm_probe_failed`` line carries the status
+    alone, so ``None`` alone cannot say why it failed. This keeps the real request path
+    (``_group_info_payload`` over the recording transport) and notes the raised class.
+    """
+
+    def __init__(self, transport: Any) -> None:
+        self.transport = transport
+        self.raised: list[type[BaseException]] = []
+
+    async def __call__(self, connection: Any, bearer: Any) -> Any:
+        try:
+            return await litellm_probe._group_info_payload(connection, bearer, self.transport)
+        except Exception as exc:
+            self.raised.append(type(exc))
+            raise
+
+
+def _probe_failures(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
+    records = [json.loads(r.getMessage()) for r in caplog.records if r.name == _PROBE_LOGGER]
+    return [record for record in records if record.get("event") == "litellm_probe_failed"]
+
+
 def _header_values(recorder: RecordingTransport) -> list[str]:
     """Every header value the transport saw, including the per-call Authorization snapshots."""
     values = [value for request in recorder.requests for value in request.headers.values()]
     return values + [auth for auth in recorder.authorizations() if auth is not None]
 
 
-def test_the_probe_never_sends_an_admin_key_as_its_bearer(monkeypatch) -> None:
+def test_the_probe_never_sends_an_admin_key_as_its_bearer(monkeypatch, caplog) -> None:
     monkeypatch.setenv("OPENAI_ADMIN_KEY", _ADMIN_KEY)
     connection = _no_block_connection()
     assert connection.block_present is False  # the eager-check path, not a configured key
     bearer = EmptyAtRequestBearer()
     recorder = RecordingTransport()
+    fetch = GroupInfoFailureRecorder(recorder.transport)
 
-    rows = asyncio.run(
-        litellm_probe.fetch_litellm_group_info(connection, bearer, transport=recorder.transport)
-    )
+    with caplog.at_level(logging.INFO, logger=_PROBE_LOGGER):
+        rows = asyncio.run(
+            litellm_probe.fetch_litellm_group_info(connection, bearer, group_info=fetch)
+        )
 
     assert rows is None  # fails soft: the probe only refines what the dialog shows
     assert bearer.calls >= 2  # the eager check passed AND the request-time read came back empty
     assert not any(_ADMIN_KEY in value for value in _header_values(recorder))
-    # openai 2.34+ refuses locally (no request); older SDKs send the GET with no header.
-    assert all(auth is None for auth in recorder.authorizations())
+    statuses = [record["status"] for record in _probe_failures(caplog)]
+    if _SDK_HAS_PER_REQUEST_SECURITY:
+        # Bearer-only security with an empty bearer: the SDK refuses before any request.
+        assert recorder.requests == []
+        assert fetch.raised == [TypeError]
+        assert statuses == [None]  # no response, so no status
+    else:
+        # No per-request security: the GET goes out once, with no Authorization header,
+        # and the fake's 200 carries no group info (the probe's "not LiteLLM" answer).
+        assert len(recorder.requests) == 1
+        assert recorder.authorizations() == [None]
+        assert fetch.raised == []
+        assert statuses == [200]
 
 
 def test_the_bearer_only_probe_still_sends_a_real_bearer(monkeypatch) -> None:

@@ -17,13 +17,14 @@ rule: with a route set, the image probe asks whichever upstream OpenRouter picks
 the pinned one.
 
 The live chat streams, and langchain-openai 1.2+ ends an async stream that sends no
-parsed chunk for a while. Without ``timeout_seconds`` that limit is upstream's 120 s,
-counted from the response headers; server keepalive comments do not reset it. The
-environment variable ``LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S`` tunes it (``0`` turns it
-off), and ``ui.activity.live: false`` avoids streaming altogether. With
-``timeout_seconds`` set, the block's value governs both limits: it also travels as
-``stream_chunk_timeout_seconds``, apart from the factory's own ``timeout_seconds``, so
-the probes' short bounds never reach a timer they do not stream through.
+parsed chunk for a while: upstream's stream limit, 120 s or the value of
+``LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S``, counted from the response headers; server
+keepalive comments do not reset it. A ``timeout_seconds`` LONGER than that limit extends
+it — the value also travels as ``stream_chunk_timeout_seconds``, apart from the factory's
+own ``timeout_seconds``, so the probes' short bounds never reach a timer they do not
+stream through. A shorter one leaves upstream's limit (:func:`stream_chunk_timeout_kwargs`),
+``LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S=0`` keeps the timer off, and
+``ui.activity.live: false`` avoids streaming altogether.
 
 Example:
     >>> NO_REQUEST_SETTINGS.chat_factory_kwargs()
@@ -34,6 +35,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, TypedDict
+
+from pydantic.fields import FieldInfo
 
 from pydocs_mcp.exceptions import PydocsMCPError
 from pydocs_mcp.harness.ask_your_docs.provider_profiles import ProviderProfile, wire_profile
@@ -138,6 +141,33 @@ def provider_routing_body(routing: OpenRouterProviderRouting) -> dict[str, Any]:
     return {_OPENROUTER_PROVIDER_FIELD: preferences}
 
 
+def stream_chunk_timeout_kwargs(chat_class: Any, seconds: float | None) -> dict[str, Any]:
+    """``stream_chunk_timeout`` only when the block's value EXTENDS the class's own limit.
+
+    langchain-openai 1.2+ ends an async stream that sends no parsed chunk for the field's
+    default — 120 s, or ``LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S`` (``0`` = off) — and
+    keepalives never reset it. A shorter block value would cut a keepalive-only reasoning
+    phase that plain upstream lets run, so only a LONGER one is sent, and a timer the
+    environment turned off stays off. A class without the field (the extra's 1.1.14 floor)
+    gets nothing: there an undeclared keyword would land in the request body.
+    """
+    if seconds is None:
+        return {}
+    upstream = _declared_stream_chunk_timeout(chat_class)
+    if not upstream or seconds <= upstream:
+        return {}
+    return {"stream_chunk_timeout": seconds}
+
+
+def _declared_stream_chunk_timeout(chat_class: Any) -> float | None:
+    """The field's own default (upstream's env-derived value); None without a pydantic field."""
+    field = getattr(chat_class, "model_fields", {}).get("stream_chunk_timeout")
+    if not isinstance(field, FieldInfo):  # undeclared, or a test stand-in's plain value
+        return None
+    default: float | None = field.get_default(call_default_factory=True)
+    return default
+
+
 __all__ = (
     "NO_REQUEST_SETTINGS",
     "ChatFactoryKwargs",
@@ -145,4 +175,5 @@ __all__ = (
     "ProviderRoutingProfileError",
     "provider_routing_body",
     "refuse_provider_routing_off_openrouter",
+    "stream_chunk_timeout_kwargs",
 )

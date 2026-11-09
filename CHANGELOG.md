@@ -204,27 +204,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     lock, and that newest resolution.
   - Several of the notes below hold only from a given release inside the
     range. Each one names that release.
-- **The live chat's stream silence limit now follows
-  `ask_your_docs.llm.timeout_seconds`.** From langchain-openai 1.2, `ChatOpenAI`
-  ends an async stream that sends no chunk for 120 s. The clock starts at the
-  response headers, and server keepalive comments do not reset it. The live
-  chat streams, so a `timeout_seconds` above 120 was silently cut to 120 s.
-  - **With `timeout_seconds` set,** the models the agent talks to (the main
-    model, a separate vision model, and the model that writes the Finalized
-    answer) get `stream_chunk_timeout` equal to it. The block now governs both
-    limits. A value below 120 s now also ends a stream that sends only
-    keepalives, such as a long reasoning phase. The value is sent only where
-    `ChatOpenAI` has that field: langchain-openai 1.1.14 has no timer, and
-    there nothing changes. The Test button and the image probe keep their own
-    short limits, and never stream.
-  - **Without `timeout_seconds`,** upstream's 120 s applies.
-  - **Escape hatches:** `LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S` sets that
-    default; `0` turns it off, and an invalid or negative value falls back to
-    120 with a warning. `ui.activity.live: false` avoids streaming
-    altogether. The variable has no effect once `timeout_seconds` is set,
-    because the explicit value wins; then only `live: false` removes the limit.
-    This is documented in the harness README, the `timeout_seconds` comment in
-    the shipped default configuration, and `chat_request.py`.
+- **A longer `ask_your_docs.llm.timeout_seconds` now extends the live chat's
+  stream silence limit.** From langchain-openai 1.2, `ChatOpenAI` ends an async
+  stream that sends no chunk for 120 s. The clock starts at the response
+  headers, and server keepalive comments do not reset it. The live chat
+  streams, so a `timeout_seconds` above 120 was silently cut to 120 s.
+  - **A `timeout_seconds` longer than the limit extends it.** The models the
+    agent talks to (the main model, a separate vision model, and the model that
+    writes the Finalized answer) then get `stream_chunk_timeout` equal to it.
+    The value is sent only where `ChatOpenAI` has that field: langchain-openai
+    1.1.14 has no timer, and there nothing changes. The Test button and the
+    image probe keep their own short limits, and never stream.
+  - **A shorter `timeout_seconds` leaves the limit as it is,** so a short,
+    fail-fast request timeout never ends a stream that sends only keepalives,
+    such as a long reasoning phase, sooner than plain langchain-openai would.
+    Without `timeout_seconds`, upstream's limit applies too.
+  - **The limit and its escape hatches:** `LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S`
+    sets the limit in place of 120 s, and only a longer `timeout_seconds`
+    extends it; `0` keeps the timer off whatever the block says, and an invalid
+    or negative value falls back to 120 with a warning. `ui.activity.live:
+    false` avoids streaming altogether. This is documented in the harness
+    README, the `timeout_seconds` comment in the shipped default configuration,
+    and `chat_request.py`.
 - **openai 2's credential and environment rules apply to every OpenAI client
   pydocs-mcp builds.** These are the core `OpenAiLlmClient`, the OpenAI
   embedder, and the harness's chat model, model listing and connection checks.
@@ -479,13 +480,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     a subclass of `TimeoutError`.
   - From 1.6, SDK errors are re-raised as renamed subclasses, such as
     `OpenAITimeoutError` and `OpenAIAuthenticationError`.
-  - The exact-name lookup knew neither, so such a question read "an error
+  - The exact-name lookup knew neither, so a timed-out question read "an error
     stopped the turn".
   - The page now labels a failure through the nearest class in the
     exception's hierarchy that has a label (`labelled_failure_class_name` in
-    `activity_labels.py`). Timeouts read "did not answer in time", and
-    authentication or permission rejections read "the model endpoint rejected
-    the request".
+    `activity_labels.py`), after unwrapping an exception group (as an anyio
+    task group raises) to its first leaf. Timeouts read "did not answer in
+    time".
+  - Authentication and permission rejections already read "the model endpoint
+    rejected the request" on the live path: the chat's auth step turns a 401 /
+    403 SDK error, the 1.6 wrappers included, into `BearerRejectedError` first.
+    The hierarchy lookup covers them only as a backstop, for example for one
+    that reaches the page wrapped in an exception group.
   - The label table is unchanged. The failure caption and the `send_failed`
     log line still name the class that was raised.
 - **Reasoning capture no longer adds a pydantic serializer warning.** Given a

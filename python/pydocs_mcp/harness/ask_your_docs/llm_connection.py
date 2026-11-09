@@ -37,6 +37,7 @@ from pydocs_mcp.harness.ask_your_docs.chat_request import (
     NO_REQUEST_SETTINGS,
     ChatRequestSettings,
     refuse_provider_routing_off_openrouter,
+    stream_chunk_timeout_kwargs,
 )
 from pydocs_mcp.harness.ask_your_docs.chat_wire import NO_WIRE_PARAMS, WireParams
 from pydocs_mcp.harness.ask_your_docs.connection_auth import (
@@ -406,7 +407,8 @@ def build_chat_model(
     ``extra_body`` is merged into the request body: the block's OpenRouter provider
     route, which every model the agent builds passes with the block's timeout and
     retries (``ChatRequestSettings.chat_factory_kwargs``) while a probe passes none.
-    ``stream_chunk_timeout_seconds`` is the same: the block's timeout, for the live stream.
+    ``stream_chunk_timeout_seconds`` is the same: the block's timeout, which only ever
+    EXTENDS the live stream's silence limit (``stream_chunk_timeout_kwargs``).
     """
     from langchain_openai import ChatOpenAI  # heavy; lazy by contract
 
@@ -430,22 +432,8 @@ def build_chat_model(
     if auth is not None or transport is not None:
         kwargs.update(httpx_clients(auth, transport))
     chat_class = reasoning_chat_model_class(ChatOpenAI) if capture_reasoning else ChatOpenAI
-    kwargs.update(_stream_chunk_timeout_kwargs(chat_class, stream_chunk_timeout_seconds))
+    kwargs.update(stream_chunk_timeout_kwargs(chat_class, stream_chunk_timeout_seconds))
     return chat_class(**kwargs)
-
-
-def _stream_chunk_timeout_kwargs(chat_class: Any, seconds: float | None) -> dict[str, Any]:
-    """``stream_chunk_timeout`` for a class that declares it; nothing for any other.
-
-    The block's ``timeout_seconds`` is the single source of how long one chat request may
-    take (``chat_request``), so the live stream's silence limit (langchain-openai 1.2+,
-    upstream default 120 s) follows it too. The field check keeps the extra's floor at the
-    security fix (1.1.14): a release without the field has no timer to extend, and there an
-    undeclared keyword would land in ``model_kwargs`` and go out in the request body.
-    """
-    if seconds is None or "stream_chunk_timeout" not in getattr(chat_class, "model_fields", {}):
-        return {}
-    return {"stream_chunk_timeout": seconds}
 
 
 # The non-DETECT rules, answered without probing. Under SEPARATE_MODEL the main model is NOT the
