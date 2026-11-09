@@ -38,12 +38,12 @@ from pydocs_eval.campaign.before_after_arm_records import (
     read_arm_summary,
     write_arm_summary,
 )
-from pydocs_eval.campaign.before_after_arm_resume import ArmRunIdentity, rows_to_resume
+from pydocs_eval.campaign.before_after_arm_resume import ArmRunIdentity, ArmWorkQueue
 from pydocs_eval.campaign.before_after_fresh_draw import FreshTestDraw
 from pydocs_eval.campaign.before_after_index_step import BundleIndexStep, refresh_bundle_indexes
 from pydocs_eval.campaign.before_after_llm_block import block_turns_thinking_off
 from pydocs_eval.campaign.budget import BudgetGuard, HaltReason
-from pydocs_eval.campaign.ledger import CampaignLedger, WorkItem
+from pydocs_eval.campaign.ledger import WorkItem
 from pydocs_eval.campaign.runner import RolloutOutcome, run_campaign
 from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.optimize._agent_track_binding import DEFAULT_TASK_TIMEOUT_SECONDS
@@ -244,31 +244,31 @@ async def run_arm(
     make_runner: Callable[[ArmSettings, Path], object] = build_product_harness_runner,
     refresh_indexes: Callable[[ArmSettings], tuple[BundleIndexStep, ...]] = refresh_arm_bundles,
 ) -> ArmSummary:
-    """Re-index the arm's bundles, answer every task once under this process's
-    product, and index the result.
+    """Re-index the arm's bundles, answer each task once under this product, index the result.
 
     The re-index comes first and runs on every (re)start: a resumed arm finds
     its bundles already current, so the step is a cache hit that costs seconds.
-    A restart also seeds the tasks an earlier process finished from its
-    ``arm.json`` (``before_after_arm_resume``): the ledger will not run them again.
+    A restart seeds the tasks an earlier process finished from its ``arm.json``
+    and queues again each DONE task left without a row; exclusions are counted
+    off the ledger, whichever process made them (``before_after_arm_resume``).
     """
     # Off the event loop: the step runs subprocesses and SQLite reads.
     index_steps = await asyncio.to_thread(refresh_indexes, settings)
     _log_shared_workspace_tasks(settings, tasks)
     out_dir = Path(settings.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    queue = ArmWorkQueue.open(out_dir, settings.role, [task.task_id for task in tasks])
     collector = _ArmRollouts(
         settings=settings,
         make_runner=make_runner,
         tasks=tasks,
-        answered=rows_to_resume(out_dir, settings.run_identity(), [t.task_id for t in tasks]),
+        queue=queue,
+        answered=queue.resumed_rows(out_dir, settings.run_identity()),
         index_steps=index_steps,
     )
     result = await run_campaign(
-        # One cell per arm: the ledger's ``(cell, instance)`` key then keeps the
-        # two arms' rows apart even when they share one file.
-        [WorkItem(cell=settings.role, instance_id=t.task_id) for t in tasks],
-        ledger=CampaignLedger(path=out_dir / "queue.jsonl"),
+        queue.work_items(),
+        ledger=queue.ledger,
         guard=BudgetGuard(
             cost_ceiling_usd=settings.cost_ceiling_usd,
             assumed_cost_on_raise=settings.estimated_usd_per_rollout,
@@ -276,7 +276,7 @@ async def run_arm(
         rollout_fn=collector.run,
         concurrency=_ARM_CONCURRENCY,
     )
-    summary = collector.summarize(halt_reason=str(result.halt_reason), excluded=result.excluded)
+    summary = collector.summarize(halt_reason=str(result.halt_reason))
     write_arm_summary(out_dir, summary)
     return summary
 
@@ -323,6 +323,7 @@ class _ArmRollouts:
     settings: ArmSettings
     make_runner: Callable[[ArmSettings, Path], object]
     tasks: Sequence[EvalTask]
+    queue: ArmWorkQueue
     answered: dict[str, ArmTaskRecord] = field(default_factory=dict)
     runners: dict[str, object] = field(default_factory=dict)
     index_steps: Sequence[BundleIndexStep] = ()
@@ -424,10 +425,10 @@ class _ArmRollouts:
 
     def _checkpoint(self) -> None:
         """Every row answered so far, on disk — what a restarted arm seeds from."""
-        summary = self.summarize(halt_reason=HaltReason.IN_PROGRESS, excluded=0)
+        summary = self.summarize(halt_reason=HaltReason.IN_PROGRESS)
         write_arm_summary(Path(self.settings.out_dir), summary)
 
-    def summarize(self, *, halt_reason: str, excluded: int) -> ArmSummary:
+    def summarize(self, *, halt_reason: str) -> ArmSummary:
         ordered = [self.answered[t.task_id] for t in self.tasks if t.task_id in self.answered]
         return ArmSummary(
             role=self.settings.role,
@@ -437,7 +438,7 @@ class _ArmRollouts:
             tasks=ordered,
             estimated_usd=len(ordered) * self._booked(),
             halt_reason=halt_reason,
-            excluded=excluded,
+            excluded=self.queue.excluded(),
             max_agent_turns=self.settings.max_agent_turns,
             index_steps=list(self.index_steps),
             **self.settings.summary_variant_fields(),  # type: ignore[arg-type]

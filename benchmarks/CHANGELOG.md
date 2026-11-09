@@ -73,7 +73,10 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     The checkpoint's halt reason is `in_progress`. A restart seeds its rows
     from that file and drops any row whose trace directory no longer holds
     `server_events.jsonl`, logging each drop as a
-    `before_after_resume_dropped_untraced_rows` event. Rows answered under
+    `before_after_resume_dropped_untraced_rows` event; every DONE task left
+    without a row is queued again one attempt later (one
+    `before_after_resume_requeued_untraced_rows` event), and exclusions are
+    counted off the ledger, so an earlier process's survive. Rows answered under
     another role, commit, model or settings digest, or for tasks outside the
     plan's (another `--split`, a shorter `--limit`, another draw), are refused
     by name before the parent writes into the arm dir, never restamped. `--report-only` and `before-after-compare` refuse an arm that still reads `in_progress`

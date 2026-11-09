@@ -86,9 +86,10 @@ def test_a_killed_arm_has_already_recorded_every_task_it_finished(tmp_path: Path
     assert checkpoint.halt_reason == "in_progress"
 
 
-def test_a_row_whose_trace_lost_its_sidecar_is_dropped_and_logged(
+def test_a_row_whose_trace_lost_its_sidecar_is_dropped_logged_and_answered_again(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """Its task stays DONE in the ledger, so without a re-queue the arm finishes short."""
     settings = arm_settings(tmp_path)
     _killed_at_t3(settings)
     lost = read_arm_summary(Path(settings.out_dir)).tasks[0]
@@ -97,8 +98,8 @@ def test_a_row_whose_trace_lost_its_sidecar_is_dropped_and_logged(
     with caplog.at_level(logging.WARNING):
         summary, runner = _resumed(settings)
 
-    assert [task.task_id for task in summary.tasks] == ["t2", "t3"]
-    assert [sample["record_id"] for sample in runner.samples] == ["t3"]
+    assert [task.task_id for task in summary.tasks] == ["t1", "t2", "t3"]
+    assert [sample["record_id"] for sample in runner.samples] == ["t1", "t3"]
     (event,) = [json.loads(r.getMessage()) for r in caplog.records if "dropped" in r.getMessage()]
     assert event["event"] == "before_after_resume_dropped_untraced_rows"
     assert event["task_ids"] == ["t1"] and event["role"] == settings.role
