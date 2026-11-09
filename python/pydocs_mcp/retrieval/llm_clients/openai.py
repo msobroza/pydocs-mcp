@@ -8,12 +8,42 @@ OPENAI_API_KEY set just to construct the composition root.
 
 OPENAI_API_KEY env var is the default credential source — set api_key
 explicitly only when you need a non-default key (e.g., per-tenant).
-The OpenAIError ("api_key must be set") surfaces at first ``chat()``
-call, not at server startup.
+A missing key surfaces at the first ``chat()`` call, not at server
+startup, as the SDK's OpenAIError: "Missing credentials. Please pass an
+`api_key`, …" from openai 2.34 (older releases word it "The api_key
+client option must be set …"). From 2.34 an empty ``api_key=""`` raises
+it too, where older releases sent the request with no Authorization
+header — so a keyless OpenAI-compatible server needs a non-empty
+placeholder key.
+
+One exception from openai 2.34: when ``OPENAI_ADMIN_KEY`` is set, a
+missing or empty key does not fail at construction (the admin key passes
+the SDK's credential check). Chat completions authenticate with the
+bearer only, so the first ``chat()`` then raises a plain
+``TypeError("Could not resolve authentication method…")`` before any
+request is sent — not an OpenAIError. A caller that degrades on
+``openai.OpenAIError`` must catch ``TypeError`` too.
 
 Transient ``openai.RateLimitError`` is retried with exponential backoff
 (3 attempts total) so a 429 spike on one call doesn't kill the whole
 pipeline — persistent failures still surface on the final attempt.
+
+Each attempt also carries the SDK's own retries (its default 2, which
+cover 5xx and connection errors as well as 429), and the SDK sleeps for
+the server's ``Retry-After`` when it is short enough: up to 120 s from
+openai 2.52, up to 60 s on openai 2.26–2.51 and 1.x (a longer value got
+the SDK's own backoff of a few seconds instead). So against a server
+that keeps answering 429, one ``chat()`` can take about 12 minutes on
+openai 2.52+ (``Retry-After`` of 61–120 s: 3 attempts x 2 SDK sleeps x
+120 s, plus this loop's 6 s); before 2.52 the worst case was about 6
+minutes (``Retry-After: 60``). Those are the sleeps alone, on top of each
+request's own time. The wait stays bounded: every count is finite and
+each SDK sleep is capped. From 2.52 the SDK does not retry a
+``Retry-After`` above 120 s at all, so the call ends after 3 requests and
+this loop's 6 s. Folding the two retry layers into one is a follow-up;
+the SDK's ``max_retries`` is NOT set to 0 meanwhile, because that would
+also drop its 5xx / connection-error retries, which this loop does not
+replace.
 """
 
 from __future__ import annotations
@@ -29,9 +59,14 @@ from openai import AsyncOpenAI, OpenAI, RateLimitError
 from pydocs_mcp.retrieval.llm_clients.reasoning_models import REASONING_MODEL_PREFIXES
 from pydocs_mcp.retrieval.protocols import ChatMessage
 
-# Retry policy for transient RateLimitError. Three attempts with
-# exponential backoff (2s, 4s) gives ~6s headroom — enough to ride
-# out a 429 spike without making the user wait forever.
+# Retry policy for transient RateLimitError: three attempts with
+# exponential backoff (2s, 4s), 6s of our own sleeping. This loop wraps
+# the SDK's default 2 retries per attempt, which honour Retry-After, so
+# the worst case per chat() is set by the SDK, not by these numbers:
+# about 12 minutes on openai 2.52+ (it honours Retry-After up to 120s),
+# about 6 before 2.52 (up to 60s) — see the module docstring. One retry layer is a
+# follow-up; max_retries=0 on the SDK clients is not the fix, as it also
+# drops the SDK's 5xx / connection-error retries this loop lacks.
 _RETRY_MAX = 3
 _RETRY_BACKOFF = 2.0
 

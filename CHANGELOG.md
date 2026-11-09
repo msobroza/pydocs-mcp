@@ -188,6 +188,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Workflow line starts at `search_codebase`. The other server-instruction lines,
   tool names and input schemas are unchanged. The descriptions artifact hash
   moves, and the startup log line reports the new one. (#379)
+- **pydocs-mcp now requires openai 2, so the ask-your-docs extra can carry a
+  langchain-openai that fixes PYSEC-2026-76.** The core requirement moves from
+  `openai>=1.40,<2.0` to `openai>=2.26,<3`. The `[harness-ask-your-docs]`
+  extra's `langchain-openai>=0.2.14,<2` becomes `langchain-openai>=1.1.14,<2`.
+  - **Why these bounds.** 1.1.14 is the first langchain-openai with the fix (see
+    *Fixed*). openai 2.26 is the oldest openai it installs with. The cap below 3
+    holds until pydocs-mcp is ported to openai 3, the same policy as `mcp<2`.
+  - **This change moves exactly two packages in the lock:** openai 1.109.1 →
+    2.54.0 and langchain-openai 1.1.9 → 1.3.5. It adds or removes nothing and
+    moves nothing else; langchain-core stays at 1.4.9.
+  - **Fresh installs go further.** A new `pip install` of the extra resolves up
+    to langchain-openai 1.7.4 with langchain-core 1.7.6. The range was tested
+    at three points: the floor (openai 2.26.0 + langchain-openai 1.1.14), the
+    lock, and that newest resolution.
+  - Several of the notes below hold only from a given release inside the
+    range. Each one names that release.
+- **A longer `ask_your_docs.llm.timeout_seconds` now extends the live chat's
+  stream silence limit.** From langchain-openai 1.2, `ChatOpenAI` ends an async
+  stream that sends no chunk for 120 s. The clock starts at the response
+  headers, and server keepalive comments do not reset it. The live chat
+  streams, so a `timeout_seconds` above 120 was silently cut to 120 s.
+  - **A `timeout_seconds` longer than the limit extends it.** The models the
+    agent talks to (the main model, a separate vision model, and the model that
+    writes the Finalized answer) then get `stream_chunk_timeout` equal to it.
+    The value is sent only where `ChatOpenAI` has that field: langchain-openai
+    1.1.14 has no timer, and there nothing changes. The Test button and the
+    image probe keep their own short limits, and never stream.
+  - **A shorter `timeout_seconds` leaves the limit as it is,** so a short,
+    fail-fast request timeout never ends a stream that sends only keepalives,
+    such as a long reasoning phase, sooner than plain langchain-openai would.
+    Without `timeout_seconds`, upstream's limit applies too.
+  - **The limit and its escape hatches:** `LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S`
+    sets the limit in place of 120 s, and only a longer `timeout_seconds`
+    extends it; `0` keeps the timer off whatever the block says, and an invalid
+    or negative value falls back to 120 with a warning. `ui.activity.live:
+    false` avoids streaming altogether. This is documented in the harness
+    README, the `timeout_seconds` comment in the shipped default configuration,
+    and `chat_request.py`.
+- **openai 2's credential and environment rules apply to every OpenAI client
+  pydocs-mcp builds.** These are the core `OpenAiLlmClient`, the OpenAI
+  embedder, and the harness's chat model, model listing and connection checks.
+  - **An empty API key is rejected from openai 2.34.0,** whether it is passed
+    or comes from an empty `OPENAI_API_KEY`. The locked 2.54.0 rejects it
+    too. Building the client raises `OpenAIError` ("Missing credentials.
+    Please pass an `api_key`, …"). For `OpenAiLlmClient`, which builds its client
+    lazily, that happens at the first `chat()`. openai 2.26–2.33 still accept
+    an empty key and send no `Authorization` header, as 1.x did. **If you use
+    a keyless OpenAI-compatible server, configure a non-empty placeholder
+    key.** The OpenAI embedder already refused an empty key itself. With
+    `OPENAI_ADMIN_KEY` set, an empty key does not fail at build time; the
+    client is built and its resource calls fail locally when they are made.
+  - **From openai 2.34.0, every client reads `OPENAI_ADMIN_KEY` and
+    `OPENAI_CUSTOM_HEADERS`.**
+    - Resource calls send only the bearer. A raw request whose bearer is empty
+      can fall back to the admin key (see the LiteLLM probe under *Fixed*).
+    - Custom headers are merged into every client's default headers, so they
+      reach every configured endpoint, third-party base URLs included. An
+      `Authorization:` line there replaces the bearer you configured. Do not
+      export the variable in a shell that runs pydocs-mcp against an endpoint
+      that must not see those headers.
+    - The product test suite (`tests/`) removes both variables from every test
+      without reading them.
+- **The OpenAI SDK now honours a server's `Retry-After` for up to 120 s, from
+  openai 2.52.0.** A longer wait is not retried. openai 1.x, and 2.26–2.51,
+  honoured only waits of 60 s or less, and otherwise used their own short
+  backoff of at most 8 s.
+  Under rate limiting, a slow call may be waiting, not hung:
+  - **The Connection dialog's** model listing and LiteLLM probe (10 s timeout,
+    one retry) can stall for about 2 minutes on a 429 or 503 carrying
+    `Retry-After: 120`. Before, the most was 60 s. The 10 s timeout does not
+    cover the wait.
+  - **One core `OpenAiLlmClient.chat()`** makes 3 attempts of its own around the
+    SDK's 2 retries. Against a server that keeps answering 429 with a
+    `Retry-After` of 61–120 s, one call can now take about 12 minutes; before,
+    it gave up within seconds. Above 120 s it makes 3 requests and fails.
+  - A test pins the 120 s ceiling, so a change to that SDK policy fails a test.
+- **A tool round's request bytes change, and cache writes are now counted.**
+  - **Request bytes.** Tool results are sent as text blocks holding only `type`
+    and `text`; LangChain's block `id` is no longer sent. This already holds
+    from langchain-openai 1.1.14; 1.1.9 sent the id. So the bytes of every
+    multi-step request change, and so do their prompt-cache prefixes.
+  - **Cache writes.** From langchain-openai 1.3.5, an endpoint's
+    `cache_write_tokens` is reported as cache-creation input tokens. The ask
+    harness's `cache_creation_input_tokens` in `model_usage.json` was always 0,
+    and now carries that count. 1.1.14–1.3.4 still report 0. So does an
+    endpoint that sends no `cache_write_tokens`, and so do the `priority` and
+    `flex` service tiers, which langchain-openai reports under a
+    tier-prefixed key that the harness does not read.
+  - Compare eval arms only within one dependency set (see the eval suite's
+    changelog).
+- **Reasoning capture does not apply to models that langchain-openai sends to
+  the Responses API.** The capture subclass hooks the Chat Completions path,
+  and the Responses route bypasses both hooks, so the activity panel shows no
+  reasoning there.
+  - **Bare names now go to Responses.** With langchain-openai 1.3.5, model names
+    starting `gpt-5-pro`, `gpt-5.2-pro`, `gpt-5.4-pro` or `gpt-5.5-pro`, and any
+    name containing `codex`, go to Responses. 1.1.9 sent only names containing
+    `gpt-5.2-pro` or `codex` there. Capture therefore stops silently for bare
+    `gpt-5-pro`, `gpt-5.4-pro` and `gpt-5.5-pro`. Later in-range releases add
+    more names: 1.7.4 adds `gpt-5.6-sol`.
+  - **Vendor-prefixed `-pro` slugs go back to Chat Completions.** The `-pro`
+    names now match only at the start of the model name. So a slug such as
+    `openai/gpt-5.2-pro`, which 1.1.9 sent to Responses, goes to Chat
+    Completions again, and capture applies to it. A slug containing `codex`,
+    such as `openai/gpt-5-codex`, still goes to Responses.
+  - The harness documents this routing and does not change it.
 
 ### Fixed
 
@@ -348,6 +454,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     that tuned one of these settings, or that indexes dependencies with
     `--no-inspect`, re-extracts the affected packages once on its first pass
     after upgrading, and the passes after it settle. (#347)
+- **PYSEC-2026-76 / GHSA-r7w7-9xr2-qq2r (CVE-2026-41488) is resolved in the
+  locked environment, and both audits stop ignoring it.** The advisory is an
+  SSRF / DNS-rebinding window in langchain-openai's image token counter: 1.1.9
+  validated an image URL and then fetched it in a separate step.
+  - **Why the ignores could go.** The advisory is fixed upstream from
+    langchain-openai 1.1.14. The lock now carries 1.3.5, which fetches images
+    through langchain-core's SSRF-safe transport; it checks the address when
+    it connects. The ignore existed only because the project's own
+    `openai<2.0` cap blocked every fixed release. Its argument still held:
+    pydocs-mcp never called that path, and it sends images as base64 `data:`
+    URIs. It is now moot.
+  - **The CI `security` job** drops the flag pair and its WHY block. Its other
+    17 `--ignore-vuln` flags are unchanged, and it reports "No known
+    vulnerabilities found, 12 ignored".
+  - **The nightly fresh-install audit** now ignores nothing.
+  - **CLAUDE.md's gate command** carries the same ignore set as CI.
+  - **A new test** (`tests/test_audit_ignore_hygiene.py`) checks that
+    CLAUDE.md's ignore set equals CI's, that the fresh-install audit ignores
+    nothing CI does not, and that every ignored ID has a WHY comment.
+- **A chat question stopped by a timeout reads "the model endpoint did not
+  answer in time" on every in-range langchain-openai.** The activity panel
+  looked up its failure label by the exception's exact class name.
+  - From langchain-openai 1.2, a silent stream raises `StreamChunkTimeoutError`,
+    a subclass of `TimeoutError`.
+  - From 1.6, SDK errors are re-raised as renamed subclasses, such as
+    `OpenAITimeoutError` and `OpenAIAuthenticationError`.
+  - The exact-name lookup knew neither, so a timed-out question read "an error
+    stopped the turn".
+  - The page now labels a failure through the nearest class in the
+    exception's hierarchy that has a label (`labelled_failure_class_name` in
+    `activity_labels.py`), after unwrapping an exception group (as an anyio
+    task group raises) to its first leaf. Timeouts read "did not answer in
+    time".
+  - Authentication and permission rejections already read "the model endpoint
+    rejected the request" on the live path: the chat's auth step turns a 401 /
+    403 SDK error, the 1.6 wrappers included, into `BearerRejectedError` first.
+    The hierarchy lookup covers them only as a backstop, for example for one
+    that reaches the page wrapped in an exception group.
+  - The label table is unchanged. The failure caption and the `send_failed`
+    log line still name the class that was raised.
+- **Reasoning capture no longer adds a pydantic serializer warning.** Given a
+  response body that breaks the API contract, such as a non-integer `created`,
+  the capture subclass's own second dump used to warn.
+  - It now dumps the SDK response exactly as langchain-openai 1.3.5's
+    `ChatOpenAI._create_chat_result` does: each choice message's `parsed`
+    field is excluded and warnings are off. Capture never reads `parsed`, and
+    it still sees the `reasoning` extras.
+  - A capture-enabled model now warns no more than stock `ChatOpenAI` on every
+    in-range release. That is no warning from 1.3.5, and the one stock
+    warning at 1.1.14.
+  - The module docstring names the verified versions (1.1.9, 1.1.14, 1.3.5 and
+    1.7.4). It no longer claims that GitHub CI runs these checks: they run
+    only where `[harness-ask-your-docs]` is installed.
+- **The LiteLLM probe never sends an admin key as its bearer.** The Connection
+  dialog's probe makes one raw request (`GET /model_group/info`). That request
+  now asks for bearer-only authentication, as every SDK resource call already
+  does.
+  - With openai 2.34+, an empty bearer at request time can no longer fall back
+    to `OPENAI_ADMIN_KEY`. The SDK refuses such a request locally instead, and
+    the probe logs `litellm_probe_failed`.
+  - openai 2.26–2.33 have neither the option nor the admin key, and ignore the
+    option harmlessly.
+- **The eval serve child no longer inherits `OPENAI_CUSTOM_HEADERS`.** It joins
+  `OPENAI_BASE_URL` and `LLM_MODEL` in the sealed set of endpoint variables
+  (`harness/core/serve_child_env.py`). So a shell value can no longer change
+  what the child's embedder and LLM calls send without changing the arm's
+  hash. The chat model the eval binding builds in the parent process still
+  reads the variable.
 
 ## [0.8.1] — 2026-09-15
 

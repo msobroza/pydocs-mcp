@@ -1,16 +1,27 @@
 """Recover the reasoning text langchain-openai drops (activity panel, PROPOSAL §4).
 
-langchain-openai 1.1.9 keeps only content, tool calls and audio from a Chat Completions
-message or delta, so OpenRouter's ``reasoning`` and vLLM / DeepSeek / llama.cpp's
+langchain-openai keeps only content, tool calls and audio from a Chat Completions message
+or delta, so OpenRouter's ``reasoning`` and vLLM / DeepSeek / llama.cpp's
 ``reasoning_content`` never reach the page — although the endpoint already sent, and
 billed, them. :func:`reasoning_chat_model_class` derives a subclass that copies that text
 into ``additional_kwargs["reasoning_content"]``, the key langchain-core already concatenates
 across stream chunks. Nothing on the wire changes: no request field is added.
 
-Both overrides are PRIVATE upstream methods: pyproject caps langchain-openai below 2 and
-``test_reasoning_capture`` fails CI if either disappears. Should one vanish anyway, capture
-degrades to the stock class plus one ``reasoning_capture_unavailable`` JSON log line.
-Imports no langchain itself — it only subclasses the base it is handed.
+Verified (2026-11-09) on langchain-openai 1.1.9, 1.1.14, 1.3.5 and 1.7.4, the last the
+newest release in range that day. Both overrides are PRIVATE upstream methods, so pyproject
+caps langchain-openai below 2, and ``test_reasoning_capture`` pins that both hooks still
+exist and that the stock class still drops reasoning. Those checks run only where the
+``[harness-ask-your-docs]`` extra is installed — not in GitHub CI, which skips them. Should
+a hook vanish anyway, capture degrades to the stock class plus one
+``reasoning_capture_unavailable`` JSON log line. Imports no langchain itself — it only
+subclasses the base it is handed.
+
+Chat Completions only: langchain-openai sends some models to the Responses API, where both
+hooks are bypassed and capture silently does nothing — bare names starting with
+``gpt-5-pro``, ``gpt-5.2-pro``, ``gpt-5.4-pro`` or ``gpt-5.5-pro`` (later releases add
+prefixes) and any name containing ``codex``; also any Responses-only option such as
+``use_responses_api=True``, which the harness's chat factory never sets. This module does
+not change that routing.
 
 Example:
     >>> reasoning_text_from_payload({"reasoning": "plan", "reasoning_details": []})
@@ -74,8 +85,15 @@ def annotate_reasoning(message: Any, payload: Mapping[str, Any]) -> None:
 
 
 def _response_choices(response: Any) -> list[Mapping[str, Any]]:
-    # The openai SDK model keeps unknown fields, so model_dump() still carries ``reasoning``.
-    body = response if isinstance(response, Mapping) else response.model_dump()
+    # Mirrors the dump in upstream ``ChatOpenAI._create_chat_result`` (langchain-openai 1.3.5
+    # and later): an out-of-contract body such as a non-integer ``created`` would otherwise
+    # make this second dump the only one to emit a pydantic serializer warning. Capture never
+    # reads ``parsed``; the SDK model keeps unknown fields, so ``reasoning`` is still dumped.
+    if isinstance(response, Mapping):
+        return list(response.get("choices") or [])
+    body = response.model_dump(
+        exclude={"choices": {"__all__": {"message": {"parsed"}}}}, warnings=False
+    )
     return list(body.get("choices") or [])
 
 

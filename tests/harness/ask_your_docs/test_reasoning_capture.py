@@ -11,6 +11,7 @@ import asyncio
 import inspect
 import json
 import logging
+import warnings
 
 import pytest
 
@@ -170,6 +171,53 @@ def test_streaming_recordings_merge_to_the_exact_wire_text(name: str) -> None:
     merged = _stream(_model(FakeChatCompletionsEndpoint(stream_body=body)))
     assert merged.additional_kwargs[REASONING_KWARG] == wire_reasoning(body)
     assert wire_reasoning(body)  # the recording really carries reasoning
+
+
+def _out_of_contract_body() -> bytes:
+    """Recording A with a non-integer ``created``: the SDK keeps it unvalidated, and a dump
+    that leaves serializer warnings on reports it."""
+    body = json.loads(recorded_body("A.json"))
+    body["created"] = "not-an-int"
+    assert body["choices"][0]["message"]["reasoning"] == _A_REASONING
+    return json.dumps(body).encode()
+
+
+def _bare_dump_warnings(body: bytes) -> int:
+    """Warnings from a plain ``model_dump()`` of the SDK model — proof the body still breaks
+    the contract, so a 0-vs-0 comparison below cannot pass vacuously."""
+    from openai.types.chat import ChatCompletion
+
+    response = ChatCompletion.model_construct(**json.loads(body))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        response.model_dump()
+    return len(caught)
+
+
+def _invoke_counting_warnings(llm) -> tuple[object, int]:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")  # repeats count too
+        message = _invoke(llm)
+    return message, len(caught)
+
+
+def test_capture_adds_no_warning_beyond_stock_on_an_out_of_contract_body() -> None:
+    """D8: the subclass dumps the response the way upstream does, so it warns no more than
+    the stock class — 0 from langchain-openai 1.3.5, 1 at 1.1.14 and 1.1.9 — and still keeps
+    the reasoning the endpoint sent."""
+    body = _out_of_contract_body()
+    assert _bare_dump_warnings(body) > 0
+    stock = langchain_openai.ChatOpenAI(
+        model="m",
+        base_url=_URL,
+        api_key="no-auth",
+        http_async_client=_client(FakeChatCompletionsEndpoint(json_body=body)),
+    )
+    _, stock_warnings = _invoke_counting_warnings(stock)
+    capture = _model(FakeChatCompletionsEndpoint(json_body=body))
+    message, capture_warnings = _invoke_counting_warnings(capture)
+    assert message.additional_kwargs[REASONING_KWARG] == _A_REASONING
+    assert capture_warnings <= stock_warnings, (capture_warnings, stock_warnings)
 
 
 def test_reasoning_content_dialect_streamed_and_not() -> None:

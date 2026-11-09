@@ -373,14 +373,6 @@ jobs:
       # never loads ujson, and indexes with fast-plaid. The fix cannot be
       # locked: every pylate >= 1.5.1 pins ujson==5.12.0 exactly (1.5.0 pins
       # 5.10.0). Drop all four flags when pylate relaxes that pin.
-      # WHY --ignore-vuln GHSA-r7w7-9xr2-qq2r / PYSEC-2026-76 (CVE-2026-41488,
-      # langchain-openai < 1.1.14): an SSRF / DNS-rebinding window in
-      # `_url_to_size()`, reached only through `get_num_tokens_from_messages()`
-      # image token counting. pydocs-mcp never calls it, and its image blocks
-      # are base64 `data:` URIs, which `_url_to_size()` decodes without any
-      # network fetch. The fix cannot be locked yet: langchain-openai >= 1.1.14
-      # requires openai >= 2.26 while pydocs-mcp pins openai < 2.0. Drop both
-      # flags when that pin is lifted.
       # WHY --ignore-vuln GHSA-jhr6-gm9c-rqjv / PYSEC-2026-4164 (CVE-2026-68770,
       # sentence-transformers < 5.6.0): when the model path exists on local
       # disk, `import_module_class` treats the trust gate as passed, so a
@@ -414,6 +406,5 @@ jobs:
           --ignore-vuln GHSA-xrqw-3rrv-vx5w --ignore-vuln PYSEC-2026-3929
           --ignore-vuln GHSA-c38f-wx89-p2xg --ignore-vuln PYSEC-2026-2293
           --ignore-vuln GHSA-3j69-69wj-xqx2 --ignore-vuln PYSEC-2026-2294
-          --ignore-vuln GHSA-r7w7-9xr2-qq2r --ignore-vuln PYSEC-2026-76
           --ignore-vuln GHSA-jhr6-gm9c-rqjv --ignore-vuln PYSEC-2026-4164
           --ignore-vuln GHSA-x9r9-c232-4q39 --ignore-vuln PYSEC-2026-4174

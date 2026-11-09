@@ -1455,16 +1455,16 @@ wheels = [
 
 [[package]]
 name = "langchain-openai"
-version = "1.1.9"
+version = "1.3.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "langchain-core" },
     { name = "openai" },
     { name = "tiktoken" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/49/ae/1dbeb49ab8f098f78ec52e21627e705e5d7c684dc8826c2c34cc2746233a/langchain_openai-1.1.9.tar.gz", hash = "sha256:fdee25dcf4b0685d8e2f59856f4d5405431ef9e04ab53afe19e2e8360fed8234", size = 1004828, upload-time = "2026-02-10T21:03:21.615Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d1/7e/43eef3f8fae2668f52e2222fdc26b6de58acf158bcb580e32e88a299260d/langchain_openai-1.3.5.tar.gz", hash = "sha256:c1db2256a42ac46e8e7b0564c5ccb478b9f58dc047a58935da33c82e6e1f9a07", size = 3261548, upload-time = "2026-07-10T18:58:29.576Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/52/a1/8a20d19f69d022c10d34afa42d972cc50f971b880d0eb4a828cf3dd824a8/langchain_openai-1.1.9-py3-none-any.whl", hash = "sha256:ca2482b136c45fb67c0db84a9817de675e0eb8fb2203a33914c1b7a96f273940", size = 85769, upload-time = "2026-02-10T21:03:20.333Z" },
+    { url = "https://files.pythonhosted.org/packages/61/64/4e0918cb96ff2b49e06acd9c11c250297d727d2fcce9e012d62efb73b4d6/langchain_openai-1.3.5-py3-none-any.whl", hash = "sha256:f586263b884bceb3d426ec84d3bfbd27051c3c92ae668da6175629e3f44dcec5", size = 121601, upload-time = "2026-07-10T18:58:28.327Z" },
 ]
 
 [[package]]
@@ -2589,7 +2589,7 @@ wheels = [
 
 [[package]]
 name = "openai"
-version = "1.109.1"
+version = "2.54.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -2601,9 +2601,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c6/a1/a303104dc55fc546a3f6914c842d3da471c64eec92043aef8f652eb6c524/openai-1.109.1.tar.gz", hash = "sha256:d173ed8dbca665892a6db099b4a2dfac624f94d20a93f46eb0b56aae940ed869", size = 564133, upload-time = "2025-09-24T13:00:53.075Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/50/9a/8c75e8c8a5b407a0586faeb2afac91674ff955c191ecc1d6d3b6669f6788/openai-2.54.0.tar.gz", hash = "sha256:e3e6f8bc1ba30ddf381ace1a14340eed381cb984a1a59bd0f34b5be3b5d49cfa", size = 1100285, upload-time = "2026-08-11T18:46:59.035Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1d/2a/7dd3d207ec669cacc1f186fd856a0f61dbc255d24f6fdc1a6715d6051b0f/openai-1.109.1-py3-none-any.whl", hash = "sha256:6bcaf57086cf59159b8e27447e4e7dd019db5d29a438072fbd49c290c7e65315", size = 948627, upload-time = "2025-09-24T13:00:50.754Z" },
+    { url = "https://files.pythonhosted.org/packages/64/a8/bb76c7356de8ad57f59d5ff993d434df0607f07f08bcc9c9a5c275e399c0/openai-2.54.0-py3-none-any.whl", hash = "sha256:89089789197ccdb87f173a03145ed1598d00795220c93e96cf712b1cbf5e5f2b", size = 1660351, upload-time = "2026-08-11T18:46:56.684Z" },
 ]
 
 [[package]]
@@ -3495,13 +3495,13 @@ requires-dist = [
     { name = "fastembed", specifier = ">=0.9.1,<1.0" },
     { name = "jinja2", specifier = ">=3.0,<4.0" },
     { name = "langchain-mcp-adapters", marker = "extra == 'harness-ask-your-docs'", specifier = ">=0.3" },
-    { name = "langchain-openai", marker = "extra == 'harness-ask-your-docs'", specifier = ">=0.2.14,<2" },
+    { name = "langchain-openai", marker = "extra == 'harness-ask-your-docs'", specifier = ">=1.1.14,<2" },
     { name = "langgraph", marker = "extra == 'harness-ask-your-docs'", specifier = ">=0.2" },
     { name = "mcp", specifier = ">=1.30.0,<2" },
     { name = "networkx", marker = "extra == 'graph'", specifier = ">=3.0,<4.0" },
     { name = "numkong", marker = "extra == 'late-interaction'", specifier = "<7.5" },
     { name = "numpy", specifier = ">=1.26" },
-    { name = "openai", specifier = ">=1.40,<2.0" },
+    { name = "openai", specifier = ">=2.26,<3" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "pylate", marker = "extra == 'late-interaction'", specifier = ">=1.5,<2.0" },

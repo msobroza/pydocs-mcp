@@ -65,11 +65,14 @@ dependencies = [
     # constraint-dependencies table below demands (24 pillow CVEs including
     # GHSA-78g4-xqwv-q3g8). 0.9.1 relaxes the pin to pillow<14.
     "fastembed>=0.9.1,<1.0",
-    # The <2.0 cap also holds langchain-openai (the [harness-ask-your-docs]
-    # extra) at 1.1.9: every release >= 1.1.14 needs openai >= 2.26. That is
-    # why the CI security job ignores PYSEC-2026-76 — drop that ignore when
-    # this cap lifts.
-    "openai>=1.40,<2.0",
+    # Floor at 2.26: the oldest openai that langchain-openai 1.1.14 (the
+    # [harness-ask-your-docs] extra's floor, below) installs with, so the
+    # published range has one bottom one environment can check.
+    # Capped <3: openai 3.x is published, 2.54.0 announces that async
+    # `parse()` of legacy raw responses becomes a coroutine in the next major,
+    # and the harness model listing calls a sync `parse()` on the async
+    # client. Same policy as the mcp<2 cap: lift it only with a 3.x port.
+    "openai>=2.26,<3",
     "jinja2>=3.0,<4.0",
     "tiktoken>=0.7,<1.0",
     # Live re-indexing (serve --watch / the watch verb). Promoted from the
@@ -168,8 +171,10 @@ harness-ask-your-docs = [
     "langchain-mcp-adapters>=0.3",   # tool_interceptors API (landed in 0.1.12)
     # <2: reasoning_capture overrides two PRIVATE ChatOpenAI methods; a major release may
     # rename them (test_reasoning_capture pins both). Lift the cap only with that test green.
-    # >=0.2.14: the first release with a typed ChatOpenAI.reasoning_effort (model params).
-    "langchain-openai>=0.2.14,<2",
+    # >=1.1.14: the release that fixes PYSEC-2026-76 / GHSA-r7w7-9xr2-qq2r (CVE-2026-41488,
+    # an SSRF / DNS-rebinding window in image token counting) — a security floor, like
+    # mcp>=1.30.0. It needs openai>=2.26, which sets the core openai floor above.
+    "langchain-openai>=1.1.14,<2",
     # WHY 1.59: cache_resource(scope="session", on_release=...) — one serve child per tab
     # (chat_input(accept_file=...) for image attachments needed only 1.43).
     # Bumped to 1.67: 1.66 and earlier pin pillow<13, which blocks the pillow
