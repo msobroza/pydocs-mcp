@@ -164,6 +164,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`search_codebase`: a `kind="api"` zero hit now answers with the `kind="any"`
+  results of the same request, labelled.** When the member lookup behind
+  `kind="api"` returns no rows, the server runs the same request at
+  `kind="any"` in the same call. The query, `scope`, `package`, `project`,
+  `limit` and branch stay the same. The body opens with the line
+  `[suggestion: kind="api" matched nothing — showing kind="any" results for the same query and filters]`
+  (after the freshness header), and `meta.suggestion` carries the same text.
+  Below it, the rows, their order and scores, `items[]` and the truncation
+  footer are exactly what a direct `kind="any"` request returns. Each row keeps
+  its own `kind` (`chunk` or `member`), so no fallback row is reported as a
+  symbol hit. When `kind="any"` finds nothing either, the zero-hit body ends
+  with
+  `[suggestion: kind="api" matched nothing, and kind="any" found nothing for the same query and filters either]`
+  instead of the retry line. On the zero hits the fallback answers, the
+  `kind="api"` retry hint no longer fires, because the server has already run
+  that search. A `kind="api"` request whose lookup returned rows is
+  byte-identical to before, and so is every request of another `kind`. The
+  structured log records the rule `api_zero_hit_fallback_any` on every zero hit
+  it answers.
+  - **Flag:** `output.suggestions.api_zero_hit_fallback_any`, default on
+    (ADR 0027). With it off, every response is byte-identical to the previous
+    release, and the retry hint applies again. Builds from before this change
+    reject a config that sets the key, so a config shared across versions must
+    leave it unset.
+  - **Cost:** only on a `kind="api"` zero hit, one more run of the
+    deployment's `kind="any"` search. That is one query embedding, one pipeline
+    run, one repeated member lookup, and up to `search.output.budget_tokens` of
+    extra tool text. An opt-in preset passes its own per-query cost on (for
+    example, one LLM call under LLM tree reasoning). Hits, other kinds and the
+    flag off cost nothing extra.
+  - **Failure:** if the `kind="any"` run raises (for example, the embedder is
+    unavailable), the call fails with the tool's typed `ServiceUnavailableError`,
+    whose message starts with
+    `search_codebase(kind="api") found no symbols; its kind="any" fallback failed`
+    and names the cause. It never degrades to the old empty response. Errors
+    in the request itself, such as an unknown `project=`, are raised before
+    either search runs, unchanged.
+  - **Integrators:** a `kind="api"` response with rows in `items[]` no longer
+    means a symbol matched. To tell the two apart, read `meta.suggestion` or
+    each row's `kind`, not `len(items) == 0`.
+  - **Unchanged:** the nine tool names, parameter schemas, `Literal` sets,
+    output schemas, envelope fields, `items[]` fields, tool descriptions and
+    server instructions.
+
 - **The chat agent's system prompt is now `system_v3`, which drops the rules
   that asked for extra tool calls.** The Example snippet is written only from a
   signature or usage the tools already showed; v2's "use get_symbol when you
