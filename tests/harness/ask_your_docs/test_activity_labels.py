@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import re
 
+import httpx
+import openai
 import pytest
 
 from pydocs_mcp.application.description_source import FROZEN_TOOL_NAMES
@@ -17,6 +19,7 @@ from pydocs_mcp.harness.ask_your_docs.activity_labels import (
     UNKNOWN_TOOL_ICON,
     VISION_ICON,
     failure_reason,
+    labelled_failure_class_name,
     rephrase_note,
     scope_note,
     tool_icon,
@@ -298,6 +301,88 @@ def test_rephrase_note_only_when_the_question_really_changed() -> None:
 )
 def test_failure_reasons_are_words(exc_name: str, reason: str) -> None:
     assert failure_reason(exc_name) == reason
+
+
+_REJECTED = "the model endpoint rejected the request"
+_TIMED_OUT = "the model endpoint did not answer in time"
+_GENERIC = "an error stopped the turn"
+_REQUEST = httpx.Request("POST", "http://llm.test/v1/chat/completions")
+
+
+class _ModelErrorStandIn(Exception):
+    """Stands in for langchain-core's model-error base, the 1.6 wrappers' second base."""
+
+
+def _sdk_status_error(error_class: type[openai.APIStatusError], status: int) -> Exception:
+    return error_class("rejected", response=httpx.Response(status, request=_REQUEST), body=None)
+
+
+def _status_error(name: str, base: type[openai.APIStatusError], status: int) -> Exception:
+    """An error of a subclass named ``name`` on the real SDK ``base`` (a 1.6+ wrapper)."""
+    return _sdk_status_error(type(name, (base, _ModelErrorStandIn), {}), status)
+
+
+def _timeout_wrapper(name: str) -> Exception:
+    return type(name, (openai.APITimeoutError, _ModelErrorStandIn), {})(request=_REQUEST)
+
+
+def _named(name: str, base: type[Exception] = Exception) -> Exception:
+    return type(name, (base,), {})("boom")
+
+
+@pytest.mark.parametrize(
+    ("exc", "reason"),
+    [
+        # langchain-openai 1.6+ re-raises SDK errors as renamed subclasses.
+        (_status_error("OpenAIAuthenticationError", openai.AuthenticationError, 401), _REJECTED),
+        (
+            _status_error("OpenAIPermissionDeniedError", openai.PermissionDeniedError, 403),
+            _REJECTED,
+        ),
+        (_timeout_wrapper("OpenAITimeoutError"), _TIMED_OUT),
+        # The async stream's silence timer raises a builtin TimeoutError subclass.
+        (_named("StreamChunkTimeoutError", TimeoutError), _TIMED_OUT),
+        (_named("SomethingUnforeseenError", RuntimeError), _GENERIC),
+        (_named("UnforeseenBareError"), _GENERIC),
+    ],
+    ids=lambda value: type(value).__name__ if isinstance(value, Exception) else None,
+)
+def test_a_subclass_of_a_labelled_error_gets_its_label(exc: Exception, reason: str) -> None:
+    assert failure_reason(labelled_failure_class_name(exc)) == reason
+
+
+@pytest.mark.parametrize(
+    ("exc", "reason"),
+    [
+        (_sdk_status_error(openai.AuthenticationError, 401), _REJECTED),
+        (_sdk_status_error(openai.PermissionDeniedError, 403), _REJECTED),
+        (openai.APITimeoutError(request=_REQUEST), _TIMED_OUT),
+        (TimeoutError("slow"), _TIMED_OUT),
+        (_named("BearerRejectedError"), _REJECTED),
+        (_named("BearerUnavailableError"), "no token could be fetched for the model endpoint"),
+        (_named("GraphRecursionError", RecursionError), "the agent hit its step limit"),
+        (
+            _named("TurnBudgetExceededError", RuntimeError),
+            "the agent reached its turn budget without an answer",
+        ),
+        (RuntimeError("boom"), _GENERIC),
+    ],
+    ids=lambda value: type(value).__name__ if isinstance(value, Exception) else None,
+)
+def test_an_exact_name_keeps_its_label(exc: Exception, reason: str) -> None:
+    assert labelled_failure_class_name(exc) == type(exc).__name__
+    assert failure_reason(labelled_failure_class_name(exc)) == reason
+
+
+def test_the_labelled_name_is_the_nearest_known_class_else_the_raised_one() -> None:
+    wrapper = _status_error("OpenAIAuthenticationError", openai.AuthenticationError, 401)
+    assert labelled_failure_class_name(wrapper) == "AuthenticationError"
+    # APITimeoutError sits before its own base, APIConnectionError, which has no label.
+    assert labelled_failure_class_name(_timeout_wrapper("OpenAITimeoutError")) == (
+        "APITimeoutError"
+    )
+    unknown = _named("OpenAIConnectionError", openai.OpenAIError)
+    assert labelled_failure_class_name(unknown) == "OpenAIConnectionError"
 
 
 def test_meta_line_summarises_the_envelope_for_technical_details() -> None:
