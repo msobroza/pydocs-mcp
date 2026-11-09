@@ -8,8 +8,13 @@ OPENAI_API_KEY set just to construct the composition root.
 
 OPENAI_API_KEY env var is the default credential source — set api_key
 explicitly only when you need a non-default key (e.g., per-tenant).
-The OpenAIError ("api_key must be set") surfaces at first ``chat()``
-call, not at server startup.
+A missing key surfaces at the first ``chat()`` call, not at server
+startup, as the SDK's OpenAIError: "Missing credentials. Please pass an
+`api_key`, …" from openai 2.34 (older releases word it "The api_key
+client option must be set …"). From 2.34 an empty ``api_key=""`` raises
+it too, where older releases sent the request with no Authorization
+header — so a keyless OpenAI-compatible server needs a non-empty
+placeholder key.
 
 Transient ``openai.RateLimitError`` is retried with exponential backoff
 (3 attempts total) so a 429 spike on one call doesn't kill the whole
