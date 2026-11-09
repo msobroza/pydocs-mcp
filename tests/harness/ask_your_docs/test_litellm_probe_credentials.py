@@ -97,15 +97,19 @@ def test_the_probe_never_sends_an_admin_key_as_its_bearer(monkeypatch, caplog) -
     assert rows is None  # fails soft: the probe only refines what the dialog shows
     assert bearer.calls >= 2  # the eager check passed AND the request-time read came back empty
     assert not any(_ADMIN_KEY in value for value in _header_values(recorder))
-    assert [record["status"] for record in _probe_failures(caplog)] == [None]
+    statuses = [record["status"] for record in _probe_failures(caplog)]
     if _SDK_HAS_PER_REQUEST_SECURITY:
         # Bearer-only security with an empty bearer: the SDK refuses before any request.
         assert recorder.requests == []
         assert fetch.raised == [TypeError]
+        assert statuses == [None]  # no response, so no status
     else:
-        # No per-request security: the GET goes out once, with no Authorization header.
+        # No per-request security: the GET goes out once, with no Authorization header,
+        # and the fake's 200 carries no group info (the probe's "not LiteLLM" answer).
         assert len(recorder.requests) == 1
         assert recorder.authorizations() == [None]
+        assert fetch.raised == []
+        assert statuses == [200]
 
 
 def test_the_bearer_only_probe_still_sends_a_real_bearer(monkeypatch) -> None:
