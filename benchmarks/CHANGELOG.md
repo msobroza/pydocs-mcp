@@ -44,7 +44,8 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     probe also refuses an architecture the arm's product does not register.
   - **`arm_settings.json`, `arm.json` and the report's provenance carry the
     architecture, scaffold, guidance path and digest**, and the compare verb's
-    arm lines carry the digest. Files written before these fields still load:
+    arm lines carry the digest, which its A/A twin check also compares (two
+    arms that recorded none still pair). Files written before these fields still load:
     an old settings file reads as the pinned arm it ran, an old summary as
     "not recorded".
   - **`--reuse-baseline <arm dir>`** compares the candidate against a finished
@@ -74,7 +75,7 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     `server_events.jsonl`, logging each drop as a
     `before_after_resume_dropped_untraced_rows` event. Rows answered under
     another role, commit, model or settings digest are refused by name, never
-    restamped. `--report-only` refuses an arm that still reads `in_progress`
+    restamped. `--report-only` and `before-after-compare` refuse an arm that still reads `in_progress`
     (`HaltReason.IN_PROGRESS`). Before this, a restart wrote an `arm.json`
     holding only its own process's tasks.
   - **`TaskScaffold`** (`task_rendering.py`) names `citing` and `bare` and
