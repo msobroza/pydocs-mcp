@@ -95,6 +95,15 @@ def variants_from_args(
     return arm_variants(baseline, candidate, llm_block=llm_block, serving_turns=serving_turns)
 
 
+def overlay_flags_given(args: argparse.Namespace) -> dict[ArmRole, str]:
+    """Each role whose overlay flag was given, mapped to that flag's name."""
+    given = (
+        (ArmRole.BASELINE, _BASELINE_SETTINGS_FLAG, args.baseline_settings),
+        (ArmRole.CANDIDATE, _CANDIDATE_SETTINGS_FLAG, args.candidate_settings),
+    )
+    return {role: flag for role, flag, path in given if path is not None}
+
+
 def run_one_arm(args: argparse.Namespace, plan: MeasurementPlan, role: ArmRole) -> ArmSummary:
     """Check the arm's commit out, run it in a child process, read its summary.
 
@@ -301,6 +310,7 @@ def _spawn_arm(worktree: Path, *, arm_dir: Path, split: str, limit: int | None) 
 __all__ = (
     "add_variant_arm_arguments",
     "arm_settings_for",
+    "overlay_flags_given",
     "refuse_a_foreign_resume",
     "refuse_a_serving_change_on_resume",
     "run_one_arm",

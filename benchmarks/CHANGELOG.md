@@ -45,7 +45,10 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   - **`arm_settings.json`, `arm.json` and the report's provenance carry the
     architecture, scaffold, guidance path and digest**, and the compare verb's
     arm lines carry the digest, which its A/A twin check also compares (two
-    arms that recorded none still pair). Files written before these fields still load:
+    arms that recorded none still pair). `--report-only` re-renders each arm
+    under the variant its `arm_settings.json` recorded (an overlay flag, if
+    given, must name that digest), probes nothing, and keeps the run's
+    `plan.txt`. Files written before these fields still load:
     an old settings file reads as the pinned arm it ran, an old summary as
     "not recorded".
   - **`--reuse-baseline <arm dir>`** compares the candidate against a finished

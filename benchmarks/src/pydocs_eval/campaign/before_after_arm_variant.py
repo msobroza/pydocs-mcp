@@ -29,7 +29,7 @@ from pydocs_eval.campaign.before_after import (
     MeasurementPlanError,
     flat_settings,
 )
-from pydocs_eval.campaign.before_after_arm import ARM_ARCHITECTURE
+from pydocs_eval.campaign.before_after_arm import ARM_ARCHITECTURE, ArmSettings
 from pydocs_eval.campaign.before_after_arm_settings import (
     ARCHITECTURE_KEY,
     GUIDANCE_SECTIONS_KEY,
@@ -66,13 +66,35 @@ class ArmVariant:
     task_scaffold: TaskScaffold = DEFAULT_TASK_SCAFFOLD
     # The overlay file, or None for an arm that names none.
     source: str | None = None
+    # The digest a finished arm recorded (``--report-only``); "" = compute it here.
+    # Recorded wins: it is what the arm ran under, even if this checkout's product
+    # would now validate its harness keys differently.
+    recorded_digest: str = ""
     # Set once in ``__post_init__``: computing it validates the harness keys against
     # the product config, and a plan reads it 6-8 times.
     _digest: str = field(default="", init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "_digest", self.recorded_digest or self._computed_digest())
+
+    @classmethod
+    def from_arm_settings(cls, settings: ArmSettings, *, source: str) -> ArmVariant:
+        """The variant a finished arm ran, as its ``arm_settings.json`` recorded it."""
+        return cls(
+            max_agent_turns=settings.max_agent_turns,
+            architecture=settings.architecture,
+            llm_block=None if settings.llm_block is None else dict(settings.llm_block),
+            harness_block=dict(settings.harness_block),
+            guidance_sections_path=settings.guidance_sections_path,
+            guidance_sections=dict(settings.guidance_sections),
+            task_scaffold=settings.task_scaffold,
+            source=source,
+            recorded_digest=settings.settings_digest,
+        )
+
+    def _computed_digest(self) -> str:
         canonical = json.dumps(self._digested(), sort_keys=True, separators=(",", ":"))
-        object.__setattr__(self, "_digest", hashlib.sha256(canonical.encode("utf-8")).hexdigest())
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     @property
     def digest(self) -> str:
