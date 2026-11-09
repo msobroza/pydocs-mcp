@@ -165,8 +165,9 @@ class ArmSummary:
     guidance_sections_path: str | None = None
     settings_digest: str = ""
     # Set only on a candidate compared against a reuse forced past a serving
-    # mismatch, read from the ``serving_override.json`` sidecar beside it; left
-    # out of ``arm.json`` otherwise, so that file's bytes stay put.
+    # mismatch, read from the ``serving_override.json`` sidecar beside it. Never
+    # written into ``arm.json`` (whose bytes then stay put); an ``arm.json`` an
+    # earlier build stamped inline still loads it.
     serving_override: ServingMismatchOverride | None = None
 
     def to_dict(self) -> dict[str, object]:
@@ -235,7 +236,9 @@ def write_serving_override(arm_dir: Path, override: ServingMismatchOverride | No
     if override is None:
         path.unlink(missing_ok=True)
         return
-    path.write_text(json.dumps(asdict(override), indent=2, sort_keys=True), encoding="utf-8")
+    # Atomic like arm.json: every reader of the arm parses this file, so a
+    # truncated one would make a finished arm unreadable.
+    _write_json_atomically(path, asdict(override))
 
 
 def read_serving_override(arm_dir: Path) -> ServingMismatchOverride | None:
@@ -254,7 +257,12 @@ def write_arm_summary(out_dir: Path, summary: ArmSummary) -> Path:
     checkpoint whole rather than a truncated file that loses every row.
     """
     path = out_dir / ARM_SUMMARY_FILENAME
-    partial = path.with_name(f"{ARM_SUMMARY_FILENAME}.partial")
-    partial.write_text(json.dumps(summary.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
-    partial.replace(path)
+    _write_json_atomically(path, summary.to_dict())
     return path
+
+
+def _write_json_atomically(path: Path, payload: Mapping[str, object]) -> None:
+    """``payload`` as JSON at ``path`` through a sibling file and a rename, never truncated."""
+    partial = path.with_name(f"{path.name}.partial")
+    partial.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    partial.replace(path)

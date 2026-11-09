@@ -175,7 +175,9 @@ class ArmWorkQueue:
         the arm ``completed`` short of the plan. The QUEUED line is one attempt
         later on purpose: the ledger counts spend once per ``(cell, instance,
         attempt, state)``, so a re-run DONE at the old attempt would never reach
-        the R6 ceiling.
+        the R6 ceiling. Accepted side effect: under the runner's default retry
+        limit, an infra failure on the re-run excludes the task at once rather
+        than retrying it — it has already spent one attempt.
         """
         rowless = [
             task_id

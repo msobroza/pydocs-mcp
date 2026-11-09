@@ -380,7 +380,7 @@ def _recorded_arm_summary(out_dir: Path, role: ArmRole) -> ArmSummary:
     arm_dir = out_dir / role
     try:
         summary = read_arm_summary(arm_dir)
-    except (OSError, ValueError, KeyError) as exc:
+    except (OSError, ValueError, KeyError, TypeError) as exc:
         raise MeasurementPlanError(
             f"--report-only found no readable {ARM_SUMMARY_FILENAME} in {arm_dir} ({exc}); "
             f"it re-renders a FINISHED run and runs no arm, so it expects one under "

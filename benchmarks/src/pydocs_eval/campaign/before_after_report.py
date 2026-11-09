@@ -141,11 +141,16 @@ def _provenance_lines(
 
 
 def _forced_reuse_bullets(arms: Sequence[tuple[ArmRole, ArmMetrics]]) -> list[str]:
-    """A reuse forced past a serving mismatch, from the arm that recorded it; none is the norm."""
+    """A reuse forced past a serving mismatch, from the candidate that recorded it.
+
+    The candidate only: a reused baseline that was an earlier run's forced
+    candidate still carries that run's record, which says nothing about THIS
+    comparison. None is the norm.
+    """
     return [
         f"- serving, {role}: {arm.variant.serving_override.provenance_text()}"
         for role, arm in arms
-        if arm.variant.serving_override is not None
+        if role == ArmRole.CANDIDATE and arm.variant.serving_override is not None
     ]
 
 

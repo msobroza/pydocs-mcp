@@ -9,7 +9,10 @@ visible-gold rows read n/a where no capture could say what the model read.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from pydocs_eval.campaign.before_after import CommitUnderTest
+from pydocs_eval.campaign.before_after_arm_records import ArmVariantRecord, ServingMismatchOverride
 from pydocs_eval.campaign.before_after_measure import ArmMetrics, TaskMeasurement
 from pydocs_eval.campaign.before_after_plan_text import render_plan
 from pydocs_eval.campaign.before_after_report import render_report
@@ -180,3 +183,24 @@ def test_the_visible_rows_print_what_the_text_rendered() -> None:
     assert _row_of(report, "visible gold rate")[1] == "1 [1, 1]"
     assert _row_of(report, "tool calls to first visible gold")[1] == "2 [2, 2]"
     assert _row_of(report, "visible-hit rate per search call")[1] == "1 [1, 1]"
+
+
+# --- the forced-reuse provenance line ----------------------------------------
+
+
+def test_a_forced_reuse_is_printed_for_the_candidate_and_never_for_the_baseline() -> None:
+    """A reused baseline that was an earlier run's forced candidate carries that run's record;
+    THIS comparison forced nothing on its baseline, so the report must not say it did."""
+    override = ServingMismatchOverride(
+        reused_baseline="runs/earlier/baseline",
+        differing_keys=["endpoint"],
+        fingerprint_recorded=True,
+    )
+    forced = ArmVariantRecord(settings_digest="d" * 64, serving_override=override)
+    baseline = replace(_arm(_BASELINE, t1=0.0), variant=forced)
+    candidate = replace(_arm(_CANDIDATE, t1=0.0), variant=forced)
+
+    report = render_report(_plan(("t1",)), [baseline, candidate])
+
+    assert "- serving, baseline:" not in report
+    assert "- serving, candidate: reuse of `runs/earlier/baseline` forced" in report
