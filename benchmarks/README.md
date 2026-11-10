@@ -426,6 +426,99 @@ budget). Count and total rows are whole-arm figures, and a `(p90)` row is each
 arm's 90th percentile over the tasks that defined it; none of them carries a test. Small splits are exactly where a raw difference misleads, so
 read the interval before the point estimate.
 
+#### The A/A noise band: how large a difference is noise
+
+A before/after difference is a finding only when it is larger than what the
+same run shows with nothing changed. To see that, run one commit against
+itself — the same command, the same flags, the same sha twice:
+
+```bash
+python -m pydocs_eval.campaign before-after \
+    --baseline <git sha> --candidate <the same git sha> \
+    --config <ask-your-docs serving YAML> \
+    --llm-block <ask_your_docs.llm block YAML> \
+    --split repoqa-qa/small_dev \
+    --workspace ~/pydocs-index \
+    --model <chat model>
+```
+
+The two arms of this **A/A pair** share the commit, the split, the model, the
+settings and the sampling seed, and they still differ: the model samples at
+temperature 1.0, and a shared seed does not make two arms take the same path.
+The first arm (**A1**, written under `baseline/`) and its replicate (**A2**,
+under `candidate/`) therefore differ by run-to-run noise only — plus whatever
+the fixed order adds. A1 always runs first, just as the baseline does in every
+before/after run, so a band measured this way already includes any effect of
+running second.
+
+**One pair: the correctness band.** `before-after-compare` reads one A/A pair
+through `--aa-replicate` and turns it into the correctness band its acceptance
+rule uses: the larger of the pair's `needle cited` difference and one task (and
+the same for gold-site coverage when the tasks have several gold sites). To
+print that band for an A/A pair alone, pass the replicate as the variant too,
+and ignore the verdict line — a replicate judged against its own pair means
+nothing:
+
+```bash
+python -m pydocs_eval.campaign before-after-compare \
+    --baseline runs/aa/baseline --aa-replicate runs/aa/candidate \
+    --variant runs/aa/candidate --split repoqa-qa/small_dev
+```
+
+**Several pairs: how much the noise itself moves.** One pair is one draw of the
+noise, so a band read from it can be too narrow or too wide by chance. Running
+the pair once per sampling seed — one before/after run per seed, A1 first each
+time — shows the spread. The tasks are the same in every seed, so three seeds of
+20 tasks are not 60 independent tasks: pairs are matched by task within a seed,
+and anything resampled is resampled by task.
+
+- **Per seed:** Δ = A2 − A1 over the tasks both arms defined — the `delta`
+  column of that seed's own report, read with the report's own definition of
+  every row.
+- **Single-seed band:** the largest per-seed |Δ| (at least one task for a row
+  whose value per task is 0 or 1 — both recall@5 rows, `needle cited`, the
+  budget-exhausted rate and the gold-reached rate, since every needle of this
+  split is a single site — as the correctness band does). Read a before/after difference from ONE
+  seed against it. With k seeds, one more A/A seed would show a larger
+  difference than all k about once in k + 1 runs — once in four with three
+  seeds — so this is a rough band, not a 95% one.
+- **Pooled:** each task's mean over the complete seeds, per arm; the pooled Δ is
+  the mean of the per-task differences, and its interval is the 2.5th to 97.5th
+  percentile of 1000 resamples of the tasks (seed 0) —
+  `paired_bootstrap_ci(a2_task_means, a1_task_means)` from
+  `pydocs_eval.metrics.aggregate`. Each task counts once, however many seeds
+  it was matched in, and a resample draws whole tasks, so a task's seed pairs
+  stay together. Read a before/after difference pooled over
+  the SAME number of seeds against it. With 20 tasks and a handful of seeds its
+  real coverage is unknown: it is an exploratory interval, not a
+  false-positive-rate guarantee. It is centred on the pair's own pooled
+  difference, which carries any effect of running second. An interval that
+  excludes zero is reported as a possible effect of order or time of day, not
+  as a failure; with ten rows, one such row is unsurprising by chance alone.
+
+Undefined values stay undefined, as in the report: a task that never searched
+has no first-search recall in that arm and drops out of that seed's pairs. A
+row with no matched task in any complete seed reads `n/a`, never `0`. A
+seed whose two arms did not both finish all of their tasks — a task that ran
+out of turns still finishes — is left out of the band entirely.
+
+No complete A/A pair of this setup has been measured yet; until one is, the only band is the correctness band of a pair you run yourself.
+
+**What this band does not say.**
+
+- It decides nothing. The acceptance rule of `before-after-compare` still reads
+  the correctness band of the one A/A pair it is given.
+- It is no false-positive rate: read as a threshold, a single-seed band from
+  three seeds flags a change that did nothing about once in four runs, and the
+  pooled interval's real coverage is unknown.
+- It holds for this split, model, endpoint, sampling settings and turn budget,
+  and for these 20 tasks. A change that alters how the agent behaves can alter
+  the noise as well.
+- Arm order is fixed, so the noise and any effect of running second are not
+  separated; the endpoint's prompt cache can make the second arm cheaper or
+  faster; the seeds ran at different times of day on one endpoint, and wall
+  time includes any pause of the machine that ran the arms.
+
 ## Datasets
 
 One subsection per benchmark, each answering the same four questions — **what it
