@@ -173,3 +173,21 @@ _Avoid_: job file, launch config, run config (the trajectory run-config lockfile
 **Bench VM**:
 The ephemeral cloud machine that runs one run spec's run and deletes itself when the run ends, is preempted or reaches its runtime cap.
 _Avoid_: remote host (ADR 0014's long-lived machine), worker, runner
+
+### Measuring a change
+
+**Arm**:
+One of the two halves of a paired measurement: every task of a split run once under one commit and one set of run settings.
+_Avoid_: leg, side, run (alone)
+
+**A/A pair**:
+Two arms of the same commit with identical settings, run one after the other (A1 first, then its replicate A2), so that any difference between them is noise.
+_Avoid_: self-comparison, null run, dummy comparison
+
+**Noise band**:
+How far a metric moves between the two arms of A/A pairs; a before/after difference inside it cannot be told apart from run-to-run variation.
+_Avoid_: confidence interval, error bar, tolerance
+
+**Correctness band**:
+The noise band the acceptance rule reads for its correctness guards, taken from a single A/A pair: the larger of that pair's difference and one task.
+_Avoid_: margin, threshold, A/A band (alone)

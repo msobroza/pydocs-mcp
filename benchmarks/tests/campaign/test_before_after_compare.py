@@ -178,6 +178,23 @@ def test_the_band_widens_to_the_aa_pairs_difference(
     assert _verdict_of(report, careless) == "PASS (Q10)"
 
 
+def test_an_aa_pair_alone_prints_its_band_whatever_the_verdict_says(
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The README's one-pair invocation: the replicate is also the only variant.
+
+    The verdict compares a commit with itself and means nothing; the band line
+    is what the invocation is run for.
+    """
+    baseline = _write_arm(tmp_path, "baseline", _rows(cited=8))
+    replicate = _write_arm(tmp_path, "replicate", _rows(cited=7))
+
+    code, report = _run(capsys, baseline, replicate, replicate=replicate)
+
+    assert code in (0, 1)
+    assert "needle cited band 0.100 (the larger of the A/A difference and one task)" in report
+
+
 def test_a_replicate_without_stored_answers_leaves_no_band_and_no_verdict(
     tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
 ) -> None:
