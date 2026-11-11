@@ -507,16 +507,17 @@ No complete A/A pair of this setup has been measured yet; until one is, the only
 **What this band does not say.**
 
 - It decides nothing. The acceptance rule of `before-after-compare` still reads
-  the correctness band of the one A/A pair it is given.
+  the correctness band of the one A/A pair it is given, and the band is no
+  retroactive verdict on any earlier before/after measurement.
 - It is no false-positive rate: read as a threshold, a single-seed band from
   three seeds flags a change that did nothing about once in four runs, and the
   pooled interval's real coverage is unknown.
-- It holds for this split, model, endpoint, sampling settings and turn budget,
-  and for these 20 tasks. A change that alters how the agent behaves can alter
-  the noise as well.
+- It holds only for the split, model, endpoint, sampling settings, turn budget
+  and tasks it was measured on. A change that alters how the agent behaves can
+  alter the noise as well.
 - Arm order is fixed, so the noise and any effect of running second are not
   separated; the endpoint's prompt cache can make the second arm cheaper or
-  faster; the seeds ran at different times of day on one endpoint, and wall
+  faster; seeds run at different times of day on one endpoint, and wall
   time includes any pause of the machine that ran the arms.
 
 ## Datasets
