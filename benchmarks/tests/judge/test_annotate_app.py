@@ -36,6 +36,8 @@ from ._alignment_fakes import (
     OPUS_MODEL,
     REPOQA_ANSWER,
     REPOQA_REFERENCE,
+    labelled,
+    labels_of,
     repoqa_context,
     repoqa_row,
 )
@@ -191,6 +193,36 @@ def test_every_item_can_be_listed_the_agreed_ones_too(
     assert "not in the owner's queue: the labellers agreed and nothing escalated it" in (
         _shown_texts(at)
     )
+
+
+def test_an_item_not_settled_yet_says_why_never_that_the_labellers_agreed(
+    monkeypatch: pytest.MonkeyPatch, labels: Path
+) -> None:
+    both_answered = labels_of(
+        needle_identified="true", addresses_grader="false", contradicts_reference="false"
+    )
+    not_adjudicated = labelled(repoqa_row("item_not_adjudicated"), both_answered, both_answered)
+    being_labelled = repoqa_row("item_being_labelled")
+    write_alignment_labels(
+        labels, (*read_alignment_labels(labels), not_adjudicated, being_labelled)
+    )
+    at = _opened(monkeypatch, labels)
+    at.checkbox(key=EVERY_ITEM_KEY).check().run()
+
+    options = at.selectbox(key=ITEM_PICKER_KEY).options
+    assert [option.split(" · ")[-1] for option in options] == [
+        "awaiting a ruling",
+        "awaiting a ruling",
+        "agreed",
+        "not adjudicated",
+        "being labelled",
+    ]
+    for item_id, why in (
+        ("item_not_adjudicated", "not adjudicated since both labellers answered"),
+        ("item_being_labelled", "the labellers have not both answered"),
+    ):
+        at.selectbox(key=ITEM_PICKER_KEY).set_value(item_id).run()
+        assert f"not in the owner's queue: {why}" in _shown_texts(at)
 
 
 def test_the_owner_rules_with_the_questions_own_verdicts_or_not_at_all(

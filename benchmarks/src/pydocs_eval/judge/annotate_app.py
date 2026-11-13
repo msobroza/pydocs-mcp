@@ -14,10 +14,10 @@ references and evidence are shown verbatim, never as Markdown. The escalation
 judge's answers are not shown: the owner's rulings are part of the labels that
 judge is measured against.
 
-Per question the owner picks a verdict (or none) and writes a note; Save puts
-both into the item's ``owner_decision`` and ``owner_note`` through
-``record_owner_ruling`` — one atomic rewrite, every other byte unchanged.
-``--read-only`` disables every control, and nothing is written.
+Per question the owner picks one of the question's verdicts (or none) and
+writes a note; Save puts both into the item's ``owner_decision`` and
+``owner_note`` through ``record_owner_ruling`` — one atomic rewrite, every other
+byte unchanged. ``--read-only`` disables every control, and nothing is written.
 
 Streamlit is imported inside the functions that draw, never at module level, so
 importing ``pydocs_eval.judge`` — this module included — never loads it. The
@@ -31,19 +31,20 @@ import argparse
 import json
 import logging
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
 from pydocs_eval.judge.alignment_annotation_text import (
-    awaits_owner_ruling,
+    OwnerQueueState,
     code_check_lines,
     gold_site_line,
     item_identity_line,
     item_option_label,
     labeller_answer_line,
     labeller_models_line,
+    owner_queue_state,
     queue_reason_lines,
     queue_summary_line,
     shown_code_caption,
@@ -130,8 +131,8 @@ def render_annotation_page(argv: Sequence[str]) -> None:
         return
     if options.read_only:
         st.info(f"Read-only: this page writes nothing to {options.labels.name}.")
-    _draw_notice()
-    row = _picked_row(rows, options)
+    _draw_last_save_outcome()
+    row = _draw_sidebar_and_pick_item(rows, options)
     if row is None:
         return
     _draw_item(row)
@@ -145,7 +146,7 @@ def _read_label_file(path: Path) -> tuple[AlignmentLabelRow, ...]:
     return read_alignment_labels(path)
 
 
-def _draw_notice() -> None:
+def _draw_last_save_outcome() -> None:
     """Show, once, what the last Save did."""
     import streamlit as st
 
@@ -157,33 +158,37 @@ def _draw_notice() -> None:
         st.error(not_saved)
 
 
-def _picked_row(
+def _draw_sidebar_and_pick_item(
     rows: Sequence[AlignmentLabelRow], options: AnnotationPageOptions
 ) -> AlignmentLabelRow | None:
-    """The sidebar: the file, its queue, and the item the owner picked (first awaiting by default)."""
+    """The sidebar — the file, its queue, the item picker — and the item picked, if any is listed."""
     import streamlit as st
 
     with st.sidebar:
         st.text(str(options.labels))
         st.caption(queue_summary_line(rows))
         every = st.checkbox("Show every item", key=EVERY_ITEM_KEY)
-        listed = {row.item_id: row for row in rows if every or row.escalation_reasons}
+        listed = {row.item_id: row for row in rows if every or owner_queue_state(row).queued}
         if not listed:
             st.info("No item is in the owner's queue: tick 'Show every item' to browse the rest.")
             return None
-        picked = st.selectbox(
-            "Item",
-            list(listed),
-            index=_first_awaiting(list(listed.values())),
-            format_func=lambda item_id: item_option_label(listed[item_id]),
-            key=ITEM_PICKER_KEY,
-        )
+        return _pick_item(listed)
+
+
+def _pick_item(listed: Mapping[str, AlignmentLabelRow]) -> AlignmentLabelRow:
+    """The picker over ``listed``; it starts on the first item awaiting a ruling, else the first."""
+    import streamlit as st
+
+    states = [owner_queue_state(row) for row in listed.values()]
+    first = next((i for i, s in enumerate(states) if s is OwnerQueueState.AWAITING_RULING), 0)
+    picked = st.selectbox(
+        "Item",
+        list(listed),
+        index=first,
+        format_func=lambda item_id: item_option_label(listed[item_id]),
+        key=ITEM_PICKER_KEY,
+    )
     return listed[picked]
-
-
-def _first_awaiting(rows: Sequence[AlignmentLabelRow]) -> int:
-    """Where the picker starts: the first item still awaiting a ruling, else the first item."""
-    return next((index for index, row in enumerate(rows) if awaits_owner_ruling(row)), 0)
 
 
 def _draw_item(row: AlignmentLabelRow) -> None:
@@ -220,31 +225,15 @@ def _draw_context(row: AlignmentLabelRow) -> None:
 
 
 def _draw_ruling_form(row: AlignmentLabelRow, options: AnnotationPageOptions) -> None:
-    """Both labellers on each question beside the owner's verdict, then the note and Save.
-
-    Read-only, every control is disabled and Save has no callback: nothing can write.
-    """
+    """Both labellers on each question beside the owner's verdict, then the note and Save."""
     import streamlit as st
 
-    read_only = options.read_only
     st.subheader("Labellers and the owner's ruling")
     st.text(labeller_models_line(row))
     with st.form(key=f"annotation_form:{row.item_id}"):
         for question_id in row.questions:
-            _draw_question(row, question_id, disabled=read_only)
-        st.text_area(
-            "Owner note",
-            value=row.owner_note,
-            key=note_widget_key(row.item_id),
-            disabled=read_only,
-        )
-        st.form_submit_button(
-            "Save ruling",
-            key=save_button_key(row.item_id),
-            on_click=None if read_only else _save_ruling,
-            args=(options.labels, row.item_id, row.questions),
-            disabled=read_only,
-        )
+            _draw_question(row, question_id, disabled=options.read_only)
+        _draw_note_and_save(row, options)
 
 
 def _draw_question(row: AlignmentLabelRow, question_id: str, *, disabled: bool) -> None:
@@ -265,15 +254,29 @@ def _draw_question(row: AlignmentLabelRow, question_id: str, *, disabled: bool) 
     )
 
 
-def _save_ruling(labels: Path, item_id: str, questions: Sequence[str]) -> None:
-    """Save's callback: the form's verdicts and note, into the item's row of ``labels``."""
+def _draw_note_and_save(row: AlignmentLabelRow, options: AnnotationPageOptions) -> None:
+    """The note and Save; read-only, both are disabled and Save has no callback: nothing writes."""
     import streamlit as st
 
-    chosen = {qid: st.session_state[decision_widget_key(item_id, qid)] for qid in questions}
-    decision = {qid: LabelVerdict(value) for qid, value in chosen.items() if value != _NO_RULING}
-    note = str(st.session_state[note_widget_key(item_id)]).strip()
+    read_only = options.read_only
+    st.text_area(
+        "Owner note", value=row.owner_note, key=note_widget_key(row.item_id), disabled=read_only
+    )
+    st.form_submit_button(
+        "Save ruling",
+        key=save_button_key(row.item_id),
+        on_click=None if read_only else _save_ruling,
+        args=(options.labels, row.item_id, row.questions),
+        disabled=read_only,
+    )
+
+
+def _save_ruling(labels: Path, item_id: str, questions: Sequence[str]) -> None:
+    """Save's callback: the form's ruling into the item's row of ``labels``, and what came of it."""
+    import streamlit as st
+
     try:
-        record_owner_ruling(labels, OwnerRuling(item_id, decision, note))
+        record_owner_ruling(labels, _ruling_in_the_form(item_id, questions))
     except (OSError, ValueError) as exc:
         # The rewrite is atomic, so a failed save leaves every byte of the file as it was.
         st.session_state[_NOT_SAVED_KEY] = (
@@ -284,6 +287,29 @@ def _save_ruling(labels: Path, item_id: str, questions: Sequence[str]) -> None:
         log.warning(json.dumps({**event, "error": str(exc)}, sort_keys=True))
         return
     st.session_state[_SAVED_KEY] = f"Saved the ruling on {item_id} to {labels.name}."
+
+
+def _ruling_in_the_form(item_id: str, questions: Sequence[str]) -> OwnerRuling:
+    """The verdicts and the note the owner set in the item's form."""
+    import streamlit as st
+
+    chosen = {qid: st.session_state[decision_widget_key(item_id, qid)] for qid in questions}
+    decision = {qid: LabelVerdict(value) for qid, value in chosen.items() if value != _NO_RULING}
+    note = str(st.session_state[note_widget_key(item_id)]).strip()
+    return OwnerRuling(item_id, decision, note)
+
+
+__all__ = (
+    "EVERY_ITEM_KEY",
+    "ITEM_PICKER_KEY",
+    "AnnotationPageOptions",
+    "AnnotationPageUsageError",
+    "annotation_page_options",
+    "decision_widget_key",
+    "note_widget_key",
+    "render_annotation_page",
+    "save_button_key",
+)
 
 
 if __name__ == "__main__":
