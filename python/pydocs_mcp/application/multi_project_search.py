@@ -39,15 +39,16 @@ from pydocs_mcp.application.formatting import (
 )
 from pydocs_mcp.application.freshness import NullFreshnessProbe
 from pydocs_mcp.application.lookup_service import LookupBody, LookupService
-from pydocs_mcp.application.mcp_errors import (
-    InvalidArgumentError,
-    NotFoundError,
-    ServiceUnavailableError,
-)
+from pydocs_mcp.application.mcp_errors import InvalidArgumentError, NotFoundError
 from pydocs_mcp.application.mcp_inputs import LookupInput, SearchInput, clamp_search_limit
 from pydocs_mcp.application.overview_service import OverviewService
 from pydocs_mcp.application.pointer_grammar import strip_pointers
 from pydocs_mcp.application.protocols import DecisionNavigator
+from pydocs_mcp.application.search_hit_facts import (
+    SearchHitFacts,
+    SearchResponseTrees,
+    members_line_facts,
+)
 from pydocs_mcp.application.search_limit import cap_search_rows, record_matches_not_shown
 from pydocs_mcp.application.search_query import (
     build_search_query,
@@ -72,7 +73,11 @@ from pydocs_mcp.models import (
 from pydocs_mcp.multirepo import LoadedProject, select_project
 from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.retrieval.config import TargetResolutionConfig
-from pydocs_mcp.retrieval.config.models import _DEFAULT_SEARCH_BUDGET_TOKENS
+from pydocs_mcp.retrieval.config.models import (
+    _DEFAULT_SEARCH_BUDGET_TOKENS,
+    _DEFAULT_SEARCH_MEMBERS_LINE,
+    _DEFAULT_SYMBOL_CARD_CHILD_CAP,
+)
 
 if TYPE_CHECKING:
     from pydocs_mcp.application.reference_service import ContextNode
@@ -178,6 +183,8 @@ async def render_single_search(
     budget_tokens: int,
     pointers: PointerTableConfig,
     branch: str = "",
+    members_line: bool = _DEFAULT_SEARCH_MEMBERS_LINE,
+    card_child_cap: int = _DEFAULT_SYMBOL_CARD_CHILD_CAP,
 ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
     """Single-database search — dispatch by ``kind``.
 
@@ -190,7 +197,13 @@ async def render_single_search(
 
     ``branch`` is the branch the search pins (``search_branch_pin``, #312);
     ``""`` searches the bundle as before. ``svc`` arrives bound to it
-    (``services_reading_branch``), so member rows take its spans (#313).
+    (``services_reading_branch``), so member rows take its spans (#313) and
+    the Members lines its trees.
+
+    ``members_line`` (``search.output.members_line``, issue #393) puts a
+    ``Members (N): …`` line on each class or module hit, naming at most
+    ``card_child_cap`` children (``symbol_card.child_cap``). Off, no tree is
+    read for a chunk hit and the text is what it was before the knob.
     """
     if payload.kind == "decision":
         # Delegate to the DecisionNavigator so decision rendering has ONE
@@ -205,27 +218,47 @@ async def render_single_search(
         holds_dependency_decisions=svc.holds_dependency_decisions,
     )
     limit = clamp_search_limit(payload.limit)
+    # One response, one tree cache: the Members lines and the member rows'
+    # spans read each module of this bundle at most once between them (#393).
+    trees = SearchResponseTrees()
     if payload.kind == "docs":
         response = await svc.docs.search(query)
         rows = _ranked_chunks(response, limit)
-        body = format_chunks_markdown_within_budget(rows, budget_tokens, pointers=pointers)
+        facts = await _members_lines(svc, rows, trees, members_line, card_child_cap)
+        body = format_chunks_markdown_within_budget(
+            rows, budget_tokens, pointers=pointers, facts=facts
+        )
         return body or _EMPTY_DOCS_MSG, tuple(_chunk_item(c) for c in rows), {}
     if payload.kind == "api":
         response = await svc.api.search(query)
         members = _ranked_members(response, limit)
         body = format_members_markdown_within_budget(members, budget_tokens, pointers=pointers)
         owned = [(svc, m) for m in members]
-        return body or _EMPTY_API_MSG, await _member_search_items(owned), {}
+        return body or _EMPTY_API_MSG, await _member_search_items(owned, trees), {}
     chunk_resp, member_resp = await asyncio.gather(svc.docs.search(query), svc.api.search(query))
     rows = _ranked_chunks(chunk_resp, limit)
     members = _ranked_members(member_resp, limit)
+    facts = await _members_lines(svc, rows, trees, members_line, card_child_cap)
     parts = [
-        format_chunks_markdown_within_budget(rows, budget_tokens, pointers=pointers),
+        format_chunks_markdown_within_budget(rows, budget_tokens, pointers=pointers, facts=facts),
         format_members_markdown_within_budget(members, budget_tokens, pointers=pointers),
     ]
     body = "\n\n".join(p for p in parts if p) or _EMPTY_DOCS_MSG
-    member_items = await _member_search_items([(svc, m) for m in members])
+    member_items = await _member_search_items([(svc, m) for m in members], trees)
     return body, tuple(_chunk_item(c) for c in rows) + member_items, {}
+
+
+async def _members_lines(
+    svc: ProjectServices,
+    rows: tuple[Chunk, ...],
+    trees: SearchResponseTrees,
+    members_line: bool,
+    card_child_cap: int,
+) -> Mapping[int, SearchHitFacts]:
+    """One bundle's hits' Members lines — none, and no tree read, while the knob is off."""
+    if not members_line:
+        return {}
+    return await members_line_facts([(svc, c) for c in rows], trees, child_cap=card_child_cap)
 
 
 async def _search_decisions_in_scope(
@@ -318,18 +351,20 @@ def _member_item(member: ModuleMember, node: DocumentNode | None) -> dict[str, A
 
 async def _member_search_items(
     owned: Sequence[tuple[ProjectServices, ModuleMember]],
+    trees: SearchResponseTrees,
 ) -> tuple[dict[str, Any], ...]:
     """§3.2 member rows with best-effort spans via each owner's document tree.
 
-    Trees are fetched once per ``(service, package, module)`` and the member's
-    node is looked up by its ``module.name`` qualified name; any miss —
-    no tree navigator, no persisted tree, no matching node — degrades that row
-    to null path/span (the contract's best-effort rule, plan Task 5).
+    Trees come from the response's cache — read once per ``(bundle, package,
+    module)``, shared with the Members lines (#393) — and the member's node is
+    looked up by its ``module.name`` qualified name; any miss — no tree
+    navigator, no persisted tree (a ``NullTreeService`` deployment included),
+    no matching node — degrades that row to null path/span (the contract's
+    best-effort rule, plan Task 5).
     """
-    cache: dict[tuple[int, str, str], DocumentNode | None] = {}
     items: list[dict[str, Any]] = []
     for svc, member in owned:
-        node = await _resolve_member_node(svc, member, cache)
+        node = await _resolve_member_node(svc, member, trees)
         items.append(_member_item(member, node))
     return tuple(items)
 
@@ -337,31 +372,16 @@ async def _member_search_items(
 async def _resolve_member_node(
     svc: ProjectServices,
     member: ModuleMember,
-    cache: dict[tuple[int, str, str], DocumentNode | None],
+    trees: SearchResponseTrees,
 ) -> DocumentNode | None:
-    """Find the member's defining tree node through its project's navigator.
-
-    ``getattr`` guard: ``svc.lookup`` is typed :class:`LookupService` (which
-    always carries ``tree_svc``), but test doubles duck-type the lookup seam —
-    span resolution is advisory, so a navigator-less lookup degrades to None
-    instead of demanding the full LookupService surface.
-    """
-    navigator = getattr(svc.lookup, "tree_svc", None)
+    """Find the member's defining tree node through its project's navigator."""
     md = member.metadata
     package = str(md.get(ModuleMemberFilterField.PACKAGE.value) or "")
     module = str(md.get(ModuleMemberFilterField.MODULE.value) or "")
     name = str(md.get(ModuleMemberFilterField.NAME.value) or "")
-    if navigator is None or not (module and name):
+    if not (module and name):
         return None
-    key = (id(svc), package, module)
-    if key not in cache:
-        try:
-            cache[key] = await navigator.get_tree(package, module)
-        except ServiceUnavailableError:
-            # NullTreeService deployment (no tree index): spans are advisory
-            # on search rows — degrade to null rather than failing the search.
-            cache[key] = None
-    tree = cache[key]
+    tree = await trees.tree(svc, package, module)
     return tree.find_node_by_qualified_name(f"{module}.{name}") if tree is not None else None
 
 
@@ -426,6 +446,13 @@ class MultiProjectSearch:
     # both must read the same rows or a multi-repo hit would offer different
     # follow-ups than a single-repo one.
     pointers: PointerTableConfig = field(default_factory=PointerTableConfig)
+    # Whether a class or module hit names its children under its header
+    # (``search.output.members_line``, issue #393), and how many it names
+    # (``symbol_card.child_cap``, so a hit names what its card names). The
+    # composition root threads both; BOTH paths read them, for the same reason
+    # as the table above.
+    members_line: bool = _DEFAULT_SEARCH_MEMBERS_LINE
+    card_child_cap: int = _DEFAULT_SYMBOL_CARD_CHILD_CAP
 
     async def search(self, payload: SearchInput) -> str:
         if self.envelope is not None:
@@ -473,6 +500,8 @@ class MultiProjectSearch:
             for s, pin in zip(self.services, pins, strict=True)
         )
         limit = clamp_search_limit(payload.limit)
+        # One response, one tree cache, shared by every bundle's reads (#393).
+        trees = SearchResponseTrees()
         parts: list[str] = []
         items: list[dict[str, Any]] = []
         if payload.kind in ("docs", "any"):
@@ -483,7 +512,7 @@ class MultiProjectSearch:
             text, owned_members = await self._union_api(queries, limit)
             parts.append(text)
             owners = owners_on_their_pins(owned_members, self.services, pins)
-            items.extend(await _member_search_items(owners))
+            items.extend(await _member_search_items(owners, trees))
         parts = [p for p in parts if p]
         return ("\n\n".join(parts) if parts else _EMPTY_DOCS_MSG), tuple(items), {}
 
@@ -494,7 +523,13 @@ class MultiProjectSearch:
         branch = await branch_pins.pin_of(svc)
         bound = services_reading_branch(svc, branch or None)
         return await render_single_search(
-            payload, bound, budget_tokens=self.budget_tokens, pointers=self.pointers, branch=branch
+            payload,
+            bound,
+            budget_tokens=self.budget_tokens,
+            pointers=self.pointers,
+            branch=branch,
+            members_line=self.members_line,
+            card_child_cap=self.card_child_cap,
         )
 
     async def _union_docs(
