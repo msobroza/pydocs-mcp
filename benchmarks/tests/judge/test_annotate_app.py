@@ -99,19 +99,26 @@ def test_the_page_shows_the_owner_the_item_both_labellers_and_the_code_check(
     at = _opened(monkeypatch, labels)
 
     shown = _shown_texts(at)
-    assert "Find the function that returns the estimator's parameters as a dict." in shown
-    assert "sklearn/base.py · BaseEstimator.get_params" in shown
-    assert REPOQA_REFERENCE in shown
-    assert REPOQA_ANSWER in shown
+    verbatim = [code.value for code in at.code]  # never rendered as Markdown
+    plain = [text.value for text in at.text]
+    assert "Find the function that returns the estimator's parameters as a dict." in verbatim
+    assert REPOQA_REFERENCE in verbatim
+    assert REPOQA_ANSWER in verbatim
+    assert "sklearn/base.py · BaseEstimator.get_params" in plain
+    assert str(labels) in plain
+    assert (
+        "repoqa-qa · repoqa-qa/repo_qa/sklearn::get_params · pilot · stratum borderline"
+        " · arm baseline@60d5a00a · trajectory traj-1"
+    ) in plain
     for question_id in _REPOQA_QUESTIONS:
         for slot in LabellerSlot:
             evidence = evidence_line(slot, DISAGREED_ITEM, question_id)
             assert [text for text in shown if text.endswith(f" — {evidence}")], evidence
     astra_says = evidence_line(LabellerSlot.ASTRA, DISAGREED_ITEM, "needle_identified")
     opus_says = evidence_line(LabellerSlot.OPUS, DISAGREED_ITEM, "needle_identified")
-    assert f"Astra: true (high) — {astra_says}" in shown
-    assert f"Opus: false (high) — {opus_says}" in shown
-    assert f"Astra: {ASTRA_MODEL} · Opus: {OPUS_MODEL}" in shown
+    assert f"Astra: true (high) — {astra_says}" in plain
+    assert f"Opus: false (high) — {opus_says}" in plain
+    assert f"Astra: {ASTRA_MODEL} · Opus: {OPUS_MODEL}" in plain
     assert {"needle cited: yes", "gold-site coverage: 100%", "needle_identified: yes"} <= set(shown)
     assert "disagreement on needle_identified" in shown
 

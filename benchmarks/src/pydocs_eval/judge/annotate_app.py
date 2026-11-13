@@ -168,7 +168,7 @@ def _picked_row(
     import streamlit as st
 
     with st.sidebar:
-        st.caption(str(options.labels))
+        st.text(str(options.labels))
         st.caption(queue_summary_line(rows))
         every = st.checkbox("Show every item", key=EVERY_ITEM_KEY)
         listed = {row.item_id: row for row in rows if every or row.escalation_reasons}
@@ -194,7 +194,7 @@ def _draw_item(row: AlignmentLabelRow) -> None:
     import streamlit as st
 
     st.header(f"Item {row.item_id}")
-    st.caption(item_identity_line(row))
+    st.text(item_identity_line(row))
     st.subheader("Why it is in the owner's queue")
     for line in queue_reason_lines(row):
         st.text(line)
@@ -232,7 +232,7 @@ def _draw_ruling_form(row: AlignmentLabelRow, options: AnnotationPageOptions) ->
 
     read_only = options.read_only
     st.subheader("Labellers and the owner's ruling")
-    st.caption(labeller_models_line(row))
+    st.text(labeller_models_line(row))
     with st.form(key=f"annotation_form:{row.item_id}"):
         for question_id in row.questions:
             _draw_question(row, question_id, disabled=read_only)
