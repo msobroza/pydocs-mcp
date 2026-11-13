@@ -83,6 +83,30 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     swe-qa-questions item, refuse to run until the swe-qa-questions slices land
     (`SWE_QA_QUESTION_SLICES`). (#381)
 
+- **The alignment annotation page** (`pydocs_eval.judge.annotate_app`;
+  `python -m pydocs_eval.campaign annotate-alignment --labels FILE [--read-only]`).
+  The owner rules on the alignment items the two labellers did not settle in a small
+  Streamlit page. Streamlit comes with the `[ask]` extra and is imported only while
+  the page draws, so `import pydocs_eval.judge` never loads it.
+  - **It opens one label file** and lists the owner's queue (every item with an
+    escalation reason, or every item on request) with how many items still await a
+    ruling, counted the way `report-alignment` counts them. For each item it shows the
+    question, the gold and the code at it, the reference answer and the agent answer
+    verbatim, both labellers' verdicts with their confidence and evidence lines, the
+    code check, and why the item is in the queue.
+  - **Only the owner's fields are written back.** A verdict per question (true/false,
+    or a level for `completeness`; or none) and a free-text note go into
+    `owner_decision` and `owner_note` through one atomic rewrite of the file. The file
+    is read again when Save is pressed, so rows a labelling run wrote in the meantime
+    are kept, and every other byte stays as it was. A ruling on an item or a question
+    the file does not hold, or with a verdict the question cannot take, is refused,
+    `undecided` included: the audit would count it as the labellers being wrong. A
+    failed save says so and leaves the file as it was; a file the page cannot open
+    (missing, a line the reader refuses, a hand-edited owner verdict that does not fit)
+    is named, in the terminal by `annotate-alignment` and on the page.
+  - **`--read-only`** opens the file for review: every ruling control is disabled and
+    nothing is written. (#382)
+
 - **Each before/after arm re-indexes its task bundles under its own product
   before serving** (`campaign/before_after_index_step.py`). Both arms share one
   bundle per corpus, the bundle key carries no chunk-tree rule, and the serve
@@ -882,6 +906,13 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Fixed
 
+- **A failed atomic write no longer leaves its temporary file behind.**
+  `write_text_atomically` writes to a temporary file beside the target and swaps
+  it in; when the write or the swap failed, the target kept its old text but the
+  temporary file stayed. The vendored alignment label files live in the source
+  tree, so a failed save on the annotation page would have left an untracked
+  `*.tmp` beside them. Any failure now removes the temporary file before the
+  error is raised. (#382)
 - **A seed-on arm seeds the task's question, not the scaffolded prompt.**
   `sample_row_for_task` now carries the task's bare query in an optional
   `question` field beside `rendered_prompt` (the required keys are unchanged),
