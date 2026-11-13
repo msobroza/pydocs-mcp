@@ -2,12 +2,22 @@
 
 Launch it on one label file (Streamlit comes with the eval suite's ``[ask]`` extra)::
 
-    streamlit run benchmarks/src/pydocs_eval/judge/annotate_app.py -- LABELS
+    python -m pydocs_eval.campaign annotate-alignment --labels LABELS [--read-only]
+    # the same page, started by hand:
+    streamlit run benchmarks/src/pydocs_eval/judge/annotate_app.py -- LABELS [--read-only]
 
-It shows the owner's queue — every item with an escalation reason — one item at
-a time: the question, the gold and the code at it, the reference answer, the
-agent's answer, both labellers' verdicts with their evidence lines, the code
-check, and why the item is in the queue.
+It shows the owner's queue — every item with an escalation reason, or every item
+on request — one item at a time: the question, the gold and the code at it, the
+reference answer, the agent's answer, both labellers' verdicts with their
+evidence lines, the code check, and why the item is in the queue. Answers,
+references and evidence are shown verbatim, never as Markdown. The escalation
+judge's answers are not shown: the owner's rulings are part of the labels that
+judge is measured against.
+
+Per question the owner picks a verdict (or none) and writes a note; Save puts
+both into the item's ``owner_decision`` and ``owner_note`` through
+``record_owner_ruling`` — one atomic rewrite, every other byte unchanged.
+``--read-only`` disables every control, and nothing is written.
 
 Streamlit is imported inside the functions that draw, never at module level, so
 importing ``pydocs_eval.judge`` — this module included — never loads it. The
@@ -29,11 +39,12 @@ from typing import NoReturn
 from pydocs_eval.judge.alignment_annotation_text import (
     awaits_owner_ruling,
     code_check_lines,
-    escalation_reason_line,
     gold_site_line,
     item_identity_line,
     item_option_label,
     labeller_answer_line,
+    labeller_models_line,
+    queue_reason_lines,
     queue_summary_line,
     shown_code_caption,
 )
@@ -185,8 +196,8 @@ def _draw_item(row: AlignmentLabelRow) -> None:
     st.header(f"Item {row.item_id}")
     st.caption(item_identity_line(row))
     st.subheader("Why it is in the owner's queue")
-    for reason in row.escalation_reasons:
-        st.text(escalation_reason_line(reason))
+    for line in queue_reason_lines(row):
+        st.text(line)
     _draw_context(row)
     st.subheader("Code check")
     for line in code_check_lines(row.code_check):
@@ -221,6 +232,7 @@ def _draw_ruling_form(row: AlignmentLabelRow, options: AnnotationPageOptions) ->
 
     read_only = options.read_only
     st.subheader("Labellers and the owner's ruling")
+    st.caption(labeller_models_line(row))
     with st.form(key=f"annotation_form:{row.item_id}"):
         for question_id in row.questions:
             _draw_question(row, question_id, disabled=read_only)

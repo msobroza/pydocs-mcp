@@ -44,6 +44,20 @@ def labeller_name(slot: LabellerSlot) -> str:
     return slot.value.capitalize()
 
 
+def labeller_models_line(row: AlignmentLabelRow) -> str:
+    """Which model answered as each labeller: ``Astra: openai/gpt-6-astra:batch · Opus: …``."""
+    return _SEPARATOR.join(
+        f"{labeller_name(slot)}: {row.labeller(slot).model}" for slot in LabellerSlot
+    )
+
+
+def queue_reason_lines(row: AlignmentLabelRow) -> tuple[str, ...]:
+    """Why the owner sees the item, one reason a line; one line saying so when nothing sent it."""
+    if not row.escalation_reasons:
+        return ("not in the owner's queue: the labellers agreed and nothing escalated it",)
+    return tuple(escalation_reason_line(reason) for reason in row.escalation_reasons)
+
+
 def escalation_reason_line(reason: OwnerEscalation) -> str:
     """One reason the owner sees the item: ``disagreement on site_0``, ``audit (whole item)``."""
     where = f"on {reason.question}" if reason.question else "(whole item)"
@@ -120,7 +134,9 @@ __all__ = (
     "item_identity_line",
     "item_option_label",
     "labeller_answer_line",
+    "labeller_models_line",
     "labeller_name",
+    "queue_reason_lines",
     "queue_summary_line",
     "shown_code_caption",
 )

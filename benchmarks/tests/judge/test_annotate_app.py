@@ -31,7 +31,14 @@ from pydocs_eval.judge.annotate_app import (
     save_button_key,
 )
 
-from ._alignment_fakes import REPOQA_ANSWER, REPOQA_REFERENCE, repoqa_context, repoqa_row
+from ._alignment_fakes import (
+    ASTRA_MODEL,
+    OPUS_MODEL,
+    REPOQA_ANSWER,
+    REPOQA_REFERENCE,
+    repoqa_context,
+    repoqa_row,
+)
 from ._annotation_fakes import (
     CLEAN_ITEM,
     DISAGREED_ITEM,
@@ -104,6 +111,7 @@ def test_the_page_shows_the_owner_the_item_both_labellers_and_the_code_check(
     opus_says = evidence_line(LabellerSlot.OPUS, DISAGREED_ITEM, "needle_identified")
     assert f"Astra: true (high) — {astra_says}" in shown
     assert f"Opus: false (high) — {opus_says}" in shown
+    assert f"Astra: {ASTRA_MODEL} · Opus: {OPUS_MODEL}" in shown
     assert {"needle cited: yes", "gold-site coverage: 100%", "needle_identified: yes"} <= set(shown)
     assert "disagreement on needle_identified" in shown
 
@@ -172,6 +180,10 @@ def test_every_item_can_be_listed_the_agreed_ones_too(
 
     assert not at.exception, at.exception
     assert _listed_items(at) == [DISAGREED_ITEM, LOW_CONFIDENCE_ITEM, CLEAN_ITEM]
+    at.selectbox(key=ITEM_PICKER_KEY).set_value(CLEAN_ITEM).run()
+    assert "not in the owner's queue: the labellers agreed and nothing escalated it" in (
+        _shown_texts(at)
+    )
 
 
 _NOTE = "It names get_params but never says it lives on BaseEstimator."
