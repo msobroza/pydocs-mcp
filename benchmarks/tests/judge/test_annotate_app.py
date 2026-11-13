@@ -8,7 +8,6 @@ after ``--`` — over a label file written by fake-client-backed labellers
 
 from __future__ import annotations
 
-import errno
 import importlib.util
 import os
 import sys
@@ -31,6 +30,7 @@ from pydocs_eval.judge.annotate_app import (
     note_widget_key,
     save_button_key,
 )
+from tests._disk_faults import FailingReplace
 
 from ._alignment_fakes import (
     ASTRA_MODEL,
@@ -96,13 +96,12 @@ def labels(tmp_path: Path) -> Path:
     return path
 
 
-def test_the_page_shows_the_owner_the_item_both_labellers_and_the_code_check(
+def test_the_page_shows_what_every_judge_saw_verbatim(
     monkeypatch: pytest.MonkeyPatch, labels: Path
 ) -> None:
     at = _opened(monkeypatch, labels)
 
-    shown = _shown_texts(at)
-    verbatim = [code.value for code in at.code]  # never rendered as Markdown
+    verbatim = [code.value for code in at.code]  # code blocks: never rendered as Markdown
     plain = [text.value for text in at.text]
     assert "Find the function that returns the estimator's parameters as a dict." in verbatim
     assert REPOQA_REFERENCE in verbatim
@@ -113,17 +112,25 @@ def test_the_page_shows_the_owner_the_item_both_labellers_and_the_code_check(
         "repoqa-qa · repoqa-qa/repo_qa/sklearn::get_params · pilot · stratum borderline"
         " · arm baseline@60d5a00a · trajectory traj-1"
     ) in plain
+
+
+def test_the_page_shows_both_labellers_the_code_check_and_why_the_item_is_queued(
+    monkeypatch: pytest.MonkeyPatch, labels: Path
+) -> None:
+    at = _opened(monkeypatch, labels)
+
+    plain = [text.value for text in at.text]
     for question_id in _REPOQA_QUESTIONS:
         for slot in LabellerSlot:
             evidence = evidence_line(slot, DISAGREED_ITEM, question_id)
-            assert [text for text in shown if text.endswith(f" — {evidence}")], evidence
+            assert [text for text in plain if text.endswith(f" — {evidence}")], evidence
     astra_says = evidence_line(LabellerSlot.ASTRA, DISAGREED_ITEM, "needle_identified")
     opus_says = evidence_line(LabellerSlot.OPUS, DISAGREED_ITEM, "needle_identified")
     assert f"Astra: true (high) — {astra_says}" in plain
     assert f"Opus: false (high) — {opus_says}" in plain
     assert f"Astra: {ASTRA_MODEL} · Opus: {OPUS_MODEL}" in plain
-    assert {"needle cited: yes", "gold-site coverage: 100%", "needle_identified: yes"} <= set(shown)
-    assert "disagreement on needle_identified" in shown
+    assert {"needle cited: yes", "gold-site coverage: 100%", "needle_identified: yes"} <= set(plain)
+    assert "disagreement on needle_identified" in plain
 
 
 def test_the_code_at_the_gold_is_shown_as_the_labellers_saw_it(
@@ -324,17 +331,12 @@ def test_a_save_keeps_what_a_labelling_run_wrote_while_the_page_was_open(
     assert rows[0].owner_note == _NOTE
 
 
-def _fail_every_replace(source: object, target: object) -> None:
-    """``os.replace`` on a disk that fails: the swap an atomic rewrite ends with never happens."""
-    raise OSError(errno.EIO, "Input/output error")
-
-
 def test_a_failing_write_leaves_the_label_file_intact_and_says_it_did_not_save(
     monkeypatch: pytest.MonkeyPatch, labels: Path
 ) -> None:
     before = labels.read_bytes()
     at = _opened(monkeypatch, labels)
-    monkeypatch.setattr(os, "replace", _fail_every_replace)
+    monkeypatch.setattr(os, "replace", FailingReplace())
 
     _rule(at, DISAGREED_ITEM, {"needle_identified": "false"}, _NOTE)
 

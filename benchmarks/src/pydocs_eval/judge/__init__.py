@@ -22,11 +22,16 @@ ADR 0025 orders the judging tiers: the deterministic check gates correctness
   ``reference_prompt`` how it is asked, ``reference_checks`` the two code checks
   a kept answer passes, and ``reference_journal`` the batch ids a later run
   collects or deletes. The rows are stored by ``pydocs_eval.datasets.reference_answers``.
+- ``annotate_app`` — the Streamlit page where the owner rules on an alignment
+  label file's queue: ``alignment_annotation_text`` is what it says,
+  ``alignment_owner_ruling`` the one write it makes.
 
 Import floor: nothing here imports ``pydocs_mcp``. The product is the thing a
 before/after run measures, so the scorer reads the product's literals through
 the eval's own mirrors (``trajectory.ask_outcome``), never the product itself.
 A judge module's own third-party imports stop at httpx and the eval's config
 stack (pydantic, pyyaml); the eval's ``trajectory`` package, which the
-code-first check reads, brings its own.
+code-first check reads, brings its own. The one exception is ``annotate_app``,
+which imports Streamlit (the ``[ask]`` extra) inside the functions that draw,
+so importing this package — that module included — never loads it.
 """
