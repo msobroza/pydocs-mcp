@@ -1,0 +1,45 @@
+# The shipped default docs pipeline (python/pydocs_mcp/pipelines/
+# chunk_search_graph.yaml) plus ONE step: `child_expand` (#393). It appends
+# the members (classes, functions, methods) of the class / module hits among
+# the top hits into the result slots the original hits leave free, and never
+# displaces an original hit. A search whose hits already fill its limit comes
+# back byte-identical to the shipped default.
+#
+# Placement is normative: after top_k_filter (the final ranking), before
+# limit. params stay empty on purpose: top_s / per_parent / decay come from
+# the step class, their single source (3 / 5 / 0.9); set them here only for a
+# variant arm. A test pins this file to the shipped default plus this step.
+name: exp_child_expand
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: fetch
+    type: dense_fetcher
+    params: {}
+  - name: filter
+    type: metadata_post_filter
+    params: {}
+  - name: graph
+    type: graph_expand
+    params:
+      top_s: 10
+      max_depth: 1
+      decay: 0.9
+  - name: topk
+    type: top_k_filter
+    params: {}
+  - name: children
+    type: child_expand
+    params: {}
+  - name: limit
+    type: limit
+    params:
+      max_results: 8
+  - name: budget
+    type: token_budget_formatter
+    params:
+      formatter: {type: chunk_markdown}
+      budget: 2000
