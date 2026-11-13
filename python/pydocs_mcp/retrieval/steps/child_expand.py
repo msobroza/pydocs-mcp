@@ -25,7 +25,10 @@ Flow (runs AFTER the final ranking — ``top_k_filter`` — and BEFORE ``limit``
 Consequence worth knowing before measuring it: a free slot exists only when a
 search returns fewer candidates than its limit. A dense fetch returns its
 whole candidate budget whenever the filtered corpus holds that many chunks,
-so on a broad dense search the step adds nothing — by construction.
+so on a broad dense search the step adds nothing — by construction. And to
+the search text budget children are ordinary rows rendered after every
+original: one that overflows the budget is cut like any low-ranked row,
+which can add a truncation footer the shipped pipeline would not show.
 
 Children are not re-filtered, as graph expansion's neighbours are not: they
 share their parent's package and module, so package / scope / module filters
