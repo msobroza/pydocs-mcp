@@ -40,31 +40,34 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     (`agreed_audit_share` 0.10). The audit share grows in proportion once more than
     `audit_growth_threshold` (5%) of the audited items prove wrong, and an audited
     item stays audited. An audited agreement keeps its label unless the owner rules
-    otherwise; every other reason holds its question until the owner rules. On `contradicts_reference` and `completeness`, a disagreement
-    in which the reference writer's family (Opus) favoured the answer is booked
-    `self_preference`, so an Opus-only agreement never makes the label.
+    otherwise; every other reason holds its question until the owner rules. On
+    `contradicts_reference` and `completeness`, a disagreement in which the reference
+    writer's family (Opus) favoured the answer is booked `self_preference`, so an
+    Opus-only agreement never makes the label.
   - **One versioned label file per dataset and Jev model**
     (`judge/data/alignment/<dataset>__<jev-model>.jsonl`, revision `1.0`, or
     `judge.alignment.label_file`). It holds one canonical JSON line per item: its
     pass and stratum, the context, both labellers' answers, the code check, `agreed`,
     `escalation_reasons`, `owner_decision`, `owner_note` and the escalation judge's
-    answers. A line of another revision, or with an unknown field, is refused by line. Rewriting a
-    file that was read moves no byte. The file is also the batch journal: a batch id
-    is written the moment the batch is submitted, so a re-run collects a slow batch by
-    id instead of buying it twice.
+    answers. A line of another revision, or with an unknown field, is refused by line.
+    Rewriting a file that was read moves no byte. The file is also the batch journal:
+    a batch id is written the moment the batch is submitted, so a re-run collects a
+    slow batch by id instead of buying it twice.
   - **Reports.** `report-alignment` prints, per question, the labellers' Cohen's κ
     (`metrics.agreement`), which labeller favoured the answer in each disagreement, the
     owner's queue and the audit. A question whose κ is below
     `judge.alignment.min_labeller_kappa` (0.40) is flagged: its criteria are rewritten
-    before any judge is trusted on it. The threshold sweep (`--sweep`) prints Jev's agreement
-    against the share it decides alone, for each review band from 0.3/0.7 outward and
-    each `completeness` confidence gate. Levels are cut at the midpoints and never
-    averaged, and `calibration_answers` reads Jev's raw probabilities without thresholds.
+    before any judge is trusted on it. The threshold sweep (`--sweep`) prints Jev's
+    agreement against the share it decides alone, for each review band from 0.3/0.7
+    outward and each `completeness` confidence gate. Levels are cut at the midpoints
+    and never averaged, and `calibration_answers` reads Jev's raw probabilities
+    without thresholds.
   - **The escalation judge** (`openai/gpt-6-luna`, `judge.escalation`) decides only Jev's
     in-band yes/no answers (`escalate_in_band`). It decides only on questions where its
     agreement pass reaches `min(agreement_floor, κ_labellers)` (0.90), never on a
-    low-κ question, and reads `undecided` elsewhere without a call. Its κ is reported beside the labellers' and
-    flagged when above it, together with its agreement with each labeller alone.
+    low-κ question, and reads `undecided` elsewhere without a call. Its κ is reported
+    beside the labellers' and flagged when above it, together with its agreement with
+    each labeller alone.
     `judge.escalation.floor_scale` (`percent_agreement`, as specified, or `kappa`)
     decides which of its figures meets the floor; that choice is an open owner word.
     Answers are cached by input hash, so a second scoring pass makes zero calls. Every
