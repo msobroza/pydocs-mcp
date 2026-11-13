@@ -47,6 +47,7 @@ _AGREEMENT_OF = {
     JevVerdict.TRUE: JevVerdict.FALSE,
     JevVerdict.FALSE: JevVerdict.TRUE,
     JevVerdict.IN_BAND: JevVerdict.IN_BAND,
+    JevVerdict.UNDECIDED: JevVerdict.UNDECIDED,
     JevVerdict.UNDEFINED: JevVerdict.UNDEFINED,
 }
 _DECIDED = frozenset({JevVerdict.TRUE, JevVerdict.FALSE})
@@ -117,6 +118,16 @@ def score_answer(plan: JevRequestPlan, *, judge: JevJudge, config: JudgeConfig) 
     )
 
 
+def agreement_of(contradicts_reference: JevVerdict) -> JevVerdict:
+    """The ``agreement`` row a ``contradicts_reference`` verdict reads as: yes and no swapped.
+
+    Example:
+        >>> agreement_of(JevVerdict.FALSE)
+        <JevVerdict.TRUE: 'true'>
+    """
+    return _AGREEMENT_OF[contradicts_reference]
+
+
 def calibration_answers(
     plan: JevRequestPlan, *, judge: JevJudge, config: JudgeConfig
 ) -> dict[str, JevAnswer]:
@@ -165,7 +176,7 @@ def _verdicts(
             continue
         verdict = _verdict_or_undefined(answers.get(question_id), thresholds.bands[kind])
         if kind is JevQuestionKind.CONTRADICTS_REFERENCE:
-            verdicts[AGREEMENT] = _AGREEMENT_OF[verdict]
+            verdicts[AGREEMENT] = agreement_of(verdict)
         else:
             verdicts[question_id] = verdict
     return verdicts
@@ -204,6 +215,7 @@ __all__ = (
     "CompletenessLevel",
     "JevScore",
     "JevVerdict",
+    "agreement_of",
     "calibration_answers",
     "score_answer",
 )

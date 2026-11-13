@@ -100,19 +100,34 @@ def labeller_request(
         ValueError: the answer is over ``judge.jev.max_answer_chars`` — never sent
             to any judge — or a named question is not one of the item's.
     """
-    plan = alignment_plan(row.context, jev=jev)
+    return judge_request(row.item_id, row.context, jev=jev, question_ids=question_ids)
+
+
+def judge_request(
+    custom_id: str,
+    context: AlignmentItemContext,
+    *,
+    jev: JevConfig,
+    question_ids: Sequence[str] | None = None,
+) -> ChatRequest:
+    """The labelling request for ``context``, as row ``custom_id``: the labellers' and Luna's alike.
+
+    Raises:
+        ValueError: as :func:`labeller_request`.
+    """
+    plan = alignment_plan(context, jev=jev)
     if plan.answer_over_cap:
         raise ValueError(
-            f"item {row.item_id!r}: answer of {len(row.context.agent_answer)} chars is over "
+            f"item {custom_id!r}: answer of {len(context.agent_answer)} chars is over "
             f"judge.jev.max_answer_chars={jev.max_answer_chars}, expected an answer within it"
         )
     asked = _asked_questions(plan, question_ids)
-    state = _with_shown_code(plan.requests[0].state, row.context.shown_code)
+    state = _with_shown_code(plan.requests[0].state, context.shown_code)
     messages = (
         ChatMessage(MessageRole.SYSTEM, _LABELLER_INSTRUCTIONS),
         ChatMessage(MessageRole.USER, _shown_item(state, asked)),
     )
-    return ChatRequest(row.item_id, messages, labels_output(tuple(asked)))
+    return ChatRequest(custom_id, messages, labels_output(tuple(asked)))
 
 
 def labels_output(question_ids: Sequence[str]) -> StructuredOutput:
@@ -232,6 +247,7 @@ def _label(content: Mapping[str, object], question_id: str) -> QuestionLabel:
 __all__ = (
     "AlignmentLabelError",
     "alignment_plan",
+    "judge_request",
     "labeller_request",
     "labels_output",
     "parse_labels",

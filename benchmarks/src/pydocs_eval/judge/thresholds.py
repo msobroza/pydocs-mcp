@@ -65,11 +65,17 @@ class MissingThresholdsError(Exception):
 
 
 class JevVerdict(StrEnum):
-    """One Noul question's verdict; only ``TRUE`` and ``FALSE`` are Jev's to give."""
+    """One Noul question's verdict; only ``TRUE`` and ``FALSE`` are Jev's to give.
+
+    ``IN_BAND`` is the escalation judge's to decide; ``UNDECIDED`` is an in-band
+    answer it could not decide (not trusted on the question, or past its spend
+    cap); ``UNDEFINED`` is a judge that gave no answer.
+    """
 
     TRUE = "true"
     FALSE = "false"
     IN_BAND = "in_band"
+    UNDECIDED = "undecided"
     UNDEFINED = "undefined"
 
 
