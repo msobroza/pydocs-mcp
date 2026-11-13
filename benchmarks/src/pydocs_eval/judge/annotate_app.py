@@ -79,17 +79,19 @@ def save_button_key(item_id: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class AnnotationPageOptions:
-    """What the page was started on: the one label file it reads."""
+    """What the page was started on: the one label file it reads, and whether it may write it."""
 
     labels: Path
+    read_only: bool = False
 
 
 def annotation_page_options(argv: Sequence[str]) -> AnnotationPageOptions:
     """The options in the page's script arguments (what follows ``--`` on ``streamlit run``)."""
     parser = argparse.ArgumentParser(prog="annotate_app.py", add_help=False)
     parser.add_argument("labels", type=Path, help="the alignment label file")
+    parser.add_argument("--read-only", action="store_true", help="review only: write nothing")
     args = parser.parse_args(list(argv))
-    return AnnotationPageOptions(labels=args.labels.expanduser())
+    return AnnotationPageOptions(labels=args.labels.expanduser(), read_only=args.read_only)
 
 
 def render_annotation_page(argv: Sequence[str]) -> None:
@@ -99,6 +101,8 @@ def render_annotation_page(argv: Sequence[str]) -> None:
     st.set_page_config(page_title="Alignment annotation", layout="wide")
     options = annotation_page_options(argv)
     rows = read_alignment_labels(options.labels)
+    if options.read_only:
+        st.info(f"Read-only: this page writes nothing to {options.labels.name}.")
     _draw_notice()
     row = _picked_row(rows, options)
     if row is None:
@@ -182,23 +186,33 @@ def _draw_context(row: AlignmentLabelRow) -> None:
 
 
 def _draw_ruling_form(row: AlignmentLabelRow, options: AnnotationPageOptions) -> None:
-    """Both labellers on each question beside the owner's verdict, then the note and Save."""
+    """Both labellers on each question beside the owner's verdict, then the note and Save.
+
+    Read-only, every control is disabled and Save has no callback: nothing can write.
+    """
     import streamlit as st
 
+    read_only = options.read_only
     st.subheader("Labellers and the owner's ruling")
     with st.form(key=f"annotation_form:{row.item_id}"):
         for question_id in row.questions:
-            _draw_question(row, question_id)
-        st.text_area("Owner note", value=row.owner_note, key=note_widget_key(row.item_id))
+            _draw_question(row, question_id, disabled=read_only)
+        st.text_area(
+            "Owner note",
+            value=row.owner_note,
+            key=note_widget_key(row.item_id),
+            disabled=read_only,
+        )
         st.form_submit_button(
             "Save ruling",
             key=save_button_key(row.item_id),
-            on_click=_save_ruling,
+            on_click=None if read_only else _save_ruling,
             args=(options.labels, row.item_id, row.questions),
+            disabled=read_only,
         )
 
 
-def _draw_question(row: AlignmentLabelRow, question_id: str) -> None:
+def _draw_question(row: AlignmentLabelRow, question_id: str, *, disabled: bool) -> None:
     import streamlit as st
 
     st.markdown(f"**{question_id}**")
@@ -212,6 +226,7 @@ def _draw_question(row: AlignmentLabelRow, question_id: str) -> None:
         index=choices.index(ruled.value) if ruled is not None else 0,
         key=decision_widget_key(row.item_id, question_id),
         horizontal=True,
+        disabled=disabled,
     )
 
 

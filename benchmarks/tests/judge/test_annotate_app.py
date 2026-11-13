@@ -214,3 +214,34 @@ def test_a_failing_write_leaves_the_label_file_intact_and_says_it_did_not_save(
     assert error.startswith(f"Not saved: the ruling on {DISAGREED_ITEM} did not reach ")
     assert "Input/output error" in error
     assert not at.success
+
+
+def test_a_read_only_page_says_so_and_offers_no_way_to_rule(
+    monkeypatch: pytest.MonkeyPatch, labels: Path
+) -> None:
+    at = _opened(monkeypatch, labels, "--read-only")
+
+    assert [info.value for info in at.info] == [
+        f"Read-only: this page writes nothing to {labels.name}."
+    ]
+    assert at.button(key=save_button_key(DISAGREED_ITEM)).disabled
+    assert at.text_area(key=note_widget_key(DISAGREED_ITEM)).disabled
+    for question_id in _REPOQA_QUESTIONS:
+        assert at.radio(key=decision_widget_key(DISAGREED_ITEM, question_id)).disabled
+
+
+def _file_state(path: Path) -> tuple[bytes, int, list[str]]:
+    """Everything a write would move: the bytes, the mtime, and the directory's listing."""
+    return path.read_bytes(), path.stat().st_mtime_ns, sorted(p.name for p in path.parent.iterdir())
+
+
+def test_a_read_only_run_writes_nothing(monkeypatch: pytest.MonkeyPatch, labels: Path) -> None:
+    before = _file_state(labels)
+
+    at = _opened(monkeypatch, labels, "--read-only")
+    at.selectbox(key=ITEM_PICKER_KEY).set_value(LOW_CONFIDENCE_ITEM).run()
+    at.checkbox(key=EVERY_ITEM_KEY).check().run()
+    at.selectbox(key=ITEM_PICKER_KEY).set_value(CLEAN_ITEM).run()
+
+    assert not at.exception, at.exception
+    assert _file_state(labels) == before
