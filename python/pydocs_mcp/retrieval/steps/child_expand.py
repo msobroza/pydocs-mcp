@@ -1,36 +1,38 @@
-"""ChildExpandStep — fill a search's free result slots with its top hits' members.
+"""ChildExpandStep — fill a search's free result slots with its class / module candidates' children.
 
 Experiment step for #393, available through a YAML overlay only: no shipped
-pipeline references it. When a top hit is a class or a module the agent
-cannot see what it contains without a follow-up call; this step appends the
-members themselves (classes, functions, methods) as extra hits, modelled on
-:class:`~pydocs_mcp.retrieval.steps.graph_expand.GraphExpandStep`.
+pipeline references it. When a leading candidate is a class or a module, the
+agent cannot see what it defines without a follow-up call; this step appends
+the children themselves (classes, functions, methods) as extra rows,
+modelled on :class:`~pydocs_mcp.retrieval.steps.graph_expand.GraphExpandStep`.
 
 Flow (runs AFTER the final ranking — ``top_k_filter`` — and BEFORE ``limit``):
 
 1. The window: the cap the limit step will apply (:func:`limit_step_cap` —
-   the query's own cap, else the limit's default ``max_results`` of 8). The
-   free slots are the window minus the original hits; none ⇒ unchanged.
-2. Parents: among the top ``top_s`` hits, those the document tree says are a
-   class or a module (one tree load per distinct (package, module)).
-3. Members: each parent's first ``per_parent`` member nodes not already
-   listed, in document order, hydrated in one branch-pinned chunk read.
-4. The displacement guard: members are appended BELOW the last original hit
-   and only into the free slots, so every original the limit keeps stays at
-   its rank and the limit drops no extra row. A member scores its parent's
-   relevance times ``decay``, capped at the lowest original's relevance, so
-   a later stable relevance sort cannot lift it above an original either.
+   the query's own cap, else the limit step's default ``max_results``). The
+   free slots are the window minus the original candidates; none ⇒ unchanged.
+2. Parents: among the first ``top_s`` candidates, those the document tree
+   says are a class or a module (one tree load per distinct (package, module)).
+3. Children: each parent's first ``per_parent`` children not already listed,
+   in document order, read in one branch-pinned chunk query.
+4. The displacement guard: children are appended BELOW the last original
+   candidate and only into the free slots, so every original the limit keeps
+   stays at its rank and the limit drops no extra row. A child scores its
+   parent's relevance times ``decay``, capped at the lowest original
+   relevance, so a later stable relevance sort cannot lift it above an
+   original either.
 
 Consequence worth knowing before measuring it: a free slot exists only when a
 search returns fewer candidates than its limit. A dense fetch returns its
-whole candidate budget (50) whenever the filtered corpus holds that many
-chunks, so on a broad dense search the step adds nothing — by construction.
+whole candidate budget whenever the filtered corpus holds that many chunks,
+so on a broad dense search the step adds nothing — by construction.
 
-Members are not re-filtered, as graph expansion's neighbours are not: they
+Children are not re-filtered, as graph expansion's neighbours are not: they
 share their parent's package and module, so package / scope / module filters
 hold, but a title or origin filter does not. Across a multi-project union the
-guard holds per project, not across projects. Safety contract: anything
-missing (no free slot, no tree, no row) returns the input state unchanged.
+guard holds per project, not across projects (the union re-sorts every
+project's rows by relevance). Safety contract: anything missing (no free
+slot, no tree, no row) returns the input state unchanged.
 """
 
 from __future__ import annotations
@@ -38,18 +40,20 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 from itertools import islice
-from typing import ClassVar
+from typing import ClassVar, NamedTuple
 
 from pydocs_mcp.extraction.model.document_node import DocumentNode, NodeKind
-from pydocs_mcp.filters import FieldIn
-from pydocs_mcp.models import Chunk, ChunkList
-from pydocs_mcp.retrieval.filter_helpers import with_branch_pin
+from pydocs_mcp.models import Chunk, ChunkFilterField, ChunkList
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.serialization import (
     BuildContext,
     step_registry,
     step_to_yaml_dict,
     yaml_kwargs,
+)
+from pydocs_mcp.retrieval.steps._rows_by_qualified_name import (
+    chunks_named_on_branch,
+    longest_text_row_per_key,
 )
 from pydocs_mcp.retrieval.steps.limit import limit_step_cap
 from pydocs_mcp.storage.protocols import UnitOfWork
@@ -62,49 +66,61 @@ _DEFAULT_DECAY = 0.9
 _DEFAULT_NAME = "child_expand"
 
 _PARENT_KINDS = frozenset({NodeKind.CLASS, NodeKind.MODULE})
-_MEMBER_KINDS = frozenset({NodeKind.CLASS, NodeKind.FUNCTION, NodeKind.METHOD})
+# Children worth a slot: what a class or module defines. An import block or a
+# docstring example is context the parent candidate already shows.
+_CHILD_KINDS = frozenset({NodeKind.CLASS, NodeKind.FUNCTION, NodeKind.METHOD})
 
 _QNAME_KEY = "qualified_name"
-_PACKAGE_KEY = "package"
-_MODULE_KEY = "module"
 
-# (package, qualified_name) — what a listed row and an appended child share.
-_RowKey = tuple[str, str]
+
+class _RowKey(NamedTuple):
+    """What a listed candidate and an appended child are matched on."""
+
+    package: str
+    qualified_name: str
 
 
 def _row_key(chunk: Chunk) -> _RowKey | None:
     """The row's (package, qualified_name), or None when either is missing."""
-    package = chunk.metadata.get(_PACKAGE_KEY)
+    package = chunk.metadata.get(ChunkFilterField.PACKAGE.value)
     qname = chunk.metadata.get(_QNAME_KEY)
     if not package or not qname:
         return None
-    return (str(package), str(qname))
+    return _RowKey(str(package), str(qname))
 
 
 @dataclass(frozen=True, slots=True)
-class _Parent:
-    """A top hit, addressed in its module's document tree."""
+class _LeadingCandidate:
+    """One of the first ``top_s`` candidates, with the address of its tree node."""
 
-    hit: Chunk
-    package: str
+    candidate: Chunk
+    key: _RowKey
     module: str
-    qname: str
 
 
-def _addressed(hit: Chunk) -> _Parent | None:
-    """The hit's tree address, or None when its row lacks one."""
-    key = _row_key(hit)
-    module = hit.metadata.get(_MODULE_KEY)
+def _as_leading_candidate(candidate: Chunk) -> _LeadingCandidate | None:
+    """The candidate with its tree address, or None when its row lacks one."""
+    key = _row_key(candidate)
+    module = candidate.metadata.get(ChunkFilterField.MODULE.value)
     if key is None or not module:
         return None
-    return _Parent(hit=hit, package=key[0], module=str(module), qname=key[1])
+    return _LeadingCandidate(candidate=candidate, key=key, module=str(module))
+
+
+@dataclass(frozen=True, slots=True)
+class _PlannedChildren:
+    """A class / module candidate and the children planned to follow it."""
+
+    parent: Chunk
+    package: str
+    child_qnames: tuple[str, ...]
 
 
 def _parent_node(tree: DocumentNode | None, qname: str) -> DocumentNode | None:
-    """The hit's node when the tree says it is a class or a module.
+    """The candidate's node when the tree says it is a class or a module.
 
     WHY the tree and never the row: the chunks table persists no ``kind``
-    (``row_to_chunk``), so a fetched hit cannot say what it is — the
+    (``row_to_chunk``), so a fetched candidate cannot say what it is — the
     parent-rollup step's rule.
     """
     node = tree.find_node_by_qualified_name(qname) if tree is not None else None
@@ -114,11 +130,11 @@ def _parent_node(tree: DocumentNode | None, qname: str) -> DocumentNode | None:
 @step_registry.register("child_expand")
 @dataclass(frozen=True, slots=True)
 class ChildExpandStep(RetrieverStep):
-    """Append the members of the top class / module hits into free result slots.
+    """Append the children of the leading class / module candidates into free result slots.
 
-    ``top_s`` — how many top hits may act as parents; ``per_parent`` — how
-    many members each parent may contribute; ``decay`` — a member's score as
-    a fraction of its parent's. Strict-gate ``from_dict`` like graph
+    ``top_s`` — how many leading candidates may act as parents; ``per_parent``
+    — how many children each parent may contribute; ``decay`` — a child's
+    score as a fraction of its parent's. Strict-gate ``from_dict`` like graph
     expansion: a missing ``BuildContext.uow_factory`` is a wiring bug, and an
     out-of-range knob a tuning typo, so both fail at pipeline load.
     """
@@ -134,46 +150,53 @@ class ChildExpandStep(RetrieverStep):
         candidates = state.candidates
         if not isinstance(candidates, ChunkList) or not candidates.items:
             return state
-        free = limit_step_cap(state.query) - len(candidates.items)
-        parents = [p for p in map(_addressed, candidates.items[: self.top_s]) if p is not None]
-        if free <= 0 or not parents:
+        free_slots = limit_step_cap(state.query) - len(candidates.items)
+        leading = [c for c in map(_as_leading_candidate, candidates.items[: self.top_s]) if c]
+        if free_slots <= 0 or not leading:
             return state
         listed = {key for key in map(_row_key, candidates.items) if key is not None}
+        branch = state.query.branch
         async with self.uow_factory() as uow:
-            reads = _BranchReads(uow, state.query.branch)
-            plan = await self._plan(reads, parents, listed)
-            rows = await reads.chunks_named(tuple(q for _, qnames in plan for q in qnames))
-        floor = min(hit.relevance or 0.0 for hit in candidates.items)
-        children = _appended(plan, rows, listed, decay=self.decay, floor=floor)[:free]
+            plans = await self._plan_children(uow, branch, leading, listed)
+            qnames = tuple(qname for plan in plans for qname in plan.child_qnames)
+            rows = await chunks_named_on_branch(uow, qnames, branch) if qnames else []
+        floor = min(c.relevance or 0.0 for c in candidates.items)
+        children = _scored_children(plans, rows, listed, decay=self.decay, floor=floor)
         if not children:
             return state
-        return replace(state, candidates=ChunkList(items=(*candidates.items, *children)))
+        appended = (*candidates.items, *children[:free_slots])
+        return replace(state, candidates=ChunkList(items=appended))
 
-    async def _plan(
-        self, reads: _BranchReads, parents: list[_Parent], listed: set[_RowKey]
-    ) -> list[tuple[_Parent, tuple[str, ...]]]:
-        """Each parent's first ``per_parent`` unlisted members, in document
-        order — one tree load per distinct (package, module)."""
+    async def _plan_children(
+        self,
+        uow: UnitOfWork,
+        branch: str,
+        leading: list[_LeadingCandidate],
+        listed: set[_RowKey],
+    ) -> list[_PlannedChildren]:
+        """Each class / module candidate's first ``per_parent`` unlisted
+        children — one tree load per distinct (package, module), on the
+        searched branch (spec §6.4, #312)."""
         trees: dict[tuple[str, str], DocumentNode | None] = {}
-        plan: list[tuple[_Parent, tuple[str, ...]]] = []
-        for parent in parents:
-            where = (parent.package, parent.module)
+        plans: list[_PlannedChildren] = []
+        for lead in leading:
+            where = (lead.key.package, lead.module)
             if where not in trees:
-                trees[where] = await reads.tree(*where)
-            node = _parent_node(trees[where], parent.qname)
+                trees[where] = await uow.trees.load(*where, branch=branch or None)
+            node = _parent_node(trees[where], lead.key.qualified_name)
             if node is not None:
-                plan.append((parent, self._member_qnames(node, parent.package, listed)))
-        return plan
+                qnames = self._unlisted_child_qnames(node, lead.key.package, listed)
+                plans.append(_PlannedChildren(lead.candidate, lead.key.package, qnames))
+        return plans
 
-    def _member_qnames(
+    def _unlisted_child_qnames(
         self, node: DocumentNode, package: str, listed: set[_RowKey]
     ) -> tuple[str, ...]:
-        # Members only: an import block or a docstring example is context the
-        # parent hit already shows, not something an agent would pick.
+        """The first ``per_parent`` children worth a slot, in document order."""
         fresh = (
             child.qualified_name
             for child in node.children
-            if child.kind in _MEMBER_KINDS and (package, child.qualified_name) not in listed
+            if child.kind in _CHILD_KINDS and _RowKey(package, child.qualified_name) not in listed
         )
         return tuple(islice(fresh, self.per_parent))
 
@@ -197,7 +220,7 @@ def _check_knobs(kwargs: dict) -> None:
     """Refuse a knob that would silently disable the arm or invert its ranking.
 
     A ``top_s`` / ``per_parent`` below 1 appends nothing, and a ``decay``
-    outside (0, 1] would score a member above its own parent — a tuning typo
+    outside (0, 1] would score a child above its own parent — a tuning typo
     either way, so the overlay fails at load rather than measuring an A/A.
     """
     for key in ("top_s", "per_parent"):
@@ -209,8 +232,8 @@ def _check_knobs(kwargs: dict) -> None:
         raise ValueError(f"ChildExpandStep.decay must be a number in (0, 1]; got {decay!r}.")
 
 
-def _appended(
-    plan: list[tuple[_Parent, tuple[str, ...]]],
+def _scored_children(
+    plans: list[_PlannedChildren],
     rows: list[Chunk],
     listed: set[_RowKey],
     *,
@@ -221,61 +244,26 @@ def _appended(
 
     A child scores its parent's relevance times ``decay`` (graph expansion's
     one-hop score), capped at ``floor`` — the lowest original relevance — so
-    a later relevance sort can never lift a child over an original hit.
+    a later relevance sort can never lift a child over an original candidate.
     """
-    by_key = _representatives(rows)
+    by_key = longest_text_row_per_key(rows, key=_row_key)
     seen = set(listed)
     out: list[Chunk] = []
-    for parent, key in _planned_keys(plan):
+    for plan, key in _planned_child_keys(plans):
         row = by_key.get(key)
         if row is None or key in seen:
             continue
         seen.add(key)
-        score = min((parent.hit.relevance or 0.0) * decay, floor)
+        score = min((plan.parent.relevance or 0.0) * decay, floor)
         out.append(replace(row, relevance=score))
     return out
 
 
-def _planned_keys(
-    plan: list[tuple[_Parent, tuple[str, ...]]],
-) -> Iterator[tuple[_Parent, _RowKey]]:
-    for parent, qnames in plan:
-        yield from ((parent, (parent.package, qname)) for qname in qnames)
-
-
-def _representatives(rows: list[Chunk]) -> dict[_RowKey, Chunk]:
-    """One row per (package, qualified_name) — the longest text, graph expansion's rule."""
-    best: dict[_RowKey, Chunk] = {}
-    for row in rows:
-        key = _row_key(row)
-        if key is None:
-            continue
-        incumbent = best.get(key)
-        if incumbent is None or len(row.text) > len(incumbent.text):
-            best[key] = row
-    return best
-
-
-@dataclass(frozen=True, slots=True)
-class _BranchReads:
-    """The trees and chunk rows one search reads (spec §6.4, #312).
-
-    Graph expansion's rule: a pinned search (``branch`` non-empty) reads its
-    branch plus the dependency tier; ``""`` reads the served branch.
-    """
-
-    uow: UnitOfWork
-    branch: str
-
-    async def tree(self, package: str, module: str) -> DocumentNode | None:
-        return await self.uow.trees.load(package, module, branch=self.branch or None)
-
-    async def chunks_named(self, qnames: tuple[str, ...]) -> list[Chunk]:
-        if not qnames:
-            return []
-        named = FieldIn(field=_QNAME_KEY, values=qnames)
-        pinned = with_branch_pin(named, self.branch, target_field="chunk") if self.branch else named
-        return await self.uow.chunks.list(filter=pinned)
+def _planned_child_keys(
+    plans: list[_PlannedChildren],
+) -> Iterator[tuple[_PlannedChildren, _RowKey]]:
+    for plan in plans:
+        yield from ((plan, _RowKey(plan.package, qname)) for qname in plan.child_qnames)
 
 
 __all__ = ("ChildExpandStep",)
