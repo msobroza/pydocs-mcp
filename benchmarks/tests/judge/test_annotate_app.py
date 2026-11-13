@@ -47,12 +47,17 @@ _RUN_TIMEOUT_S = 120
 _REPOQA_QUESTIONS = ("needle_identified", "addresses_grader", "contradicts_reference")
 
 
-def _opened(monkeypatch: pytest.MonkeyPatch, labels: Path, *flags: str) -> AppTest:
-    """The page as ``streamlit run annotate_app.py -- <labels> <flags>`` starts it."""
-    monkeypatch.setattr(sys, "argv", [_PAGE_PATH, str(labels), *flags])
+def _started(monkeypatch: pytest.MonkeyPatch, *arguments: str) -> AppTest:
+    """The page as ``streamlit run annotate_app.py -- <arguments>`` starts it."""
+    monkeypatch.setattr(sys, "argv", [_PAGE_PATH, *arguments])
     at = AppTest.from_file(_PAGE_PATH, default_timeout=_RUN_TIMEOUT_S).run()
     assert not at.exception, at.exception
     return at
+
+
+def _opened(monkeypatch: pytest.MonkeyPatch, labels: Path, *flags: str) -> AppTest:
+    """The page opened on ``labels``."""
+    return _started(monkeypatch, str(labels), *flags)
 
 
 def _shown_texts(at: AppTest) -> list[str]:
@@ -260,3 +265,41 @@ def test_a_read_only_run_writes_nothing(monkeypatch: pytest.MonkeyPatch, labels:
 
     assert not at.exception, at.exception
     assert _file_state(labels) == before
+
+
+def test_a_page_started_without_a_label_file_says_how_to_start_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    at = _started(monkeypatch)
+
+    (error,) = [error.value for error in at.error]
+    assert "the following arguments are required: labels" in error
+    assert "usage: annotate_app.py [--read-only] labels" in error
+
+
+def test_a_label_file_that_does_not_exist_is_named_never_shown_as_an_empty_queue(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    absent = tmp_path / "repoqa-qa__jev-1.13.jsonl"
+
+    at = _opened(monkeypatch, absent)
+
+    (error,) = [error.value for error in at.error]
+    assert f"{absent} does not exist" in error
+    assert not at.selectbox
+    assert not absent.exists()
+
+
+def test_a_label_file_the_reader_refuses_is_named_and_left_as_it_is(
+    monkeypatch: pytest.MonkeyPatch, labels: Path
+) -> None:
+    with labels.open("a", encoding="utf-8") as handle:
+        handle.write('{"revision": "0.9"}\n')
+    before = labels.read_bytes()
+
+    at = _opened(monkeypatch, labels)
+
+    (error,) = [error.value for error in at.error]
+    assert f"{labels.name} line 4: revision '0.9'" in error
+    assert not at.selectbox
+    assert labels.read_bytes() == before

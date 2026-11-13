@@ -24,6 +24,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NoReturn
 
 from pydocs_eval.judge.alignment_annotation_text import (
     awaits_owner_ruling,
@@ -85,9 +86,24 @@ class AnnotationPageOptions:
     read_only: bool = False
 
 
+class AnnotationPageUsageError(ValueError):
+    """The page's script arguments are not ``LABELS [--read-only]``."""
+
+
+class _PageArgumentParser(argparse.ArgumentParser):
+    """An argparse that raises: argparse's own exit would end the page's run, not show the error."""
+
+    def error(self, message: str) -> NoReturn:
+        raise AnnotationPageUsageError(f"{message}; {self.format_usage().strip()}")
+
+
 def annotation_page_options(argv: Sequence[str]) -> AnnotationPageOptions:
-    """The options in the page's script arguments (what follows ``--`` on ``streamlit run``)."""
-    parser = argparse.ArgumentParser(prog="annotate_app.py", add_help=False)
+    """The options in the page's script arguments (what follows ``--`` on ``streamlit run``).
+
+    Raises:
+        AnnotationPageUsageError: the arguments are not ``LABELS [--read-only]``.
+    """
+    parser = _PageArgumentParser(prog="annotate_app.py", add_help=False)
     parser.add_argument("labels", type=Path, help="the alignment label file")
     parser.add_argument("--read-only", action="store_true", help="review only: write nothing")
     args = parser.parse_args(list(argv))
@@ -99,8 +115,12 @@ def render_annotation_page(argv: Sequence[str]) -> None:
     import streamlit as st  # function-local: `import pydocs_eval.judge` stays Streamlit-free
 
     st.set_page_config(page_title="Alignment annotation", layout="wide")
-    options = annotation_page_options(argv)
-    rows = read_alignment_labels(options.labels)
+    try:
+        options = annotation_page_options(argv)
+        rows = _read_label_file(options.labels)
+    except (ValueError, OSError) as exc:
+        st.error(f"Cannot open the annotation page: {exc}")
+        return
     if options.read_only:
         st.info(f"Read-only: this page writes nothing to {options.labels.name}.")
     _draw_notice()
@@ -109,6 +129,13 @@ def render_annotation_page(argv: Sequence[str]) -> None:
         return
     _draw_item(row)
     _draw_ruling_form(row, options)
+
+
+def _read_label_file(path: Path) -> tuple[AlignmentLabelRow, ...]:
+    """The file's rows; a missing file is refused here, where the reader would read it as empty."""
+    if not path.is_file():
+        raise ValueError(f"{path} does not exist, expected an alignment label file")
+    return read_alignment_labels(path)
 
 
 def _draw_notice() -> None:
