@@ -105,8 +105,7 @@ def render_symbol_card(
         card = render_symbol_card(class_node, child_cap=20)
         card.text.splitlines()[-1]   # 'Members (2): run, stat'
     """
-    listed = tuple(node.children[:child_cap])
-    elided = len(node.children) - len(listed)
+    listed, elided = _listed_children(node, child_cap)
     lines = [_identity_line(node)]
     doc = _first_doc_line(node)
     if doc:
@@ -160,6 +159,27 @@ def _first_doc_line(node: DocumentNode) -> str:
     """The node's summary, first line only — ``""`` when it is undocumented."""
     lines = node.summary.strip().splitlines()
     return lines[0].strip() if lines else ""
+
+
+def members_line(node: DocumentNode, *, child_cap: int) -> str:
+    """The card's ``Members (N): …`` line for ``node``, naming at most ``child_cap`` children.
+
+    Public for the other view that names a node's children — the Members line
+    on a class or module search hit (issue #393, ADR 0023 (j)) — so it renders
+    the card's exact line rather than a second copy that could drift from it.
+
+    Example::
+
+        members_line(class_node, child_cap=2)   # 'Members (3): run, stat, and 1 more'
+    """
+    listed, elided = _listed_children(node, child_cap)
+    return _members_line(node, listed, elided)
+
+
+def _listed_children(node: DocumentNode, child_cap: int) -> tuple[tuple[DocumentNode, ...], int]:
+    """The children a ``child_cap`` view names, and how many it leaves out."""
+    listed = tuple(node.children[:child_cap])
+    return listed, len(node.children) - len(listed)
 
 
 def _members_line(node: DocumentNode, listed: tuple[DocumentNode, ...], elided: int) -> str:
@@ -387,4 +407,4 @@ def _record_cut(node: DocumentNode, cut: LevelCut) -> None:
     )
 
 
-__all__ = ("Outline", "SymbolCard", "render_outline", "render_symbol_card")
+__all__ = ("Outline", "SymbolCard", "members_line", "render_outline", "render_symbol_card")

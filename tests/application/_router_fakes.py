@@ -26,6 +26,7 @@ from pydocs_mcp.application.overview_service import (
     OverviewCard,
 )
 from pydocs_mcp.application.target_resolution import NullTargetResolver, TargetRewrite
+from pydocs_mcp.extraction.model import DocumentNode
 from pydocs_mcp.models import ChunkList, ModuleMemberList, SearchResponse
 from pydocs_mcp.multirepo import LoadedProject
 from pydocs_mcp.storage.index_metadata import IndexMetadata
@@ -86,6 +87,26 @@ class BranchSelectedInput:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._payload, name)
+
+
+class CountingTreeService:
+    """A tree navigator serving fixed ``(package, module)`` trees and recording
+    every ``get_tree`` read, in order — how a search response's bound of one
+    document-tree load per distinct module (#393) is observed."""
+
+    def __init__(self, trees: dict[tuple[str, str], DocumentNode]) -> None:
+        self._trees = trees
+        self.reads: list[tuple[str, str]] = []
+
+    def on_branch(self, branch: str | None) -> CountingTreeService:
+        return self
+
+    async def get_tree(self, package: str, module: str) -> DocumentNode | None:
+        self.reads.append((package, module))
+        return self._trees.get((package, module))
+
+    async def exists(self, package: str, module: str) -> bool:
+        return (package, module) in self._trees
 
 
 class FakeDocs:
