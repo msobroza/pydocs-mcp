@@ -118,5 +118,12 @@ def test_the_arm_pipeline_assembles_in_the_product_with_the_step_before_the_limi
 
     stages = list(pipeline.stages)
     expand = next(i for i, s in enumerate(stages) if isinstance(s, ChildExpandStep))
+    built = stages[expand]
+    default = ChildExpandStep(uow_factory=context.uow_factory)  # type: ignore[arg-type]
     assert isinstance(stages[expand + 1], LimitStep)
-    assert (stages[expand].top_s, stages[expand].per_parent, stages[expand].decay) == (3, 5, 0.9)
+    # params {} in the arm: every knob comes from the step class, its one home.
+    assert (built.top_s, built.per_parent, built.decay) == (
+        default.top_s,
+        default.per_parent,
+        default.decay,
+    )

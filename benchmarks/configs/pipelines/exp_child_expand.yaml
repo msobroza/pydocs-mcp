@@ -1,14 +1,14 @@
 # The shipped default docs pipeline (python/pydocs_mcp/pipelines/
 # chunk_search_graph.yaml) plus ONE step: `child_expand` (#393). It appends
-# the members (classes, functions, methods) of the class / module hits among
-# the top hits into the result slots the original hits leave free, and never
-# displaces an original hit. A search whose hits already fill its limit comes
-# back byte-identical to the shipped default.
+# the children (classes, functions, methods) of the leading class / module
+# candidates into the result slots the original candidates leave free, and
+# never displaces an original. A search whose candidates already fill its
+# limit comes back byte-identical to the shipped default.
 #
 # Placement is normative: after top_k_filter (the final ranking), before
 # limit. params stay empty on purpose: top_s / per_parent / decay come from
-# the step class, their single source (3 / 5 / 0.9); set them here only for a
-# variant arm. A test pins this file to the shipped default plus this step.
+# the step class, their single source; set them here only for a variant arm.
+# A test pins this file to the shipped default plus this step.
 name: exp_child_expand
 steps:
   - name: pre_filter
