@@ -7,7 +7,10 @@ default plus one ``child_expand`` step) answers a dense search exactly as the
 shipped default does — text, items and meta — because a dense fetch fills
 the window (or lists the whole corpus, children included). Over a lexical
 route, where a class-name query matches few rows, the arm appends the class's
-children below the original rows and leaves ``meta.truncated`` as it was.
+children below the original rows: under the shipped text budget the arm's
+text begins with exactly the default's text, so what the model reads of the
+originals is untouched. (Children that overflow the budget are cut like any
+low-ranked row, which can add a truncation footer the default lacked.)
 """
 
 from __future__ import annotations
@@ -28,8 +31,6 @@ from pydocs_mcp.server import build_routers
 from tests._index_fixture import index_project_to_db
 
 _FILLER_FUNCTIONS = 20
-# Far above what this corpus renders, so only the search itself shapes the text.
-_BUDGET_NO_CUT_TOKENS = 100_000
 _CHILD_STEP = {"name": "children", "type": "child_expand", "params": {}}
 _METHODS = ("add_item", "remove_item", "count_items")
 
@@ -87,7 +88,6 @@ class _Routers:
 
 def _router(config_path: Path, db_path: Path) -> ToolRouter:
     config = AppConfig.load(explicit_path=config_path)
-    config.search.output.budget_tokens = _BUDGET_NO_CUT_TOKENS
     router, _services = build_routers(config, db_path=db_path, surface="mcp")
     return router
 
@@ -137,6 +137,7 @@ def test_a_lexical_class_hit_gains_its_children_below_the_untouched_originals(
     arm = _envelope(routers.lexical_arm, "Inventory", kind="docs")
     (cls,) = [i.qualified_name for i in base.items if i.qualified_name.endswith(".Inventory")]
 
+    assert arm.text.startswith(base.text)
     assert arm.items[: len(base.items)] == base.items
     assert [i.qualified_name for i in arm.items[len(base.items) :]] == [
         f"{cls}.{m}" for m in _METHODS
