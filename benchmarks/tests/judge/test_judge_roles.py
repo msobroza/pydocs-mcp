@@ -24,6 +24,7 @@ from pydocs_eval.judge.role_config import (
     AlignmentConfig,
     ChatRole,
     ChatRoleConfig,
+    EscalationFloorScale,
     ReasoningEffort,
     ReferenceWriterConfig,
 )
@@ -101,6 +102,29 @@ def test_the_role_defaults_are_the_specs() -> None:
     assert {block.api_key_env for block in every_block} == {"OPENROUTER_API_KEY"}
     assert {block.endpoint for block in every_block} == {"https://openrouter.ai/api/v1"}
     assert judge.thresholds == {}
+
+
+def test_the_alignment_and_escalation_defaults_are_the_tickets() -> None:
+    alignment, escalation = JudgeConfig().alignment, JudgeConfig().escalation
+
+    assert alignment.pilot_items == 10
+    assert (alignment.n_items.pass_1, alignment.n_items.pass_2) == (100, 60)
+    assert alignment.sub_budget_usd == 15.0
+    assert alignment.band_start == (0.3, 0.7)
+    assert alignment.borderline_window == (0.2, 0.8)
+    assert alignment.planted_injections == 4
+    assert alignment.random_share == 0.25
+    assert (alignment.agreed_audit_share, alignment.audit_growth_threshold) == (0.10, 0.05)
+    assert alignment.label_file == {}
+    assert (escalation.agreement_floor, escalation.spend_cap_usd) == (0.90, 2.00)
+    assert escalation.floor_scale is EscalationFloorScale.PERCENT_AGREEMENT
+    assert escalation.cache_dir == ""
+
+
+@pytest.mark.parametrize("window", [[0.7, 0.3], [-0.1, 0.5], [0.2, 1.2]])
+def test_a_probability_window_out_of_order_or_range_is_refused(window: list[float]) -> None:
+    with pytest.raises(ValidationError, match=r"judge\.alignment\.band_start"):
+        AlignmentConfig.model_validate({"band_start": window})
 
 
 def test_the_deployment_yaml_pins_each_role_to_the_owners_model() -> None:

@@ -11,10 +11,11 @@ Example:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from pydocs_eval.judge.judge_errors import JudgeConfigError
 
@@ -40,6 +41,26 @@ _DEFAULT_ESCALATION_TIMEOUT_SECONDS = 120.0
 # "The needle's body plus a few surrounding lines" (spec 9c): enough to show the
 # enclosing class or decorator, too few to reach a neighbouring function.
 _DEFAULT_CONTEXT_LINES = 5
+
+# The alignment set's sizes and draw (spec 9d, Q51/Q58/Q59): a 10-item dual pilot,
+# then about 100 items in pass 1 and 60 in pass 2, all inside the $15 sub-budget.
+_DEFAULT_PILOT_ITEMS = 10
+_DEFAULT_PASS_1_ITEMS = 100
+_DEFAULT_PASS_2_ITEMS = 60
+_DEFAULT_ALIGNMENT_SUB_BUDGET_USD = 15.0
+# Jev's review band starts at 0.3/0.7 and is swept outward; a first-pass Jev
+# probability in 0.2-0.8 makes an answer borderline.
+_DEFAULT_BAND_START = (0.3, 0.7)
+_DEFAULT_BORDERLINE_WINDOW = (0.2, 0.8)
+_DEFAULT_PLANTED_INJECTIONS = 4
+_DEFAULT_RANDOM_SHARE = 0.25
+_DEFAULT_AGREED_AUDIT_SHARE = 0.10
+_DEFAULT_AUDIT_GROWTH_THRESHOLD = 0.05
+# Luna decides a question only at this much agreement with the alignment set,
+# or at the labellers' own κ where that is lower (Q53, Round 5f).
+_DEFAULT_AGREEMENT_FLOOR = 0.90
+# In-band escalations stop here for the whole program (Q52).
+_DEFAULT_SPEND_CAP_USD = 2.00
 
 
 def labeller_model_key(index: int) -> str:
@@ -105,11 +126,34 @@ class ChatRoleConfig(OpenRouterCallConfig):
     timeout_seconds: float = Field(default=_DEFAULT_BATCH_TIMEOUT_SECONDS, gt=0)
 
 
+class EscalationFloorScale(StrEnum):
+    """What the escalation judge's per-question agreement is compared on.
+
+    The floor is ``min(agreement_floor, κ_labellers)`` either way. Whether the
+    judge's side of the comparison is its percent agreement (Q53 and Round 5f,
+    the spec as written) or its own κ (one κ scale for both) is an open owner
+    word on the turn-efficiency umbrella; this knob is where it is answered.
+    """
+
+    #: The judge's raw agreement rate with the alignment label (as written).
+    PERCENT_AGREEMENT = "percent_agreement"
+    #: The judge's Cohen's κ against the alignment label (the single-scale variant).
+    KAPPA = "kappa"
+
+
 class EscalationConfig(ChatRoleConfig):
-    """``judge.escalation``: the in-band judge, at the highest effort its endpoint accepts."""
+    """``judge.escalation``: the in-band judge, its trust floor, its spend cap and its cache.
+
+    ``cache_dir`` empty means the derived default (``cache_root()/escalation``),
+    where the spend ledger also lives.
+    """
 
     reasoning_effort: ReasoningEffort = ReasoningEffort.XHIGH
     timeout_seconds: float = Field(default=_DEFAULT_ESCALATION_TIMEOUT_SECONDS, gt=0)
+    agreement_floor: float = Field(default=_DEFAULT_AGREEMENT_FLOOR, ge=0.0, le=1.0)
+    floor_scale: EscalationFloorScale = EscalationFloorScale.PERCENT_AGREEMENT
+    spend_cap_usd: float = Field(default=_DEFAULT_SPEND_CAP_USD, ge=0.0)
+    cache_dir: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,12 +175,50 @@ class ChatRole:
         return self.config.model
 
 
+def _checked_window(value: tuple[float, float], name: str) -> tuple[float, float]:
+    low, high = value
+    if not 0.0 <= low <= high <= 1.0:
+        raise ValueError(f"{name} = {list(value)!r}, expected [low, high] with 0 <= low <= high <= 1")
+    return value
+
+
+class AlignmentPassSizes(BaseModel):
+    """``judge.alignment.n_items``: how many items each alignment pass aims at."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    pass_1: int = Field(default=_DEFAULT_PASS_1_ITEMS, ge=1)
+    pass_2: int = Field(default=_DEFAULT_PASS_2_ITEMS, ge=1)
+
+
 class AlignmentConfig(BaseModel):
-    """``judge.alignment``: the two blind labellers, each its own role block."""
+    """``judge.alignment``: the two blind labellers, and how the alignment set is drawn and routed.
+
+    ``label_file`` maps a dataset to the label file it is written to; a dataset
+    not listed uses the vendored ``judge/data/alignment/<dataset>__<jev-model>.jsonl``.
+    ``sub_budget_usd`` bounds the pilot and both passes together.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     labellers: tuple[ChatRoleConfig, ChatRoleConfig] = (ChatRoleConfig(), ChatRoleConfig())
+    pilot_items: int = Field(default=_DEFAULT_PILOT_ITEMS, ge=1)
+    n_items: AlignmentPassSizes = Field(default_factory=AlignmentPassSizes)
+    sub_budget_usd: float = Field(default=_DEFAULT_ALIGNMENT_SUB_BUDGET_USD, ge=0.0)
+    band_start: tuple[float, float] = _DEFAULT_BAND_START
+    borderline_window: tuple[float, float] = _DEFAULT_BORDERLINE_WINDOW
+    planted_injections: int = Field(default=_DEFAULT_PLANTED_INJECTIONS, ge=0)
+    random_share: float = Field(default=_DEFAULT_RANDOM_SHARE, ge=0.0, le=1.0)
+    agreed_audit_share: float = Field(default=_DEFAULT_AGREED_AUDIT_SHARE, ge=0.0, le=1.0)
+    audit_growth_threshold: float = Field(default=_DEFAULT_AUDIT_GROWTH_THRESHOLD, gt=0.0, le=1.0)
+    label_file: Mapping[str, str] = Field(default_factory=dict)
+
+    @field_validator("band_start", "borderline_window")
+    @classmethod
+    def _ordered_window(
+        cls, value: tuple[float, float], info: ValidationInfo
+    ) -> tuple[float, float]:
+        return _checked_window(value, f"judge.alignment.{info.field_name}")
 
 
 class ReferenceWriterConfig(ChatRoleConfig):
@@ -163,9 +245,11 @@ __all__ = (
     "WRITER_FALLBACK_MODEL_KEY",
     "WRITER_MODEL_KEY",
     "AlignmentConfig",
+    "AlignmentPassSizes",
     "ChatRole",
     "ChatRoleConfig",
     "EscalationConfig",
+    "EscalationFloorScale",
     "OpenRouterCallConfig",
     "ReasoningEffort",
     "ReferenceWriterConfig",
