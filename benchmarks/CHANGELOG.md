@@ -910,9 +910,9 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   `write_text_atomically` writes to a temporary file beside the target and swaps
   it in; when the write or the swap failed, the target kept its old text but the
   temporary file stayed. The vendored alignment label files live in the source
-  tree, so a failed save on the annotation page left an untracked `*.tmp` beside
-  them. Any failure now removes the temporary file before the error is raised.
-  (#382)
+  tree, so a failed save on the annotation page would have left an untracked
+  `*.tmp` beside them. Any failure now removes the temporary file before the
+  error is raised. (#382)
 - **A seed-on arm seeds the task's question, not the scaffolded prompt.**
   `sample_row_for_task` now carries the task's bare query in an optional
   `question` field beside `rendered_prompt` (the required keys are unchanged),
