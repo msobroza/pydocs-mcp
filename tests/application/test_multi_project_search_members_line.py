@@ -151,3 +151,96 @@ async def test_the_cap_is_the_symbol_cards_child_cap() -> None:
     body, _items, _extras = await router._search_body(SearchInput(query="cart", kind="docs"))
     assert "\nMembers (3): add, remove, and 1 more\n" in body
     assert "\nMembers (2): Cart, checkout\n" in body
+
+
+# ── the union of several bundles ──
+
+
+def _ledger(members: tuple[ModuleMember, ...] = ()) -> ProjectServices:
+    hits = (
+        _hit("ledger.book.Book", "ledger.book", (4, 8), 0.85),
+        _hit("ledger.book", "ledger.book", (1, 8), 0.75),
+    )
+    return replace(
+        make_service("ledger"),
+        docs=FakeRankedDocs(hits),
+        api=FakeRankedApi(members),
+        lookup=FakeLookup(
+            tree_svc=CountingTreeService({(PROJECT_PACKAGE_NAME, "ledger.book"): _book_tree()})
+        ),
+    )
+
+
+async def test_union_hits_name_their_members_from_their_own_bundle() -> None:
+    shop, ledger = _shop(), _ledger()
+    router = MultiProjectSearch(services=(shop, ledger), members_line=True)
+    body, _items, _extras = await router._search_body(SearchInput(query="x", kind="docs"))
+    assert "## shop.cart.Cart — shop/cart.py:4-15\nMembers (3): add, remove, total\n" in body
+    assert "## ledger.book.Book — ledger/book.py:4-8\nMembers (1): post\n" in body
+    assert "## ledger.book — ledger/book.py:1-8\nMembers (1): Book\n" in body
+    assert _reads(shop) == [(PROJECT_PACKAGE_NAME, "shop.cart")]
+    assert _reads(ledger) == [(PROJECT_PACKAGE_NAME, "ledger.book")]
+
+
+async def test_two_bundles_holding_the_same_class_name_each_name_their_own_members() -> None:
+    """Both bundles' ``shop.cart.Cart`` survive the merge (two projects' own code)."""
+    fork_cart = _node(
+        "shop.cart",
+        NodeKind.MODULE,
+        (1, 9),
+        _node(
+            "shop.cart.Cart",
+            NodeKind.CLASS,
+            (1, 9),
+            _node("shop.cart.Cart.pay", NodeKind.METHOD, (5, 9)),
+        ),
+    )
+    fork = replace(
+        make_service("fork"),
+        docs=FakeRankedDocs((_hit("shop.cart.Cart", "shop.cart", (1, 9), 0.95),)),
+        lookup=FakeLookup(
+            tree_svc=CountingTreeService({(PROJECT_PACKAGE_NAME, "shop.cart"): fork_cart})
+        ),
+    )
+    router = MultiProjectSearch(services=(_shop(), fork), members_line=True)
+    body, _items, _extras = await router._search_body(SearchInput(query="x", kind="docs"))
+    assert "## shop.cart.Cart — shop/cart.py:1-9\nMembers (1): pay\n" in body
+    assert "## shop.cart.Cart — shop/cart.py:4-15\nMembers (3): add, remove, total\n" in body
+
+
+async def test_union_kind_any_reads_each_bundles_module_once() -> None:
+    book_member = ModuleMember(
+        id=8,
+        relevance=0.4,
+        metadata={"package": PROJECT_PACKAGE_NAME, "module": "ledger.book", "name": "Book"},
+    )
+    shop, ledger = _shop(members=(_CART_MEMBER,)), _ledger(members=(book_member,))
+    router = MultiProjectSearch(services=(shop, ledger), members_line=True)
+    _body, items, _extras = await router._search_body(SearchInput(query="x"))
+    assert _reads(shop) == [(PROJECT_PACKAGE_NAME, "shop.cart")]
+    assert _reads(ledger) == [(PROJECT_PACKAGE_NAME, "ledger.book")]
+    spans = {i["qualified_name"]: i["start_line"] for i in items if i["kind"] == "member"}
+    assert spans == {"shop.cart.Cart": 4, "ledger.book.Book": 4}
+
+
+async def test_union_with_the_line_off_reads_no_tree_for_a_chunk_hit() -> None:
+    shop, ledger = _shop(), _ledger()
+    await MultiProjectSearch(services=(shop, ledger))._search_body(
+        SearchInput(query="x", kind="docs")
+    )
+    assert _reads(shop) == _reads(ledger) == []
+
+
+class _PinShopOnly:
+    """Pins the ``shop`` bundle to a branch; every other bundle stays unpinned."""
+
+    async def pin_of(self, svc: ProjectServices) -> str:
+        return "feature/x" if svc.project.name == "shop" else ""
+
+
+async def test_union_lines_read_each_bundle_on_the_branch_it_searched() -> None:
+    shop, ledger = _shop(), _ledger()
+    router = MultiProjectSearch(services=(shop, ledger), members_line=True)
+    await router._search_body(SearchInput(query="x", kind="docs"), branch_pins=_PinShopOnly())
+    assert shop.lookup.bound_branches == ["feature/x"]  # type: ignore[attr-defined]
+    assert ledger.lookup.bound_branches == []  # type: ignore[attr-defined]

@@ -64,6 +64,7 @@ from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
     Chunk,
     ChunkFilterField,
+    ChunkList,
     ChunkOrigin,
     ModuleMember,
     ModuleMemberFilterField,
@@ -505,7 +506,7 @@ class MultiProjectSearch:
         parts: list[str] = []
         items: list[dict[str, Any]] = []
         if payload.kind in ("docs", "any"):
-            text, merged_chunks = await self._union_docs(queries, limit)
+            text, merged_chunks = await self._union_docs(queries, limit, pins, trees)
             parts.append(text)
             items.extend(_chunk_item(c) for c in merged_chunks)
         if payload.kind in ("api", "any"):
@@ -533,9 +534,13 @@ class MultiProjectSearch:
         )
 
     async def _union_docs(
-        self, queries: tuple[SearchQuery, ...], limit: int
+        self,
+        queries: tuple[SearchQuery, ...],
+        limit: int,
+        pins: Sequence[str],
+        trees: SearchResponseTrees,
     ) -> tuple[str, tuple[Chunk, ...]]:
-        """``queries[i]`` is what ``self.services[i]`` runs."""
+        """``queries[i]`` is what ``self.services[i]`` runs, pinned to ``pins[i]``."""
         lists = await asyncio.gather(
             *[s.docs.ranked(q) for s, q in zip(self.services, queries, strict=True)]
         )
@@ -543,12 +548,31 @@ class MultiProjectSearch:
             (s.project, c) for s, cl in zip(self.services, lists, strict=True) for c in cl.items
         ]
         merged = _merge_ranked(tagged, limit)
-        text = (
-            format_chunks_markdown_within_budget(merged, self.budget_tokens, pointers=self.pointers)
-            if merged
-            else ""
+        if not merged:
+            return "", merged
+        facts = await self._union_members_lines(merged, lists, pins, trees)
+        text = format_chunks_markdown_within_budget(
+            merged, self.budget_tokens, pointers=self.pointers, facts=facts
         )
         return text, merged
+
+    async def _union_members_lines(
+        self,
+        merged: tuple[Chunk, ...],
+        lists: Sequence[ChunkList],
+        pins: Sequence[str],
+        trees: SearchResponseTrees,
+    ) -> Mapping[int, SearchHitFacts]:
+        """The merged hits' Members lines, each read from its OWN bundle's trees
+        on the branch that bundle searched — none, and no tree read, while the
+        knob is off. ``lists[i]`` is what ``self.services[i]`` ranked."""
+        if not self.members_line:
+            return {}
+        # Object-identity owner map, as in ``_union_api``: the merge drops the
+        # project tag, and two bundles may hold the same module.
+        owners = {id(c): s for s, cl in zip(self.services, lists, strict=True) for c in cl.items}
+        owned = owners_on_their_pins([(owners[id(c)], c) for c in merged], self.services, pins)
+        return await members_line_facts(owned, trees, child_cap=self.card_child_cap)
 
     async def _union_api(
         self, queries: tuple[SearchQuery, ...], limit: int
