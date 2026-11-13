@@ -47,6 +47,7 @@ from pydocs_eval.judge.role_config import AlignmentConfig
 # draw in [0, 1). Fixed, so the draw never moves between runs.
 _AUDIT_SALT = "alignment-audit"
 _DRAW_BYTES = 8
+_DRAW_SPAN = 1 << (8 * _DRAW_BYTES)
 _ADDRESSES_GRADER = JevQuestionKind.ADDRESSES_GRADER.value
 
 
@@ -235,7 +236,7 @@ def _cleanly_agreed(row: AlignmentLabelRow) -> bool:
 
 def _audit_draw(item_id: str) -> float:
     digest = hashlib.sha256(f"{_AUDIT_SALT}:{item_id}".encode()).digest()
-    return int.from_bytes(digest[:_DRAW_BYTES], "big") / 2 ** (8 * _DRAW_BYTES)
+    return int.from_bytes(digest[:_DRAW_BYTES], "big") / _DRAW_SPAN
 
 
 __all__ = (

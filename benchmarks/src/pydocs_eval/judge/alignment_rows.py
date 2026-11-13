@@ -164,7 +164,9 @@ class AlignmentLabelRow:
 
     def with_labeller(self, slot: LabellerSlot, entry: LabellerEntry) -> AlignmentLabelRow:
         """This row with ``slot``'s entry replaced by ``entry``."""
-        return replace(self, **{slot.value: entry})
+        if slot is LabellerSlot.ASTRA:
+            return replace(self, astra=entry)
+        return replace(self, opus=entry)
 
     @property
     def labelled_by_both(self) -> bool:

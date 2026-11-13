@@ -70,10 +70,11 @@ def agreement_lines(
             f"{agreement_figure_text(row.kappa)}{flag}"
         )
     yield "disagreement directions (which labeller favoured the answer):"
-    for row in directions:
+    for direction in directions:
         yield (
-            f"  {row.dataset} {row.question}: {row.disagreements} disagreements, astra favours "
-            f"{row.astra_favours_answer}, opus favours {row.opus_favours_answer}"
+            f"  {direction.dataset} {direction.question}: {direction.disagreements} "
+            f"disagreements, astra favours {direction.astra_favours_answer}, opus favours "
+            f"{direction.opus_favours_answer}"
         )
 
 

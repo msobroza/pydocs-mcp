@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import TypeVar
+from typing import TypedDict, TypeVar
 
 from pydocs_eval.judge.alignment_rows import (
     AlignmentItemContext,
@@ -201,7 +201,18 @@ def _refuse_other_revision(raw: Mapping[str, object]) -> None:
         raise ValueError(f"revision {revision!r}, expected {ALIGNMENT_LABEL_REVISION!r}")
 
 
-def _settlement_from_json(raw: Mapping[str, object]) -> dict[str, object]:
+class _Settlement(TypedDict):
+    """The row's fields after its two labellers: what the item settled to, and the owner's word."""
+
+    planted_injection: str
+    agreed: dict[str, LabelVerdict]
+    escalation_reasons: tuple[OwnerEscalation, ...]
+    owner_decision: dict[str, LabelVerdict]
+    owner_note: str
+    escalation_judge: LabellerEntry | None
+
+
+def _settlement_from_json(raw: Mapping[str, object]) -> _Settlement:
     judge = raw["escalation_judge"]
     reasons = _list(raw["escalation_reasons"], "escalation_reasons")
     return {
