@@ -1,93 +1,108 @@
-"""The child_expand chat arm (#393) changes ONE thing against the chat baseline.
+"""Each child_expand chat arm (#393) changes ONE thing against its baseline.
 
-The arm serves ``ask_openrouter_example_needle_chat.yaml`` field for field
-and adds only a ``pipelines`` block that routes the default docs search to
-``pipelines/exp_child_expand.yaml`` — the shipped default docs pipeline plus
-one ``child_expand`` step between the top-k cutoff and the limit, at the step
-class's own defaults. The decision and dependency routes stay the shipped
-ones. These pins keep the arm a single-variable change: an edit to the
-baseline serving config, or to the shipped default pipeline, fails here until
-the arm copy follows.
+Two runner paths, one arm each, both on the same commit as their baseline:
+
+- the vendored chat runner serves ``ask_openrouter_example_needle_chat.yaml``;
+  its arm is ``ask_openrouter_example_needle_chat_child_expand.yaml``;
+- the before/after verb (after step 7b) serves ``ask_openrouter_qwen3_4b.yaml``;
+  its arm is ``ask_openrouter_qwen3_4b_child_expand.yaml``.
+
+An arm serves its baseline field for field except the default docs route,
+which points at the baseline's own default pipeline plus one
+``child_expand`` step between the top-k cutoff and the limit, at the step
+class's defaults. These pins keep each arm a single-variable change: an edit
+to a baseline serving file or pipeline fails here until the arm copy follows.
 """
 
 from __future__ import annotations
 
-from importlib import resources
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 import yaml
+from pydocs_mcp.retrieval.config import AppConfig, _resolve_pipeline_path
 
 _CONFIGS = Path(__file__).parents[2] / "configs"
-_BASELINE_CONFIG = _CONFIGS / "ask_openrouter_example_needle_chat.yaml"
-_ARM_CONFIG = _CONFIGS / "ask_openrouter_example_needle_chat_child_expand.yaml"
-_ARM_PIPELINE = _CONFIGS / "pipelines" / "exp_child_expand.yaml"
-_ARM_PIPELINE_PATH = "pipelines/exp_child_expand.yaml"
 
-pytest.importorskip("pydocs_mcp")
+
+@dataclass(frozen=True, slots=True)
+class _Arm:
+    baseline: Path
+    arm: Path
+
+
+_ARMS = {
+    "vendored-chat-runner": _Arm(
+        _CONFIGS / "ask_openrouter_example_needle_chat.yaml",
+        _CONFIGS / "ask_openrouter_example_needle_chat_child_expand.yaml",
+    ),
+    "before-after": _Arm(
+        _CONFIGS / "ask_openrouter_qwen3_4b.yaml",
+        _CONFIGS / "ask_openrouter_qwen3_4b_child_expand.yaml",
+    ),
+}
+_EACH_ARM = pytest.mark.parametrize("arm", list(_ARMS.values()), ids=list(_ARMS))
 
 
 def _load_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
-def _shipped(relative: str) -> dict:
-    return yaml.safe_load(resources.files("pydocs_mcp").joinpath(relative).read_text("utf-8"))
+def _resolved_routes(config_path: Path) -> list[tuple[str | None, bool, Path]]:
+    """(predicate, default, resolved pipeline file) per chunk route, as the product loads them."""
+    config = AppConfig.load(explicit_path=config_path)
+    return [
+        (
+            r.predicate,
+            r.default,
+            _resolve_pipeline_path(r.pipeline_path, config._user_config_path()),
+        )
+        for r in config.pipelines["chunk"].routes
+    ]
 
 
-def _steps_without_names(pipeline: dict) -> list[dict]:
-    return [{k: v for k, v in step.items() if k != "name"} for step in pipeline["steps"]]
+def _default_pipeline(config_path: Path) -> Path:
+    (path,) = [path for _, default, path in _resolved_routes(config_path) if default]
+    return path
 
 
-def test_the_arm_serves_the_chat_baseline_plus_only_a_pipelines_block() -> None:
-    arm = _load_yaml(_ARM_CONFIG)
-    baseline = _load_yaml(_BASELINE_CONFIG)
-
-    assert "pipelines" not in baseline
-    assert {k: v for k, v in arm.items() if k != "pipelines"} == baseline
-    assert set(arm["pipelines"]) == {"chunk"}  # the member search stays the shipped one
+def _steps_without_names(pipeline_path: Path) -> list[dict]:
+    steps = _load_yaml(pipeline_path)["steps"]
+    return [{k: v for k, v in step.items() if k != "name"} for step in steps]
 
 
-def test_the_arm_reroutes_only_the_default_docs_search() -> None:
-    shipped_routes = _shipped("defaults/default_config.yaml")["pipelines"]["chunk"]
-    arm_routes = _load_yaml(_ARM_CONFIG)["pipelines"]["chunk"]
+@_EACH_ARM
+def test_the_arm_serves_its_baseline_plus_only_a_docs_route_change(arm: _Arm) -> None:
+    served, baseline = _load_yaml(arm.arm), _load_yaml(arm.baseline)
 
-    expected = [*shipped_routes[:-1], {**shipped_routes[-1], "pipeline_path": _ARM_PIPELINE_PATH}]
+    assert {k: v for k, v in served.items() if k != "pipelines"} == {
+        k: v for k, v in baseline.items() if k != "pipelines"
+    }
+    assert set(served["pipelines"]) == {"chunk"}  # the member search stays the baseline's
 
-    assert shipped_routes[-1]["default"] is True
-    assert arm_routes == expected
+
+@_EACH_ARM
+def test_the_arm_reroutes_only_the_default_docs_search(arm: _Arm) -> None:
+    served, baseline = _resolved_routes(arm.arm), _resolved_routes(arm.baseline)
+
+    assert [route[:2] for route in served] == [route[:2] for route in baseline]
+    assert [route for route in served if not route[1]] == [r for r in baseline if not r[1]]
+    assert _default_pipeline(arm.arm) != _default_pipeline(arm.baseline)
 
 
-def test_the_arm_pipeline_is_the_shipped_default_plus_one_child_expand_step() -> None:
-    shipped = _steps_without_names(_shipped("pipelines/chunk_search_graph.yaml"))
-    arm = _steps_without_names(_load_yaml(_ARM_PIPELINE))
-    types = [step["type"] for step in arm]
+@_EACH_ARM
+def test_the_arm_pipeline_is_the_baseline_s_plus_one_child_expand_step(arm: _Arm) -> None:
+    baseline = _steps_without_names(_default_pipeline(arm.baseline))
+    served = _steps_without_names(_default_pipeline(arm.arm))
+    types = [step["type"] for step in served]
 
     added_at = types.index("child_expand")
 
     assert types[added_at - 1 : added_at + 2] == ["top_k_filter", "child_expand", "limit"]
     # params {}: top_s / per_parent / decay come from the step class, their one home.
-    assert arm[added_at] == {"type": "child_expand", "params": {}}
-    assert arm[:added_at] + arm[added_at + 1 :] == shipped
-
-
-def test_the_arm_routes_resolve_to_the_arm_pipeline_and_the_shipped_presets() -> None:
-    from pydocs_mcp.retrieval.config import AppConfig, _resolve_pipeline_path
-
-    config = AppConfig.load(explicit_path=_ARM_CONFIG)
-    shipped_dir = Path(str(resources.files("pydocs_mcp.pipelines"))).resolve()
-
-    resolved = [
-        _resolve_pipeline_path(route.pipeline_path, config._user_config_path())
-        for route in config.pipelines["chunk"].routes
-    ]
-
-    # The overlay's route list REPLACES the shipped one (no merge, no duplicate default).
-    assert resolved == [
-        shipped_dir / "decision_search.yaml",
-        shipped_dir / "chunk_search_deps.yaml",
-        _ARM_PIPELINE.resolve(),
-    ]
+    assert served[added_at] == {"type": "child_expand", "params": {}}
+    assert served[:added_at] + served[added_at + 1 :] == baseline
 
 
 class _UnusedEmbedder:
@@ -101,27 +116,28 @@ class _UnusedVectorStore:
         raise AssertionError("pipeline assembly must not search")
 
 
-def test_the_arm_pipeline_assembles_in_the_product_with_the_step_before_the_limit() -> None:
-    from pydocs_mcp.retrieval.config import AppConfig
+@_EACH_ARM
+def test_the_arm_pipeline_assembles_in_the_product_with_the_step_before_the_limit(
+    arm: _Arm,
+) -> None:
     from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
     from pydocs_mcp.retrieval.serialization import BuildContext
     from pydocs_mcp.retrieval.steps import ChildExpandStep, LimitStep
 
     context = BuildContext(
-        app_config=AppConfig.load(explicit_path=_ARM_CONFIG),
+        app_config=AppConfig.load(explicit_path=arm.arm),
         embedder=_UnusedEmbedder(),  # type: ignore[arg-type]
         vector_store=_UnusedVectorStore(),  # type: ignore[arg-type]
         uow_factory=lambda: None,  # type: ignore[arg-type,return-value]
     )
 
-    pipeline = CodeRetrieverPipeline.from_dict(_load_yaml(_ARM_PIPELINE), context)
+    pipeline = CodeRetrieverPipeline.from_dict(_load_yaml(_default_pipeline(arm.arm)), context)
 
     stages = list(pipeline.stages)
     expand = next(i for i, s in enumerate(stages) if isinstance(s, ChildExpandStep))
     built = stages[expand]
     default = ChildExpandStep(uow_factory=context.uow_factory)  # type: ignore[arg-type]
     assert isinstance(stages[expand + 1], LimitStep)
-    # params {} in the arm: every knob comes from the step class, its one home.
     assert (built.top_s, built.per_parent, built.decay) == (
         default.top_s,
         default.per_parent,

@@ -1,0 +1,27 @@
+# The child_expand arm (#393) for the before/after path: ask_openrouter_qwen3_4b.yaml
+# field for field, plus ONE change — the default docs route points at
+# pipelines/exp_dense_child_expand.yaml (exp_dense.yaml plus the overlay-only
+# `child_expand` step) instead of pipelines/exp_dense.yaml. A test pins this
+# file to its baseline, so edit the two together.
+#
+# Same commit, two serving files: the baseline arm serves
+# ask_openrouter_qwen3_4b.yaml, this arm serves this file, so the before/after
+# verb needs its serving-mismatch allowance (step 7b, PR #440). Through the
+# vendored chat runner use ask_openrouter_example_needle_chat_child_expand.yaml
+# instead. Owner-gated paid run (ledger line 16). The index is shared:
+# child_expand is search-time only.
+#
+# Like its baseline, NO `ask_your_docs.llm` block lives here: the arm's model
+# settings come from --llm-block.
+embedding:
+  provider: openai
+  model_name: qwen/qwen3-embedding-4b
+  dim: 2560
+  base_url: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  send_dimensions: false
+  batch_size: 32
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_dense_child_expand.yaml
