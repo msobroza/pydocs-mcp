@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,8 @@ from pydocs_eval.campaign.alignment_annotate_command import (
     add_annotate_alignment_command,
     cmd_annotate_alignment,
 )
+from pydocs_eval.judge.alignment_label_file import read_alignment_labels, write_alignment_labels
+from pydocs_eval.judge.alignment_vocabulary import LabelVerdict
 from tests.judge._annotation_fakes import write_labelled_file
 
 
@@ -89,19 +92,34 @@ def test_a_label_file_that_does_not_exist_is_refused_before_anything_starts(
     status = cmd_annotate_alignment(_args("--labels", str(absent)), launch=launcher)
 
     assert (status, launcher.commands) == (2, [])
-    assert f"--labels {absent} does not exist" in capsys.readouterr().err
+    assert f"{absent} does not exist, expected an alignment label file" in capsys.readouterr().err
 
 
-def test_a_label_file_the_reader_refuses_is_refused_before_anything_starts(
-    labels: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def _a_line_the_reader_refuses(labels: Path) -> str:
     labels.write_text('{"revision": "0.9"}\n', encoding="utf-8")
+    return f"{labels.name} line 1: revision '0.9'"
+
+
+def _an_owner_verdict_its_question_cannot_take(labels: Path) -> str:
+    first, *rest = read_alignment_labels(labels)
+    unfit = replace(first, owner_decision={"needle_identified": LabelVerdict.L2})
+    write_alignment_labels(labels, (unfit, *rest))
+    return f"{labels.name}: needle_identified = 'L2' on item '{first.item_id}'"
+
+
+@pytest.mark.parametrize(
+    "spoil", [_a_line_the_reader_refuses, _an_owner_verdict_its_question_cannot_take]
+)
+def test_a_label_file_the_page_cannot_open_is_refused_before_anything_starts(
+    labels: Path, capsys: pytest.CaptureFixture[str], spoil: Callable[[Path], str]
+) -> None:
+    named = spoil(labels)
     launcher = FakeStreamlitLauncher()
 
     status = cmd_annotate_alignment(_args("--labels", str(labels)), launch=launcher)
 
     assert (status, launcher.commands) == (2, [])
-    assert f"{labels.name} line 1: revision '0.9'" in capsys.readouterr().err
+    assert named in capsys.readouterr().err
 
 
 def test_without_streamlit_it_names_the_ask_extra_and_starts_nothing(

@@ -12,6 +12,7 @@ import errno
 import importlib.util
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -410,5 +411,21 @@ def test_a_label_file_the_reader_refuses_is_named_and_left_as_it_is(
 
     (error,) = [error.value for error in at.error]
     assert f"{labels.name} line 4: revision '0.9'" in error
+    assert not at.selectbox
+    assert labels.read_bytes() == before
+
+
+def test_an_owner_verdict_its_question_cannot_take_is_named_never_drawn(
+    monkeypatch: pytest.MonkeyPatch, labels: Path
+) -> None:
+    first, *rest = read_alignment_labels(labels)
+    hand_edited = replace(first, owner_decision={"needle_identified": LabelVerdict.L2})
+    write_alignment_labels(labels, (hand_edited, *rest))
+    before = labels.read_bytes()
+
+    at = _opened(monkeypatch, labels)
+
+    (error,) = [error.value for error in at.error]
+    assert f"{labels.name}: needle_identified = 'L2' on item '{DISAGREED_ITEM}'" in error
     assert not at.selectbox
     assert labels.read_bytes() == before

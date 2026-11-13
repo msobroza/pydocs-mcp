@@ -1,10 +1,12 @@
 """``annotate-alignment``: open the annotation page on one alignment label file.
 
 The page (``pydocs_eval.judge.annotate_app``) runs under ``streamlit run``, and
-Streamlit comes with the eval suite's ``[ask]`` extra. The verb reads the label
-file first, so a wrong path or a line the reader refuses is named here rather
-than in the browser. It then starts Streamlit on the page and returns its exit
-status. ``--read-only`` reaches the page, which then writes nothing.
+Streamlit comes with the eval suite's ``[ask]`` extra. The verb first opens the
+label file the way the page does (``open_annotation_labels``), so a wrong path,
+a line the reader refuses or an owner verdict its question cannot take is named
+here rather than in the browser. It then starts Streamlit on the page and
+returns its exit status. ``--read-only`` reaches the page, which then writes
+nothing.
 
 Exit status: Streamlit's own, or 2 when the label file or the install is refused.
 
@@ -25,7 +27,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pydocs_eval.judge.annotate_app as annotate_app
-from pydocs_eval.judge.alignment_label_file import read_alignment_labels
+from pydocs_eval.judge.annotate_app import open_annotation_labels
 
 _EXIT_REFUSED = 2
 _STREAMLIT_MISSING = (
@@ -54,34 +56,32 @@ def add_annotate_alignment_command(
     parser.set_defaults(func=cmd_annotate_alignment)
 
 
+def _run_streamlit(command: Sequence[str]) -> int:
+    # The command is this interpreter, Streamlit, the page and the operator's own file.
+    return subprocess.run(list(command), check=False).returncode
+
+
 def cmd_annotate_alignment(
     args: argparse.Namespace,
     *,
-    launch: StreamlitLauncher | None = None,
+    launch: StreamlitLauncher = _run_streamlit,
     find_module: ModuleFinder = importlib.util.find_spec,
 ) -> int:
-    """Start the page on ``--labels``; refuse an unreadable file or a missing Streamlit first."""
+    """Start the page on ``--labels``; refuse a file it cannot open or a missing Streamlit first."""
     try:
-        _refuse_unreadable_labels(args.labels)
+        open_annotation_labels(args.labels)
         _refuse_missing_streamlit(find_module)
     except (ValueError, OSError, RuntimeError) as exc:
         print(f"annotate-alignment: {exc}", file=sys.stderr)
         return _EXIT_REFUSED
-    command = annotation_page_command(args.labels, read_only=args.read_only)
-    return (launch or _run_streamlit)(command)
+    return launch(_annotation_page_command(args.labels, read_only=args.read_only))
 
 
-def annotation_page_command(labels: Path, *, read_only: bool) -> list[str]:
+def _annotation_page_command(labels: Path, *, read_only: bool) -> list[str]:
     """The ``streamlit run`` command line that opens the page on ``labels``."""
     page = str(Path(annotate_app.__file__))
     flags = ["--read-only"] if read_only else []
     return [sys.executable, "-m", "streamlit", "run", page, "--", str(labels), *flags]
-
-
-def _refuse_unreadable_labels(labels: Path) -> None:
-    if not labels.is_file():
-        raise ValueError(f"--labels {labels} does not exist, expected an alignment label file")
-    read_alignment_labels(labels)
 
 
 def _refuse_missing_streamlit(find_module: ModuleFinder) -> None:
@@ -89,9 +89,4 @@ def _refuse_missing_streamlit(find_module: ModuleFinder) -> None:
         raise RuntimeError(_STREAMLIT_MISSING)
 
 
-def _run_streamlit(command: Sequence[str]) -> int:
-    # The command is this interpreter, Streamlit, the page and the operator's own file.
-    return subprocess.run(list(command), check=False).returncode
-
-
-__all__ = ("add_annotate_alignment_command", "annotation_page_command", "cmd_annotate_alignment")
+__all__ = ("add_annotate_alignment_command", "cmd_annotate_alignment")

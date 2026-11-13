@@ -50,7 +50,11 @@ from pydocs_eval.judge.alignment_annotation_text import (
     shown_code_caption,
 )
 from pydocs_eval.judge.alignment_label_file import read_alignment_labels
-from pydocs_eval.judge.alignment_owner_ruling import OwnerRuling, record_owner_ruling
+from pydocs_eval.judge.alignment_owner_ruling import (
+    OwnerRuling,
+    record_owner_ruling,
+    refuse_unfit_owner_decision,
+)
 from pydocs_eval.judge.alignment_rows import AlignmentLabelRow
 from pydocs_eval.judge.alignment_vocabulary import LabellerSlot, LabelVerdict, verdicts_for
 
@@ -125,7 +129,7 @@ def render_annotation_page(argv: Sequence[str]) -> None:
     st.set_page_config(page_title="Alignment annotation", layout="wide")
     try:
         options = annotation_page_options(argv)
-        rows = _read_label_file(options.labels)
+        rows = open_annotation_labels(options.labels)
     except (ValueError, OSError) as exc:
         st.error(f"Cannot open the annotation page: {exc}")
         return
@@ -139,11 +143,27 @@ def render_annotation_page(argv: Sequence[str]) -> None:
     _draw_ruling_form(row, options)
 
 
-def _read_label_file(path: Path) -> tuple[AlignmentLabelRow, ...]:
-    """The file's rows; a missing file is refused here, where the reader would read it as empty."""
+def open_annotation_labels(path: Path) -> tuple[AlignmentLabelRow, ...]:
+    """The rows the page opens ``path`` with, or why it cannot open it.
+
+    A missing file is refused (the reader reads one as empty), and so is an owner
+    verdict its question cannot take, which only a hand edit writes and the page
+    could not draw.
+
+    Raises:
+        ValueError: the file is missing, a line is not a row of its revision
+            (``AlignmentLabelFileError``), or an owner verdict does not fit its item.
+        OSError: the file cannot be read.
+    """
     if not path.is_file():
         raise ValueError(f"{path} does not exist, expected an alignment label file")
-    return read_alignment_labels(path)
+    rows = read_alignment_labels(path)
+    for row in rows:
+        try:
+            refuse_unfit_owner_decision(row, row.owner_decision)
+        except ValueError as exc:
+            raise ValueError(f"{path.name}: {exc}") from exc
+    return rows
 
 
 def _draw_last_save_outcome() -> None:
@@ -307,6 +327,7 @@ __all__ = (
     "annotation_page_options",
     "decision_widget_key",
     "note_widget_key",
+    "open_annotation_labels",
     "render_annotation_page",
     "save_button_key",
 )
