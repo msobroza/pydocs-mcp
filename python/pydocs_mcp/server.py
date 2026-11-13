@@ -473,6 +473,7 @@ def build_routers(
         MultiProjectLookup,
         MultiProjectSearch,
     )
+    from pydocs_mcp.application.search_hit_facts import MembersLineSettings
     from pydocs_mcp.application.tool_router import ToolRouter
     from pydocs_mcp.application.upstream_status import behind_upstream_hint_applies
     from pydocs_mcp.multirepo import validate_project_embedders
@@ -543,8 +544,10 @@ def build_routers(
             pointers=config.output.pointers,
             # The Members-line experiment (issue #393): off unless YAML turns
             # it on, naming as many children as the symbol card does.
-            members_line=config.search.output.members_line,
-            card_child_cap=config.symbol_card.child_cap,
+            members_line=MembersLineSettings(
+                enabled=config.search.output.members_line,
+                child_cap=config.symbol_card.child_cap,
+            ),
         ),
         lookup_router=MultiProjectLookup(
             services=services, target_resolution=config.target_resolution

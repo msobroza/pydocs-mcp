@@ -16,9 +16,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydocs_mcp.application.mcp_errors import ServiceUnavailableError
-from pydocs_mcp.application.symbol_views import members_line
+from pydocs_mcp.application.symbol_views import render_members_line
 from pydocs_mcp.extraction.model import NodeKind
 from pydocs_mcp.models import ChunkFilterField
+from pydocs_mcp.retrieval.config.models import (
+    _DEFAULT_SEARCH_MEMBERS_LINE,
+    _DEFAULT_SYMBOL_CARD_CHILD_CAP,
+)
 
 if TYPE_CHECKING:
     from pydocs_mcp.application.multi_project_search import ProjectServices
@@ -31,6 +35,20 @@ if TYPE_CHECKING:
 # kind decides, whatever the language: a markdown, notebook or config file's
 # root is a module too, and names its sections the way its card does.
 _MEMBERS_LINE_KINDS: frozenset[NodeKind] = frozenset({NodeKind.CLASS, NodeKind.MODULE})
+
+
+@dataclass(frozen=True, slots=True)
+class MembersLineSettings:
+    """Whether class and module search hits name their children, and how many.
+
+    ``enabled`` is ``search.output.members_line`` (off by default: the
+    experiment's arm turns it on by overlay) and ``child_cap`` is
+    ``symbol_card.child_cap``, so a hit names exactly the children its card
+    names. The composition root threads both from YAML.
+    """
+
+    enabled: bool = _DEFAULT_SEARCH_MEMBERS_LINE
+    child_cap: int = _DEFAULT_SYMBOL_CARD_CHILD_CAP
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,19 +69,28 @@ class SearchResponseTrees:
     Keyed by the owning bundle's db path plus ``(package, module)``: within one
     response a bundle reads one branch (the one it pins), so a key names one
     tree however many times its owner was bound to that branch along the way.
+    Shared by every reader of the response — the Members lines and the member
+    rows' spans — so a module both need is read once.
     """
 
-    __slots__ = ("_read",)
+    __slots__ = ("_loaded_trees",)
 
     def __init__(self) -> None:
-        self._read: dict[tuple[Path, str, str], DocumentNode | None] = {}
+        self._loaded_trees: dict[tuple[Path, str, str], DocumentNode | None] = {}
 
     async def tree(self, owner: ProjectServices, package: str, module: str) -> DocumentNode | None:
         """``(package, module)``'s tree in ``owner``'s bundle, read on first ask only."""
         key = (owner.project.db_path, package, module)
-        if key not in self._read:
-            self._read[key] = await _read_tree(owner, package, module)
-        return self._read[key]
+        if key not in self._loaded_trees:
+            self._loaded_trees[key] = await _read_tree(owner, package, module)
+        return self._loaded_trees[key]
+
+    async def node(
+        self, owner: ProjectServices, package: str, module: str, qualified_name: str
+    ) -> DocumentNode | None:
+        """The node named ``qualified_name`` in that tree; ``None`` when either is missing."""
+        tree = await self.tree(owner, package, module)
+        return tree.find_node_by_qualified_name(qualified_name) if tree is not None else None
 
 
 async def _read_tree(owner: ProjectServices, package: str, module: str) -> DocumentNode | None:
@@ -85,24 +112,37 @@ async def _read_tree(owner: ProjectServices, package: str, module: str) -> Docum
         return None
 
 
-async def members_line_facts(
+async def load_search_hit_facts(
     hits: Sequence[tuple[ProjectServices, Chunk]],
     trees: SearchResponseTrees,
-    *,
-    child_cap: int,
+    settings: MembersLineSettings,
 ) -> dict[int, SearchHitFacts]:
     """The Members line of every class or module hit, keyed by the hit's rank.
 
     ``hits`` pairs each ranked chunk with the bundle it came from, bound to
-    the branch that bundle searched. ``child_cap`` is ``symbol_card.child_cap``,
-    so a hit names exactly the children its card names.
+    the branch that bundle searched. With ``settings.enabled`` off — the
+    shipped default — no tree is read and no hit states anything.
     """
+    if not settings.enabled:
+        return {}
     facts: dict[int, SearchHitFacts] = {}
     for rank, (owner, hit) in enumerate(hits):
         node = await _hit_node(owner, hit, trees)
-        if node is not None and node.kind in _MEMBERS_LINE_KINDS:
-            facts[rank] = SearchHitFacts(members_line=members_line(node, child_cap=child_cap))
+        if node is not None and _names_its_members(node):
+            line = render_members_line(node, child_cap=settings.child_cap)
+            facts[rank] = SearchHitFacts(members_line=line)
     return facts
+
+
+def _names_its_members(node: DocumentNode) -> bool:
+    """A class or module node with children to name.
+
+    A childless one carries no line: ADR 0023 (j) allows a line NAMING the
+    children, and a class whose members are attributes (a dataclass, an enum,
+    an exception) has no child nodes — the card's "No members." would
+    contradict the fields its hit's own text shows.
+    """
+    return node.kind in _MEMBERS_LINE_KINDS and bool(node.children)
 
 
 async def _hit_node(
@@ -115,8 +155,12 @@ async def _hit_node(
     if not (qualified_name and module):
         return None
     package = str(metadata.get(ChunkFilterField.PACKAGE.value) or "")
-    tree = await trees.tree(owner, package, module)
-    return tree.find_node_by_qualified_name(qualified_name) if tree is not None else None
+    return await trees.node(owner, package, module, qualified_name)
 
 
-__all__ = ("SearchHitFacts", "SearchResponseTrees", "members_line_facts")
+__all__ = (
+    "MembersLineSettings",
+    "SearchHitFacts",
+    "SearchResponseTrees",
+    "load_search_hit_facts",
+)

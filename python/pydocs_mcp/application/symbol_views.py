@@ -161,7 +161,7 @@ def _first_doc_line(node: DocumentNode) -> str:
     return lines[0].strip() if lines else ""
 
 
-def members_line(node: DocumentNode, *, child_cap: int) -> str:
+def render_members_line(node: DocumentNode, *, child_cap: int) -> str:
     """The card's ``Members (N): …`` line for ``node``, naming at most ``child_cap`` children.
 
     Public for the other view that names a node's children — the Members line
@@ -170,7 +170,7 @@ def members_line(node: DocumentNode, *, child_cap: int) -> str:
 
     Example::
 
-        members_line(class_node, child_cap=2)   # 'Members (3): run, stat, and 1 more'
+        render_members_line(class_node, child_cap=2)   # 'Members (3): run, stat, and 1 more'
     """
     listed, elided = _listed_children(node, child_cap)
     return _members_line(node, listed, elided)
@@ -407,4 +407,10 @@ def _record_cut(node: DocumentNode, cut: LevelCut) -> None:
     )
 
 
-__all__ = ("Outline", "SymbolCard", "members_line", "render_outline", "render_symbol_card")
+__all__ = (
+    "Outline",
+    "SymbolCard",
+    "render_members_line",
+    "render_outline",
+    "render_symbol_card",
+)

@@ -45,9 +45,10 @@ from pydocs_mcp.application.overview_service import OverviewService
 from pydocs_mcp.application.pointer_grammar import strip_pointers
 from pydocs_mcp.application.protocols import DecisionNavigator
 from pydocs_mcp.application.search_hit_facts import (
+    MembersLineSettings,
     SearchHitFacts,
     SearchResponseTrees,
-    members_line_facts,
+    load_search_hit_facts,
 )
 from pydocs_mcp.application.search_limit import cap_search_rows, record_matches_not_shown
 from pydocs_mcp.application.search_query import (
@@ -74,11 +75,7 @@ from pydocs_mcp.models import (
 from pydocs_mcp.multirepo import LoadedProject, select_project
 from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.retrieval.config import TargetResolutionConfig
-from pydocs_mcp.retrieval.config.models import (
-    _DEFAULT_SEARCH_BUDGET_TOKENS,
-    _DEFAULT_SEARCH_MEMBERS_LINE,
-    _DEFAULT_SYMBOL_CARD_CHILD_CAP,
-)
+from pydocs_mcp.retrieval.config.models import _DEFAULT_SEARCH_BUDGET_TOKENS
 
 if TYPE_CHECKING:
     from pydocs_mcp.application.reference_service import ContextNode
@@ -92,6 +89,10 @@ if TYPE_CHECKING:
 _EMPTY_DOCS_MSG = "No matches found."
 _EMPTY_API_MSG = "No symbols found."
 EMPTY_SEARCH_MESSAGES = frozenset((_EMPTY_DOCS_MSG, _EMPTY_API_MSG))
+
+# The Members-line settings a renderer gets when its caller names none: the
+# shipped ones (the knob off), so a direct call renders what HEAD rendered.
+_SHIPPED_MEMBERS_LINE = MembersLineSettings()
 
 # A ranked candidate is a Chunk or a ModuleMember (both carry ``relevance`` +
 # ``metadata``). Value-constrained so the merge preserves the concrete type and
@@ -184,8 +185,7 @@ async def render_single_search(
     budget_tokens: int,
     pointers: PointerTableConfig,
     branch: str = "",
-    members_line: bool = _DEFAULT_SEARCH_MEMBERS_LINE,
-    card_child_cap: int = _DEFAULT_SYMBOL_CARD_CHILD_CAP,
+    members_line: MembersLineSettings = _SHIPPED_MEMBERS_LINE,
 ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
     """Single-database search — dispatch by ``kind``.
 
@@ -203,8 +203,8 @@ async def render_single_search(
 
     ``members_line`` (``search.output.members_line``, issue #393) puts a
     ``Members (N): …`` line on each class or module hit, naming at most
-    ``card_child_cap`` children (``symbol_card.child_cap``). Off, no tree is
-    read for a chunk hit and the text is what it was before the knob.
+    ``symbol_card.child_cap`` children. Off — the default — no tree is read
+    for a chunk hit and the text is what it was before the knob.
     """
     if payload.kind == "decision":
         # Delegate to the DecisionNavigator so decision rendering has ONE
@@ -225,7 +225,7 @@ async def render_single_search(
     if payload.kind == "docs":
         response = await svc.docs.search(query)
         rows = _ranked_chunks(response, limit)
-        facts = await _members_lines(svc, rows, trees, members_line, card_child_cap)
+        facts = await load_search_hit_facts([(svc, c) for c in rows], trees, members_line)
         body = format_chunks_markdown_within_budget(
             rows, budget_tokens, pointers=pointers, facts=facts
         )
@@ -239,7 +239,7 @@ async def render_single_search(
     chunk_resp, member_resp = await asyncio.gather(svc.docs.search(query), svc.api.search(query))
     rows = _ranked_chunks(chunk_resp, limit)
     members = _ranked_members(member_resp, limit)
-    facts = await _members_lines(svc, rows, trees, members_line, card_child_cap)
+    facts = await load_search_hit_facts([(svc, c) for c in rows], trees, members_line)
     parts = [
         format_chunks_markdown_within_budget(rows, budget_tokens, pointers=pointers, facts=facts),
         format_members_markdown_within_budget(members, budget_tokens, pointers=pointers),
@@ -247,19 +247,6 @@ async def render_single_search(
     body = "\n\n".join(p for p in parts if p) or _EMPTY_DOCS_MSG
     member_items = await _member_search_items([(svc, m) for m in members], trees)
     return body, tuple(_chunk_item(c) for c in rows) + member_items, {}
-
-
-async def _members_lines(
-    svc: ProjectServices,
-    rows: tuple[Chunk, ...],
-    trees: SearchResponseTrees,
-    members_line: bool,
-    card_child_cap: int,
-) -> Mapping[int, SearchHitFacts]:
-    """One bundle's hits' Members lines — none, and no tree read, while the knob is off."""
-    if not members_line:
-        return {}
-    return await members_line_facts([(svc, c) for c in rows], trees, child_cap=card_child_cap)
 
 
 async def _search_decisions_in_scope(
@@ -382,8 +369,7 @@ async def _resolve_member_node(
     name = str(md.get(ModuleMemberFilterField.NAME.value) or "")
     if not (module and name):
         return None
-    tree = await trees.tree(svc, package, module)
-    return tree.find_node_by_qualified_name(f"{module}.{name}") if tree is not None else None
+    return await trees.node(svc, package, module, f"{module}.{name}")
 
 
 # Extras channel key: the bundle whose lookup ANSWERED, as its db path. Under
@@ -449,11 +435,9 @@ class MultiProjectSearch:
     pointers: PointerTableConfig = field(default_factory=PointerTableConfig)
     # Whether a class or module hit names its children under its header
     # (``search.output.members_line``, issue #393), and how many it names
-    # (``symbol_card.child_cap``, so a hit names what its card names). The
-    # composition root threads both; BOTH paths read them, for the same reason
-    # as the table above.
-    members_line: bool = _DEFAULT_SEARCH_MEMBERS_LINE
-    card_child_cap: int = _DEFAULT_SYMBOL_CARD_CHILD_CAP
+    # (``symbol_card.child_cap``). The composition root threads both; BOTH
+    # paths read them, for the same reason as the table above.
+    members_line: MembersLineSettings = field(default_factory=MembersLineSettings)
 
     async def search(self, payload: SearchInput) -> str:
         if self.envelope is not None:
@@ -530,7 +514,6 @@ class MultiProjectSearch:
             pointers=self.pointers,
             branch=branch,
             members_line=self.members_line,
-            card_child_cap=self.card_child_cap,
         )
 
     async def _union_docs(
@@ -564,15 +547,17 @@ class MultiProjectSearch:
         trees: SearchResponseTrees,
     ) -> Mapping[int, SearchHitFacts]:
         """The merged hits' Members lines, each read from its OWN bundle's trees
-        on the branch that bundle searched — none, and no tree read, while the
-        knob is off. ``lists[i]`` is what ``self.services[i]`` ranked."""
-        if not self.members_line:
+        on the branch that bundle searched. ``lists[i]`` is what
+        ``self.services[i]`` ranked."""
+        if not self.members_line.enabled:
+            # The loader would read nothing either; returning here also skips
+            # binding every bundle to its pin for a line nobody renders.
             return {}
         # Object-identity owner map, as in ``_union_api``: the merge drops the
         # project tag, and two bundles may hold the same module.
         owners = {id(c): s for s, cl in zip(self.services, lists, strict=True) for c in cl.items}
         owned = owners_on_their_pins([(owners[id(c)], c) for c in merged], self.services, pins)
-        return await members_line_facts(owned, trees, child_cap=self.card_child_cap)
+        return await load_search_hit_facts(owned, trees, self.members_line)
 
     async def _union_api(
         self, queries: tuple[SearchQuery, ...], limit: int
