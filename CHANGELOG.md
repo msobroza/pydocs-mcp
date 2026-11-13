@@ -188,6 +188,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Workflow line starts at `search_codebase`. The other server-instruction lines,
   tool names and input schemas are unchanged. The descriptions artifact hash
   moves, and the startup log line reports the new one. (#379)
+- **The server instructions now give MCP clients the chat prompt's follow-up
+  rules.** `SERVER_INSTRUCTIONS` is what every MCP client reads when it
+  connects, and what `pydocs-mcp --help` prints. Three of its lines still
+  restated `system_v2`'s rules after the chat agent moved to `system_v3`, so
+  one server handed out two policies. They now say what `system_v3` says:
+  - Follow-up calls are offers, not orders. Take only the ones the question
+    needs, and issue the "Together:" ones you take in one turn.
+  - Never re-read what a response already showed you. A hit that offers no
+    source call has already shown its whole span, and lines a view reports as
+    not in the index are read exactly once. The old advice to "ask for a
+    different depth" instead is gone: for a hit that showed its whole span,
+    another depth returns the same text.
+  - To see a symbol's code, make one `get_symbol(depth="source")` call or one
+    windowed `read_file` call. Ask for the symbol card only when the question
+    needs its member list.
+
+  The chat agent never receives these instructions, so its behaviour does not
+  change. Every other line of `descriptions.md` is unchanged, and so are the
+  tool descriptions, tool names and input schemas. The descriptions artifact
+  hash (`current_artifact_hash()`, as the startup log prints it) moves from
+  `265c2d0e1b3c` to `7a5a1a89d94c`. The served-surface golden is regenerated,
+  and the registration snapshot regenerates unchanged. The eval suite's
+  `tool_docs` artifact renders the same text, so its fingerprint moves too,
+  from `440a607f25d2` to `9fcf24f97625`. (#395)
 
 ### Fixed
 
