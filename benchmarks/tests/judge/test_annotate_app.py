@@ -20,7 +20,7 @@ pytest.importorskip("streamlit")
 
 from streamlit.testing.v1 import AppTest
 
-from pydocs_eval.judge.alignment_label_file import read_alignment_labels
+from pydocs_eval.judge.alignment_label_file import read_alignment_labels, write_alignment_labels
 from pydocs_eval.judge.alignment_vocabulary import LabellerSlot, LabelVerdict
 from pydocs_eval.judge.annotate_app import (
     EVERY_ITEM_KEY,
@@ -30,7 +30,7 @@ from pydocs_eval.judge.annotate_app import (
     save_button_key,
 )
 
-from ._alignment_fakes import REPOQA_ANSWER, REPOQA_REFERENCE
+from ._alignment_fakes import REPOQA_ANSWER, REPOQA_REFERENCE, repoqa_row
 from ._annotation_fakes import (
     CLEAN_ITEM,
     DISAGREED_ITEM,
@@ -192,6 +192,21 @@ def test_a_saved_ruling_is_confirmed_and_leaves_the_awaiting_count(
     ]
     assert "3 items · 2 in the owner queue · 1 awaiting a ruling" in _shown_texts(at)
     assert at.selectbox(key=ITEM_PICKER_KEY).value == DISAGREED_ITEM
+
+
+def test_a_save_keeps_what_a_labelling_run_wrote_while_the_page_was_open(
+    monkeypatch: pytest.MonkeyPatch, labels: Path
+) -> None:
+    at = _opened(monkeypatch, labels)
+    drawn_later = repoqa_row("item_drawn_later")
+    write_alignment_labels(labels, (*read_alignment_labels(labels), drawn_later))
+
+    _rule(at, DISAGREED_ITEM, {"needle_identified": "false"}, _NOTE)
+
+    rows = read_alignment_labels(labels)
+    assert [row.item_id for row in rows[:3]] == [DISAGREED_ITEM, LOW_CONFIDENCE_ITEM, CLEAN_ITEM]
+    assert rows[3] == drawn_later
+    assert rows[0].owner_note == _NOTE
 
 
 def _fail_every_replace(source: object, target: object) -> None:
