@@ -15,7 +15,6 @@ from pydocs_mcp.application.formatting import (
     search_hit_header,
 )
 from pydocs_mcp.application.pointer_grammar import pointer_token, resolve_pointers
-from pydocs_mcp.application.search_hit_facts import SearchHitFacts
 from pydocs_mcp.application.truncation import ledger_scope
 from pydocs_mcp.constants import PACKAGE_DOC_MAX
 from pydocs_mcp.models import (
@@ -492,51 +491,3 @@ def test_format_chunks_opens_every_block_with_the_located_header():
     )
     assert out.startswith("## pkg.mod.run — pkg/mod.py:10-42\nbody\n")
     assert pointer_token("lookup", "pkg.mod.run") in out
-
-
-# ---------- the optional facts mapping (issue #393, ADR 0023 (j)) ----------
-
-
-def _class_hit() -> Chunk:
-    return _located_chunk(
-        **{
-            "qualified_name": "pkg.mod.Box",
-            ChunkFilterField.START_LINE.value: 50,
-            ChunkFilterField.END_LINE.value: 60,
-        }
-    )
-
-
-def test_a_hit_with_facts_names_its_members_between_the_header_and_the_body():
-    out = format_chunks_markdown_within_budget(
-        (_located_chunk(), _class_hit()),
-        budget_tokens=1000,
-        pointers=_POINTER_TABLE,
-        facts={1: SearchHitFacts(members_line="Members (2): open, close")},
-    )
-    assert "## pkg.mod.Box — pkg/mod.py:50-60\nMembers (2): open, close\nbody\n" in out
-    assert out.startswith("## pkg.mod.run — pkg/mod.py:10-42\nbody\n")
-
-
-def test_the_members_line_is_the_only_byte_a_fact_adds():
-    """Same bundle, same separators, same budget arithmetic for everything else."""
-    hits = (_located_chunk(), _class_hit())
-    plain = format_chunks_markdown_within_budget(hits, 1000, pointers=_POINTER_TABLE)
-    with_facts = format_chunks_markdown_within_budget(
-        hits,
-        1000,
-        pointers=_POINTER_TABLE,
-        facts={1: SearchHitFacts(members_line="Members (2): open, close")},
-    )
-    assert with_facts.replace("Members (2): open, close\n", "", 1) == plain
-
-
-def test_an_empty_facts_mapping_renders_the_blocks_byte_for_byte():
-    hits = (Chunk(text="abc", metadata={ChunkFilterField.TITLE.value: "A"}), _located_chunk())
-    out = format_chunks_markdown_within_budget(hits, 1000, pointers=_POINTER_TABLE, facts={})
-    assert out == (
-        "## A\nabc\n\n"
-        "## pkg.mod.run — pkg/mod.py:10-42\nbody\n"
-        "Together: [[next:lookup:pkg.mod.run]] [[next:lookup-show:pkg.mod.run:callers]]\n"
-        "Then: [[next:lookup-show:pkg.mod.run:source]]\n"
-    )
