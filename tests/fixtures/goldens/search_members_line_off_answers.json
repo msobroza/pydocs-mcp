@@ -1,0 +1,344 @@
+{
+  "single_any": {
+    "items": [
+      {
+        "end_line": 15,
+        "id": "8",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "shop/cart.py",
+        "qualified_name": "shop.cart.Cart.total",
+        "score": 8.863234519958496,
+        "start_line": 13
+      },
+      {
+        "end_line": 6,
+        "id": "2",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "docs/guide.md",
+        "qualified_name": "docs.guide.md#checkout",
+        "score": 5.645568370819092,
+        "start_line": 3
+      },
+      {
+        "end_line": 15,
+        "id": "5",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "shop/cart.py",
+        "qualified_name": "shop.cart.Cart",
+        "score": 1.4536378383636475,
+        "start_line": 4
+      },
+      {
+        "end_line": 8,
+        "id": "6",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "shop/cart.py",
+        "qualified_name": "shop.cart.Cart.add",
+        "score": 0.007554893847554922,
+        "start_line": 7
+      },
+      {
+        "end_line": 11,
+        "id": "7",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "shop/cart.py",
+        "qualified_name": "shop.cart.Cart.remove",
+        "score": -1.993640661239624,
+        "start_line": 10
+      },
+      {
+        "end_line": 20,
+        "id": "9",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "shop/cart.py",
+        "qualified_name": "shop.cart.checkout",
+        "score": -3.5298964977264404,
+        "start_line": 18
+      },
+      {
+        "end_line": 9,
+        "id": "3",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "docs/guide.md",
+        "qualified_name": "docs.guide.md#refunds",
+        "score": -5.341575622558594,
+        "start_line": 7
+      },
+      {
+        "end_line": 20,
+        "id": "4",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "shop/cart.py",
+        "qualified_name": "shop.cart",
+        "score": -5.501770973205566,
+        "start_line": 1
+      },
+      {
+        "end_line": 9,
+        "id": "1",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "docs/guide.md",
+        "qualified_name": "docs.guide.md",
+        "score": -9.96872329711914,
+        "start_line": 1
+      },
+      {
+        "end_line": 15,
+        "id": "1",
+        "kind": "member",
+        "package": "__project__",
+        "path": "shop/cart.py",
+        "qualified_name": "shop.cart.Cart",
+        "score": 0.0,
+        "start_line": 4
+      },
+      {
+        "end_line": 20,
+        "id": "2",
+        "kind": "member",
+        "package": "__project__",
+        "path": "shop/cart.py",
+        "qualified_name": "shop.cart.checkout",
+        "score": 0.0,
+        "start_line": 18
+      }
+    ],
+    "meta": {
+      "branch": null,
+      "index_stale": false,
+      "indexed_git_head": null,
+      "live_git_head": null,
+      "project": "shop",
+      "tool": "search_codebase",
+      "truncated": false
+    },
+    "text": "[index: unstamped \u00b7 0d old \u00b7 1 packages]\n\n## shop.cart.Cart.total \u2014 shop/cart.py:13-15\n    def total(self) -> int:\n        \"\"\"Sum the cart's line items.\"\"\"\n        return 0\nTogether: \u2192 get_symbol(target=\"shop.cart.Cart.total\") \u2192 get_references(target=\"shop.cart.Cart.total\", direction=\"callers\")\n\n## docs.guide.md#checkout \u2014 docs/guide.md:3-6\nCall checkout with a cart to charge its total.\nTogether: \u2192 get_symbol(target=\"docs.guide.md#checkout\")\n\n## shop.cart.Cart \u2014 shop/cart.py:4-15\nclass Cart:\n    \"\"\"Holds the line items of one order.\"\"\"\n\nTogether: \u2192 get_symbol(target=\"shop.cart.Cart\") \u2192 get_references(target=\"shop.cart.Cart\", direction=\"callers\")\nThen: \u2192 get_symbol(target=\"shop.cart.Cart\", depth=\"source\")\n\n## shop.cart.Cart.add \u2014 shop/cart.py:7-8\n    def add(self, sku: str) -> None:\n        \"\"\"Add one item to the cart.\"\"\"\nTogether: \u2192 get_symbol(target=\"shop.cart.Cart.add\") \u2192 get_references(target=\"shop.cart.Cart.add\", direction=\"callers\")\n\n## shop.cart.Cart.remove \u2014 shop/cart.py:10-11\n    def remove(self, sku: str) -> None:\n        \"\"\"Remove one item from the cart.\"\"\"\nTogether: \u2192 get_symbol(target=\"shop.cart.Cart.remove\") \u2192 get_references(target=\"shop.cart.Cart.remove\", direction=\"callers\")\n\n## shop.cart.checkout \u2014 shop/cart.py:18-20\ndef checkout(cart: Cart) -> int:\n    \"\"\"Charge the cart total at checkout.\"\"\"\n    return cart.total()\nTogether: \u2192 get_symbol(target=\"shop.cart.checkout\") \u2192 get_references(target=\"shop.cart.checkout\", direction=\"callers\")\n\n## docs.guide.md#refunds \u2014 docs/guide.md:7-9\nRemove the item from the cart before checkout.\nTogether: \u2192 get_symbol(target=\"docs.guide.md#refunds\")\n\n## shop.cart \u2014 shop/cart.py:1-20\nShopping cart model.\nTogether: \u2192 get_symbol(target=\"shop.cart\") \u2192 get_references(target=\"shop.cart\", direction=\"callers\")\nThen: \u2192 get_symbol(target=\"shop.cart\", depth=\"source\")\n\n## docs.guide.md \u2014 docs/guide.md:1-9\nHow to check out a cart.\n\nTogether: \u2192 get_symbol(target=\"docs.guide.md\")\nThen: \u2192 read_file(file_path=\"docs/guide.md\", offset=1, limit=9)\n\n\n**[__project__] shop.cart.Cart()** (class)\nHolds the line items of one order.\nTogether: \u2192 get_symbol(target=\"shop.cart.Cart\") \u2192 get_references(target=\"shop.cart.Cart\", direction=\"callers\")\nThen: \u2192 get_symbol(target=\"shop.cart.Cart\", depth=\"source\")\n\n**[__project__] shop.cart.checkout(cart: Cart)** (def)\nCharge the cart total at checkout.\nTogether: \u2192 get_symbol(target=\"shop.cart.checkout\") \u2192 get_references(target=\"shop.cart.checkout\", direction=\"callers\")\nThen: \u2192 get_symbol(target=\"shop.cart.checkout\", depth=\"source\")\n"
+  },
+  "single_docs": {
+    "items": [
+      {
+        "end_line": 20,
+        "id": "4",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "shop/cart.py",
+        "qualified_name": "shop.cart",
+        "score": 11.056438446044922,
+        "start_line": 1
+      },
+      {
+        "end_line": 9,
+        "id": "3",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "docs/guide.md",
+        "qualified_name": "docs.guide.md#refunds",
+        "score": 7.199833393096924,
+        "start_line": 7
+      },
+      {
+        "end_line": 6,
+        "id": "2",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "docs/guide.md",
+        "qualified_name": "docs.guide.md#checkout",
+        "score": 2.872389793395996,
+        "start_line": 3
+      },
+      {
+        "end_line": 15,
+        "id": "8",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "shop/cart.py",
+        "qualified_name": "shop.cart.Cart.total",
+        "score": 2.804755926132202,
+        "start_line": 13
+      },
+      {
+        "end_line": 20,
+        "id": "9",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "shop/cart.py",
+        "qualified_name": "shop.cart.checkout",
+        "score": 2.4184014797210693,
+        "start_line": 18
+      },
+      {
+        "end_line": 11,
+        "id": "7",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "shop/cart.py",
+        "qualified_name": "shop.cart.Cart.remove",
+        "score": 1.6311883926391602,
+        "start_line": 10
+      },
+      {
+        "end_line": 8,
+        "id": "6",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "shop/cart.py",
+        "qualified_name": "shop.cart.Cart.add",
+        "score": -0.17574955523014069,
+        "start_line": 7
+      },
+      {
+        "end_line": 9,
+        "id": "1",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "docs/guide.md",
+        "qualified_name": "docs.guide.md",
+        "score": -7.126976490020752,
+        "start_line": 1
+      },
+      {
+        "end_line": 15,
+        "id": "5",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "shop/cart.py",
+        "qualified_name": "shop.cart.Cart",
+        "score": -9.321803092956543,
+        "start_line": 4
+      }
+    ],
+    "meta": {
+      "branch": null,
+      "index_stale": false,
+      "indexed_git_head": null,
+      "live_git_head": null,
+      "project": "shop",
+      "tool": "search_codebase",
+      "truncated": false
+    },
+    "text": "[index: unstamped \u00b7 0d old \u00b7 1 packages]\n\n## shop.cart \u2014 shop/cart.py:1-20\nShopping cart model.\nTogether: \u2192 get_symbol(target=\"shop.cart\") \u2192 get_references(target=\"shop.cart\", direction=\"callers\")\nThen: \u2192 get_symbol(target=\"shop.cart\", depth=\"source\")\n\n## docs.guide.md#refunds \u2014 docs/guide.md:7-9\nRemove the item from the cart before checkout.\nTogether: \u2192 get_symbol(target=\"docs.guide.md#refunds\")\n\n## docs.guide.md#checkout \u2014 docs/guide.md:3-6\nCall checkout with a cart to charge its total.\nTogether: \u2192 get_symbol(target=\"docs.guide.md#checkout\")\n\n## shop.cart.Cart.total \u2014 shop/cart.py:13-15\n    def total(self) -> int:\n        \"\"\"Sum the cart's line items.\"\"\"\n        return 0\nTogether: \u2192 get_symbol(target=\"shop.cart.Cart.total\") \u2192 get_references(target=\"shop.cart.Cart.total\", direction=\"callers\")\n\n## shop.cart.checkout \u2014 shop/cart.py:18-20\ndef checkout(cart: Cart) -> int:\n    \"\"\"Charge the cart total at checkout.\"\"\"\n    return cart.total()\nTogether: \u2192 get_symbol(target=\"shop.cart.checkout\") \u2192 get_references(target=\"shop.cart.checkout\", direction=\"callers\")\n\n## shop.cart.Cart.remove \u2014 shop/cart.py:10-11\n    def remove(self, sku: str) -> None:\n        \"\"\"Remove one item from the cart.\"\"\"\nTogether: \u2192 get_symbol(target=\"shop.cart.Cart.remove\") \u2192 get_references(target=\"shop.cart.Cart.remove\", direction=\"callers\")\n\n## shop.cart.Cart.add \u2014 shop/cart.py:7-8\n    def add(self, sku: str) -> None:\n        \"\"\"Add one item to the cart.\"\"\"\nTogether: \u2192 get_symbol(target=\"shop.cart.Cart.add\") \u2192 get_references(target=\"shop.cart.Cart.add\", direction=\"callers\")\n\n## docs.guide.md \u2014 docs/guide.md:1-9\nHow to check out a cart.\n\nTogether: \u2192 get_symbol(target=\"docs.guide.md\")\nThen: \u2192 read_file(file_path=\"docs/guide.md\", offset=1, limit=9)\n\n## shop.cart.Cart \u2014 shop/cart.py:4-15\nclass Cart:\n    \"\"\"Holds the line items of one order.\"\"\"\n\nTogether: \u2192 get_symbol(target=\"shop.cart.Cart\") \u2192 get_references(target=\"shop.cart.Cart\", direction=\"callers\")\nThen: \u2192 get_symbol(target=\"shop.cart.Cart\", depth=\"source\")\n"
+  },
+  "union_any": {
+    "items": [
+      {
+        "end_line": 15,
+        "id": "5",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "shop/cart.py",
+        "qualified_name": "shop.cart.Cart",
+        "score": 15.062235832214355,
+        "start_line": 4
+      },
+      {
+        "end_line": 9,
+        "id": "1",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "docs/guide.md",
+        "qualified_name": "docs.guide.md",
+        "score": 11.647665023803711,
+        "start_line": 1
+      },
+      {
+        "end_line": 6,
+        "id": "2",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "docs/guide.md",
+        "qualified_name": "docs.guide.md#checkout",
+        "score": 4.375361442565918,
+        "start_line": 3
+      },
+      {
+        "end_line": 8,
+        "id": "3",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "ledger/book.py",
+        "qualified_name": "ledger.book.Book.post",
+        "score": 4.332881450653076,
+        "start_line": 7
+      },
+      {
+        "end_line": 20,
+        "id": "4",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "shop/cart.py",
+        "qualified_name": "shop.cart",
+        "score": 3.7165517807006836,
+        "start_line": 1
+      },
+      {
+        "end_line": 8,
+        "id": "2",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "ledger/book.py",
+        "qualified_name": "ledger.book.Book",
+        "score": 2.9101788997650146,
+        "start_line": 4
+      },
+      {
+        "end_line": 15,
+        "id": "8",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "shop/cart.py",
+        "qualified_name": "shop.cart.Cart.total",
+        "score": 1.8795149326324463,
+        "start_line": 13
+      },
+      {
+        "end_line": 8,
+        "id": "1",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "ledger/book.py",
+        "qualified_name": "ledger.book",
+        "score": -2.491814374923706,
+        "start_line": 1
+      },
+      {
+        "end_line": 8,
+        "id": "6",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "shop/cart.py",
+        "qualified_name": "shop.cart.Cart.add",
+        "score": -7.025762557983398,
+        "start_line": 7
+      },
+      {
+        "end_line": 11,
+        "id": "7",
+        "kind": "chunk",
+        "package": "__project__",
+        "path": "shop/cart.py",
+        "qualified_name": "shop.cart.Cart.remove",
+        "score": -7.269259452819824,
+        "start_line": 10
+      }
+    ],
+    "meta": {
+      "branch": null,
+      "index_stale": false,
+      "indexed_git_head": null,
+      "live_git_head": null,
+      "project": "shop",
+      "tool": "search_codebase",
+      "truncated": true
+    },
+    "text": "[index: unstamped \u00b7 0d old \u00b7 1 packages]\n\n## shop.cart.Cart \u2014 shop/cart.py:4-15\nclass Cart:\n    \"\"\"Holds the line items of one order.\"\"\"\n\nTogether: \u2192 get_symbol(target=\"shop.cart.Cart\") \u2192 get_references(target=\"shop.cart.Cart\", direction=\"callers\")\nThen: \u2192 get_symbol(target=\"shop.cart.Cart\", depth=\"source\")\n\n## docs.guide.md \u2014 docs/guide.md:1-9\nHow to check out a cart.\n\nTogether: \u2192 get_symbol(target=\"docs.guide.md\")\nThen: \u2192 read_file(file_path=\"docs/guide.md\", offset=1, limit=9)\n\n## docs.guide.md#checkout \u2014 docs/guide.md:3-6\nCall checkout with a cart to charge its total.\nTogether: \u2192 get_symbol(target=\"docs.guide.md#checkout\")\n\n## ledger.book.Book.post \u2014 ledger/book.py:7-8\n    def post(self, amount: int) -> None:\n        \"\"\"Post one cart total to the book.\"\"\"\nTogether: \u2192 get_symbol(target=\"ledger.book.Book.post\") \u2192 get_references(target=\"ledger.book.Book.post\", direction=\"callers\")\n\n## shop.cart \u2014 shop/cart.py:1-20\nShopping cart model.\nTogether: \u2192 get_symbol(target=\"shop.cart\") \u2192 get_references(target=\"shop.cart\", direction=\"callers\")\nThen: \u2192 get_symbol(target=\"shop.cart\", depth=\"source\")\n\n## ledger.book.Book \u2014 ledger/book.py:4-8\nclass Book:\n    \"\"\"An append-only list of cart entries.\"\"\"\n\nTogether: \u2192 get_symbol(target=\"ledger.book.Book\") \u2192 get_references(target=\"ledger.book.Book\", direction=\"callers\")\nThen: \u2192 get_symbol(target=\"ledger.book.Book\", depth=\"source\")\n\n## shop.cart.Cart.total \u2014 shop/cart.py:13-15\n    def total(self) -> int:\n        \"\"\"Sum the cart's line items.\"\"\"\n        return 0\nTogether: \u2192 get_symbol(target=\"shop.cart.Cart.total\") \u2192 get_references(target=\"shop.cart.Cart.total\", direction=\"callers\")\n\n## ledger.book \u2014 ledger/book.py:1-8\nBookkeeping entries for cart totals.\nTogether: \u2192 get_symbol(target=\"ledger.book\") \u2192 get_references(target=\"ledger.book\", direction=\"callers\")\nThen: \u2192 get_symbol(target=\"ledger.book\", depth=\"source\")\n\n## shop.cart.Cart.add \u2014 shop/cart.py:7-8\n    def add(self, sku: str) -> None:\n        \"\"\"Add one item to the cart.\"\"\"\nTogether: \u2192 get_symbol(target=\"shop.cart.Cart.add\") \u2192 get_references(target=\"shop.cart.Cart.add\", direction=\"callers\")\n\n## shop.cart.Cart.remove \u2014 shop/cart.py:10-11\n    def remove(self, sku: str) -> None:\n        \"\"\"Remove one item from the cart.\"\"\"\nTogether: \u2192 get_symbol(target=\"shop.cart.Cart.remove\") \u2192 get_references(target=\"shop.cart.Cart.remove\", direction=\"callers\")\n\n[truncated: 1 section \u2014 recovery pointers inline]\n- 2 match(es) beyond limit=10 not shown \u2014 narrow with package= or scope=, or raise limit=\n"
+  }
+}

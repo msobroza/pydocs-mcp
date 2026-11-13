@@ -171,6 +171,20 @@ def test_a_hit_on_both_branches_carries_the_selected_branch_span(indexed: Path) 
     assert len(feature_ids) == len(set(feature_ids))
 
 
+def test_the_members_line_names_the_selected_branch_members(indexed: Path, tmp_path: Path) -> None:
+    """#393: a module hit's Members line reads the tree of the branch searched."""
+    overlay = tmp_path / "members-line.yaml"
+    overlay.write_text("search:\n  output:\n    members_line: true\n", encoding="utf-8")
+    config = AppConfig.load(explicit_path=overlay)
+    router, _services = build_routers(config, db_path=_db(indexed), surface="mcp")
+    on_feature = asyncio.run(router.search_codebase(_EVERY_CHUNK, branch=FEATURE)).text
+    on_main = asyncio.run(router.search_codebase(_EVERY_CHUNK)).text
+    module_header = "\n## app.core — app/core.py:"
+    assert module_header in on_feature and module_header in on_main
+    assert "\nMembers (3): gamma, alpha, beta\n" in on_feature
+    assert "\nMembers (2): alpha, beta\n" in on_main
+
+
 def test_member_search_follows_the_branch(indexed: Path) -> None:
     by_name = SearchInput(query="gamma", kind="api")
     on_feature = _search(indexed, by_name, FEATURE)
