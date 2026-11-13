@@ -117,6 +117,27 @@ def score_answer(plan: JevRequestPlan, *, judge: JevJudge, config: JudgeConfig) 
     )
 
 
+def calibration_answers(
+    plan: JevRequestPlan, *, judge: JevJudge, config: JudgeConfig
+) -> dict[str, JevAnswer]:
+    """Jev's raw answers to ``plan``, by question id: what a threshold sweep is fitted on.
+
+    Needs no thresholds — they are what the answers calibrate — so a dataset
+    that ``score_answer`` still refuses can be calibrated. A part that got no
+    usable answer leaves its questions out.
+
+    Example:
+        >>> calibration_answers(plan, judge=judge, config=config)["needle_identified"]  # doctest: +SKIP
+        NoulAnswer(probability=0.97)
+
+    Raises:
+        JudgeConfigError: ``judge.jev.model`` is empty.
+        JudgeModelMismatchError: the model that answered is not ``judge.jev.model``.
+    """
+    answers, _ = _ask(plan, judge, jev_model(config))
+    return answers
+
+
 def _ask(plan: JevRequestPlan, judge: JevJudge, pinned: str) -> tuple[dict[str, JevAnswer], bool]:
     """Every answer ``pinned`` gave across the plan's requests, and whether a request got none."""
     answers: dict[str, JevAnswer] = {}
@@ -178,4 +199,11 @@ def _log_outage(plan: JevRequestPlan, part: int, exc: Exception) -> None:
     log.warning(json.dumps(fields))
 
 
-__all__ = ("AGREEMENT", "CompletenessLevel", "JevScore", "JevVerdict", "score_answer")
+__all__ = (
+    "AGREEMENT",
+    "CompletenessLevel",
+    "JevScore",
+    "JevVerdict",
+    "calibration_answers",
+    "score_answer",
+)
