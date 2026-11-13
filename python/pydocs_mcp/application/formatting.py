@@ -36,6 +36,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from math import ceil
 from pathlib import PurePosixPath
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal
 
 from pydocs_mcp.application.listing_targets import sorted_reference_rows
@@ -84,6 +85,7 @@ if TYPE_CHECKING:
         WorkspaceProjectEntry,
     )
     from pydocs_mcp.application.reference_service import ContextNode, ImpactNode
+    from pydocs_mcp.application.search_hit_facts import SearchHitFacts
     from pydocs_mcp.storage.decision_record import DecisionRecord
     from pydocs_mcp.storage.node_reference import NodeReference
 
@@ -95,6 +97,11 @@ _CHARS_PER_TOKEN = 4
 # Truncation gate: if fewer chars than this remain in the budget, we do NOT
 # emit a partial piece at all (the old ``format_within_budget`` behaviour).
 _TRUNCATION_MIN_REMAINDER = 100
+
+# No hit states anything beyond its chunk row — the search renderer's default,
+# which keeps every block byte-identical to the renderer before facts existed.
+# Read-only, so the shared default can never be mutated by a caller.
+_NO_SEARCH_HIT_FACTS: Mapping[int, SearchHitFacts] = MappingProxyType({})
 
 
 def _take_within_budget(
@@ -308,9 +315,15 @@ def search_hit_header(chunk: Chunk) -> str:
     return f"## {md.get(ChunkFilterField.TITLE.value, '') or ''}"
 
 
-def _chunk_piece(chunk: Chunk, pointers: PointerTableConfig) -> str:
+def _chunk_piece(
+    chunk: Chunk, pointers: PointerTableConfig, facts: SearchHitFacts | None = None
+) -> str:
     header = search_hit_header(chunk)
     text = chunk.text or ""
+    # ADR 0023 (j): a class or module hit may name its children right under
+    # its header. The line is not part of ``text``, so the bundle below still
+    # judges whether the hit showed its whole span from the chunk text alone.
+    members = f"{facts.members_line}\n" if facts is not None else ""
     # Node-backed hits — code AND pipeline-extracted markdown — carry the v7
     # ``qualified_name`` column back through metadata
     # (storage/sqlite/row_mappers.row_to_chunk); those carry a bundle.
@@ -320,8 +333,8 @@ def _chunk_piece(chunk: Chunk, pointers: PointerTableConfig) -> str:
     # of widening to the whole document.
     qname = str(chunk.metadata.get("qualified_name") or "")
     if not qname:
-        return f"{header}\n{text}\n"
-    return f"{header}\n{text}\n{_hit_bundle(chunk, qname, text, pointers)}"
+        return f"{header}\n{members}{text}\n"
+    return f"{header}\n{members}{text}\n{_hit_bundle(chunk, qname, text, pointers)}"
 
 
 def _member_piece(member: ModuleMember, pointers: PointerTableConfig) -> str:
@@ -349,6 +362,7 @@ def format_chunks_markdown_within_budget(
     budget_tokens: int,
     *,
     pointers: PointerTableConfig,
+    facts: Mapping[int, SearchHitFacts] = _NO_SEARCH_HIT_FACTS,
 ) -> str:
     """Render chunks as ``## {title}\\n{text}\\n`` blocks within a char budget.
 
@@ -361,6 +375,11 @@ def format_chunks_markdown_within_budget(
         budget_tokens: Rough budget; multiplied by 4 to get a char cap.
         pointers: The deployment's pointer table — the only source of the
             follow-ups each hit offers.
+        facts: What a hit states beyond its chunk row, keyed by the hit's
+            0-based rank in ``chunks`` (``application.search_hit_facts``).
+            Empty — the default — renders every block byte-for-byte as
+            before; an entry's Members line goes under that hit's header and
+            counts toward the budget like the rest of its block.
 
     Returns:
         Concatenated markdown. Empty string when ``chunks`` is empty.
@@ -383,7 +402,7 @@ def format_chunks_markdown_within_budget(
         )
 
     parts, elided = _take_within_budget(
-        (_chunk_piece(c, pointers) for c in chunks),
+        (_chunk_piece(c, pointers, facts.get(rank)) for rank, c in enumerate(chunks)),
         budget_tokens * _CHARS_PER_TOKEN,
         on_elide=_entry,
     )
