@@ -541,6 +541,10 @@ def build_routers(
             services=services,
             budget_tokens=config.search.output.budget_tokens,
             pointers=config.output.pointers,
+            # The Members-line experiment (issue #393): off unless YAML turns
+            # it on, naming as many children as the symbol card does.
+            members_line=config.search.output.members_line,
+            card_child_cap=config.symbol_card.child_cap,
         ),
         lookup_router=MultiProjectLookup(
             services=services, target_resolution=config.target_resolution
