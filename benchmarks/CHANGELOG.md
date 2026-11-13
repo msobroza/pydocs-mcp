@@ -14,6 +14,65 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Added
 
+- **The alignment set the answer judges are fitted to, the threshold sweep, and the
+  escalation judge** (`pydocs_eval.judge.alignment_*`, `threshold_sweep`,
+  `escalation*`; `python -m pydocs_eval.campaign label-alignment` and
+  `report-alignment`). Nothing here calls a model without `--confirm-spend`; the
+  10-item dual pilot itself has not been run.
+  - **Items are drawn actively from stored arm answers** in four strata: answers a
+    first Jev pass put in `judge.alignment.borderline_window` (0.2–0.8), answers
+    where Jev's verdict outside `band_start` contradicts the code check, answers
+    carrying one of the vendored planted injections (inside the item count), and a
+    `random_share` (0.25). Planted injections are hosted outside the two active
+    strata. The draw is seeded and never redraws an item the label file holds. The
+    10 `reserved` chat questions never enter the pool.
+  - **Two blind labellers** (`judge.alignment.labellers[0]` and `[1]`, Astra and Opus)
+    answer every item through the shared chat client. Each sees only the item's
+    ground truth: the gold, the needle's code (or each chat site's span), the
+    reference answer and the agent answer. The questions are Jev's own, word for
+    word. A labeller never sees the other's label, Jev's probability or why the item
+    was drawn, and a request golden pins this. Each question is answered
+    `{verdict, evidence, confidence}`, with `LabelConfidence` LOW / MEDIUM / HIGH.
+  - **Agreement is the label.** An item goes to the owner on a disagreement, and an
+    agreed item goes too when both labellers contradict the code check, either says
+    `low`, it is a planted injection neither flagged, or it falls in the random audit
+    (`agreed_audit_share` 0.10). The audit share grows in proportion once more than
+    `audit_growth_threshold` (5%) of the audited items prove wrong, and an audited
+    item stays audited. On `contradicts_reference` and `completeness`, a disagreement
+    in which the reference writer's family (Opus) favoured the answer is booked
+    `self_preference`, so an Opus-only agreement never makes the label.
+  - **One versioned label file per dataset and Jev model**
+    (`judge/data/alignment/<dataset>__<jev-model>.jsonl`, revision `1.0`, or
+    `judge.alignment.label_file`). It holds one canonical JSON line per item: the
+    context, both labellers' answers, the code check, `agreed`, `escalation_reasons`,
+    `owner_decision`, `owner_note` and the escalation judge's answers. Rewriting a
+    file that was read moves no byte. The file is also the batch journal: a batch id
+    is written the moment the batch is submitted, so a re-run collects a slow batch by
+    id instead of buying it twice.
+  - **Reports.** `report-alignment` prints, per question, the labellers' Cohen's κ
+    (`metrics.agreement`), which labeller favoured the answer in each disagreement, the
+    owner's queue and the audit. The threshold sweep (`--sweep`) prints Jev's agreement
+    against the share it decides alone, for each review band from 0.3/0.7 outward and
+    each `completeness` confidence gate. Levels are cut at the midpoints and never
+    averaged, and `calibration_answers` reads Jev's raw probabilities without thresholds.
+  - **The escalation judge** (`openai/gpt-6-luna`, `judge.escalation`) decides only Jev's
+    in-band yes/no answers (`escalate_in_band`). It decides only on questions where its
+    agreement pass reaches `min(agreement_floor, κ_labellers)` (0.90), and reads
+    `undecided` elsewhere without a call. Its κ is reported beside the labellers' and
+    flagged when above it, together with its agreement with each labeller alone.
+    `judge.escalation.floor_scale` (`percent_agreement`, as specified, or `kappa`)
+    decides which of its figures meets the floor; that choice is an open owner word.
+    Answers are cached by input hash, so a second scoring pass makes zero calls. Every
+    call is metered into a spend ledger, and no call starts past `spend_cap_usd` (2.00):
+    beyond it in-band answers read `undecided`.
+  - **The pilot verb sizes the passes.** `label-alignment` prints its plan for free and
+    rehearses everything offline with `--dry-run`. With `--confirm-spend` it asks the
+    pinned labellers on the Batch API. The pilot ends with the measured cost per item
+    against the $0.09–0.20 the budget assumed, the first κ, and how many items
+    `sub_budget_usd` (15.00) buys for pass 1 and pass 2. Pass 2, and any
+    swe-qa-questions item, refuse to run until the swe-qa-questions slices land
+    (`SWE_QA_QUESTION_SLICES`). (#381)
+
 - **Each before/after arm re-indexes its task bundles under its own product
   before serving** (`campaign/before_after_index_step.py`). Both arms share one
   bundle per corpus, the bundle key carries no chunk-tree rule, and the serve
