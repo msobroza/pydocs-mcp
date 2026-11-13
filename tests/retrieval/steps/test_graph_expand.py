@@ -314,6 +314,16 @@ async def test_run_merge_keeps_max_of_dense_and_graph() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_hydrates_a_neighbour_with_several_rows_as_its_longest_row() -> None:
+    refs = [_ref("pkg.caller", "pkg.seed", "pkg.seed", ReferenceKind.CALLS)]
+    short = _chunk("pkg.caller", 0.0, text="def caller(): ...")
+    longest = _chunk("pkg.caller", 0.0, text="def caller(): return seed() + 1")
+    step = GraphExpandStep(uow_factory=_factory(refs, [short, longest]))
+    out = await step.run(_state([_chunk("pkg.seed", 0.9)]))
+    assert _by_qname(out)["pkg.caller"].text == longest.text
+
+
+@pytest.mark.asyncio
 async def test_run_dense_only_when_neighbour_has_no_chunk() -> None:
     # Graph finds a caller, but no chunk exists for it (stdlib/dep) → no add.
     refs = [_ref("pkg.caller", "pkg.seed", "pkg.seed", ReferenceKind.CALLS)]

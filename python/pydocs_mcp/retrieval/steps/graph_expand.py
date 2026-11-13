@@ -39,15 +39,17 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any, ClassVar
 
-from pydocs_mcp.filters import FieldIn
 from pydocs_mcp.models import Chunk, ChunkList
-from pydocs_mcp.retrieval.filter_helpers import with_branch_pin
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.serialization import (
     BuildContext,
     step_registry,
     step_to_yaml_dict,
     yaml_kwargs,
+)
+from pydocs_mcp.retrieval.steps._rows_by_qualified_name import (
+    chunks_named_on_branch,
+    longest_text_row_per_key,
 )
 from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.protocols import UnitOfWork
@@ -283,14 +285,9 @@ class GraphExpandStep(RetrieverStep):
         rows the searched branch holds, when the search is pinned (#312).
         """
         rows = await graph.chunks_named(tuple(discovered))
-        best_chunk: dict[str, Chunk] = {}
-        for row in rows:
-            qname = _qname(row)
-            if qname is None or qname not in discovered:
-                continue
-            incumbent = best_chunk.get(qname)
-            if incumbent is None or len(row.text) > len(incumbent.text):
-                best_chunk[qname] = row
+        best_chunk = longest_text_row_per_key(
+            rows, key=lambda row: qname if (qname := _qname(row)) in discovered else None
+        )
         return [replace(c, relevance=discovered[q]) for q, c in best_chunk.items()]
 
     def to_dict(self) -> dict:
@@ -350,9 +347,7 @@ class _BranchGraph:
         )
 
     async def chunks_named(self, qnames: tuple[str, ...]) -> list[Chunk]:
-        named = FieldIn(field=_QNAME_KEY, values=qnames)
-        pinned = with_branch_pin(named, self.branch, target_field="chunk") if self.branch else named
-        return await self.uow.chunks.list(filter=pinned)
+        return await chunks_named_on_branch(self.uow, qnames, self.branch)
 
 
 def _merge(dense_items: tuple[Chunk, ...], neighbour_chunks: list[Chunk]) -> tuple[Chunk, ...]:
