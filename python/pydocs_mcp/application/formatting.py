@@ -17,7 +17,10 @@ Byte-parity contract (sub-PR #2 AC #21, sub-PR #4 AC #6):
   - Each block is ``"{header}\\n{body}\\n"`` with a SINGLE ``\\n`` between
     heading and body (NO blank line after the heading). The header is
     :func:`search_hit_header` — the hit's qualified name and ``path:start-end``
-    when the row carries them, else its title.
+    when the row carries them, else its title. A hit the caller hands
+    search-hit facts for carries its ``Members (N): …`` line between the two
+    (``"{header}\\n{members}\\n{body}\\n"``, ADR 0023 (j)); with no facts —
+    the default — the layout is exactly the one above.
   - Blocks are joined with ``"\\n"`` so CONSECUTIVE blocks are separated by
     a blank line: ``"## A\\nbody\\n\\n## B\\nbody\\n"``.
   - The trailing ``\\n`` of the last block is preserved — NO ``rstrip()``
