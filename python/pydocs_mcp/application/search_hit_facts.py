@@ -53,6 +53,8 @@ class SearchResponseTrees:
     tree however many times its owner was bound to that branch along the way.
     """
 
+    __slots__ = ("_read",)
+
     def __init__(self) -> None:
         self._read: dict[tuple[Path, str, str], DocumentNode | None] = {}
 
