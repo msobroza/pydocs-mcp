@@ -41,8 +41,17 @@ def test_the_ruling_lands_on_its_item_and_the_other_rows_keep_theirs(labels: Pat
         (OwnerRuling("item_a", {"site_0": LabelVerdict.TRUE}), "site_0"),
         (OwnerRuling("item_a", {"needle_identified": LabelVerdict.L2}), "'L2'"),
         (OwnerRuling("item_b", {"completeness": LabelVerdict.TRUE}), "'true'"),
+        # The audit books any owner verdict unlike the agreed one as the labellers being
+        # wrong, so "cannot decide" would grow it: the owner leaves the question unruled.
+        (OwnerRuling("item_a", {"needle_identified": LabelVerdict.UNDECIDED}), "'undecided'"),
     ],
-    ids=["item not in the file", "question not asked", "level on a yes/no", "yes/no on a level"],
+    ids=[
+        "item not in the file",
+        "question not asked",
+        "level on a yes/no",
+        "yes/no on a level",
+        "undecided",
+    ],
 )
 def test_a_ruling_that_does_not_fit_the_file_is_refused_and_nothing_is_written(
     labels: Path, ruling: OwnerRuling, named: str

@@ -193,6 +193,19 @@ def test_every_item_can_be_listed_the_agreed_ones_too(
     )
 
 
+def test_the_owner_rules_with_the_questions_own_verdicts_or_not_at_all(
+    monkeypatch: pytest.MonkeyPatch, labels: Path
+) -> None:
+    at = _opened(monkeypatch, labels)
+    needle = at.radio(key=decision_widget_key(DISAGREED_ITEM, "needle_identified"))
+    assert needle.options == ["no ruling", "true", "false"]
+
+    at.selectbox(key=ITEM_PICKER_KEY).set_value(LOW_CONFIDENCE_ITEM).run()
+
+    completeness = at.radio(key=decision_widget_key(LOW_CONFIDENCE_ITEM, "completeness"))
+    assert completeness.options == ["no ruling", "L0", "L1", "L2", "L3"]
+
+
 _NOTE = "It names get_params but never says it lives on BaseEstimator."
 
 

@@ -49,13 +49,9 @@ from pydocs_eval.judge.alignment_annotation_text import (
     shown_code_caption,
 )
 from pydocs_eval.judge.alignment_label_file import read_alignment_labels
-from pydocs_eval.judge.alignment_owner_ruling import (
-    OwnerRuling,
-    owner_ruling_verdicts,
-    record_owner_ruling,
-)
+from pydocs_eval.judge.alignment_owner_ruling import OwnerRuling, record_owner_ruling
 from pydocs_eval.judge.alignment_rows import AlignmentLabelRow
-from pydocs_eval.judge.alignment_vocabulary import LabellerSlot, LabelVerdict
+from pydocs_eval.judge.alignment_vocabulary import LabellerSlot, LabelVerdict, verdicts_for
 
 # Named, not __name__: run as a page this module is __main__.
 log = logging.getLogger("pydocs_eval.judge.annotate_app")
@@ -257,7 +253,7 @@ def _draw_question(row: AlignmentLabelRow, question_id: str, *, disabled: bool) 
     st.markdown(f"**{question_id}**")
     for slot in LabellerSlot:
         st.text(labeller_answer_line(row, slot, question_id))
-    choices = [_NO_RULING, *(verdict.value for verdict in owner_ruling_verdicts(question_id))]
+    choices = [_NO_RULING, *(verdict.value for verdict in verdicts_for(question_id))]
     ruled = row.owner_decision.get(question_id)
     st.radio(
         "Owner ruling",
