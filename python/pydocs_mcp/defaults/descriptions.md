@@ -6,12 +6,12 @@ Workflow: search_codebase → get_context → get_symbol / get_references; get_o
 Response contract: every response opens with an [index: …] freshness line — silence means the index is current; a [⚠ index stale…] line means re-index before trusting details. A response ends with ready-made follow-up calls, and elided content carries a recovery pointer whenever its target is resolvable.
 
 Using those follow-up calls:
-- The calls on a "Together:" line are independent of each other — issue all of them in ONE turn. The calls on a "Then:" line need an earlier result first, so leave them for a later turn.
+- Follow-up calls are offers, not orders: take only the ones the question needs. The calls on a "Together:" line are independent of each other, so when you take several, issue them in one turn. The calls on a "Then:" line need an earlier result first, so leave them for a later turn.
 - Call the follow-up a response offers instead of searching again for the same thing.
-- Never re-read content a response already showed you; ask for a different depth or a different symbol instead.
+- Never re-read content a response already showed you. A hit whose follow-up calls offer no source call (no depth="source", no read_file) has already shown its whole span. When a view says lines are "not in the index", read exactly those lines, once.
 - One call with many targets beats several calls of the same tool: get_context and get_why take a list.
 - An exact string, an error message or a config key goes to grep and read_file; a ranked or conceptual question goes to search_codebase; a name you already know goes to get_symbol.
-- Look at the symbol card — get_symbol's default depth — before asking for depth="source".
+- To see a symbol's code, make one get_symbol call with depth="source" or one windowed read_file call. Ask for the symbol card (get_symbol's default depth) only when the question needs its member list.
 === TOOL: get_overview ===
 Orient yourself: what is indexed and what shape this repo/package has.
 
