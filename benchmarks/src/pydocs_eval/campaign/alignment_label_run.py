@@ -251,7 +251,9 @@ def _light_context(task: EvalTask, dataset: JudgedDataset, answer: str) -> Align
     )
 
 
-def _shown_code(task: EvalTask, dataset: JudgedDataset, context_lines: int) -> tuple[ShownCode, ...]:
+def _shown_code(
+    task: EvalTask, dataset: JudgedDataset, context_lines: int
+) -> tuple[ShownCode, ...]:
     if dataset is JudgedDataset.SWE_QA_QUESTIONS:
         return ()
     with corpus_file_reader(task) as read_file:

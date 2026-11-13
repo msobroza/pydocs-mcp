@@ -114,7 +114,12 @@ def alignment_item_id(candidate: AlignmentCandidate, injection_id: str = "") -> 
         >>> len(alignment_item_id(candidate))  # doctest: +SKIP
         16
     """
-    parts = (candidate.dataset.value, candidate.task_id, candidate.source.trajectory_id, injection_id)
+    parts = (
+        candidate.dataset.value,
+        candidate.task_id,
+        candidate.source.trajectory_id,
+        injection_id,
+    )
     return hashlib.sha256("\x00".join(parts).encode("utf-8")).hexdigest()[:_ITEM_ID_CHARS]
 
 
@@ -188,9 +193,7 @@ def _without(
 
 def _shuffled(candidates: Sequence[AlignmentCandidate], seed: int) -> list[AlignmentCandidate]:
     """``candidates`` in a seeded order that does not depend on the order they came in."""
-    ordered = sorted(
-        candidates, key=lambda c: (c.dataset.value, c.task_id, c.source.trajectory_id)
-    )
+    ordered = sorted(candidates, key=lambda c: (c.dataset.value, c.task_id, c.source.trajectory_id))
     random.Random(seed).shuffle(ordered)
     return ordered
 
@@ -251,7 +254,10 @@ def alignment_row(
         context=context,
         questions=alignment_plan(context, jev=jev).question_ids,
         code_check=code_check_of(
-            candidate.dataset, context.gold, context.agent_answer, extensions=jev.citation_extensions
+            candidate.dataset,
+            context.gold,
+            context.agent_answer,
+            extensions=jev.citation_extensions,
         ),
         astra=LabellerEntry(model=astra_model),
         opus=LabellerEntry(model=opus_model),
@@ -278,7 +284,11 @@ def code_check_of(
     if dataset is JudgedDataset.REPOQA_QA:
         verdicts = {JevQuestionKind.NEEDLE_IDENTIFIED.value: citation.needle_cited}
     else:
-        flags = citation.sites_cited if citation.multi_location else (citation.needle_cited,) * len(sites)
+        flags = (
+            citation.sites_cited
+            if citation.multi_location
+            else (citation.needle_cited,) * len(sites)
+        )
         kind = _LOCATED_KIND[dataset].value
         verdicts = {f"{kind}_{index}": flag for index, flag in enumerate(flags)}
     return CodeCheck(citation.needle_cited, citation.gold_site_coverage, verdicts)

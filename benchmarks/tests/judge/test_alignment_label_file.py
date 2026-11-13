@@ -52,7 +52,9 @@ def _settled_row():
     )
     opus = answered(
         OPUS_MODEL,
-        labels_of(needle_identified="true", addresses_grader="false", contradicts_reference="false"),
+        labels_of(
+            needle_identified="true", addresses_grader="false", contradicts_reference="false"
+        ),
         batch_id="batch_o",
         batch_cost_usd=0.3,
     )
@@ -111,7 +113,9 @@ def test_only_the_owner_fields_move_when_the_owner_decides(tmp_path: Path) -> No
     before = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
     first, second = read_alignment_labels(path)
-    decided = replace(second, owner_decision={"needle_identified": LabelVerdict.FALSE}, owner_note="no")
+    decided = replace(
+        second, owner_decision={"needle_identified": LabelVerdict.FALSE}, owner_note="no"
+    )
     write_alignment_labels(path, (first, decided))
 
     after = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]

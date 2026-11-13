@@ -54,9 +54,7 @@ class _Snapshots:
 
 
 def _label(rows, clients, persist=None, **options):
-    return label_alignment_rows(
-        rows, clients, jev=_JEV, persist=persist or _Snapshots(), **options
-    )
+    return label_alignment_rows(rows, clients, jev=_JEV, persist=persist or _Snapshots(), **options)
 
 
 def test_both_labellers_answer_every_row_and_each_answer_is_recorded() -> None:
@@ -87,9 +85,7 @@ def test_each_batch_id_is_persisted_before_any_answer_is_read() -> None:
 
 
 def test_a_row_still_running_is_collected_by_its_batch_id_and_never_resubmitted() -> None:
-    clients = _clients(
-        {"a": [ChatFailureKind.STILL_RUNNING, _content()]}, {"a": _content()}
-    )
+    clients = _clients({"a": [ChatFailureKind.STILL_RUNNING, _content()]}, {"a": _content()})
     first = _label([repoqa_row("a")], clients)
 
     second = _label(first.rows, clients)
@@ -112,9 +108,7 @@ def test_an_unusable_answer_fails_the_row_and_the_next_run_asks_it_again() -> No
 
 
 def test_a_failed_submit_is_asked_again_only_on_request() -> None:
-    clients = _clients(
-        {"a": [ChatFailureKind.NOT_SUBMITTED, _content()]}, {"a": _content()}
-    )
+    clients = _clients({"a": [ChatFailureKind.NOT_SUBMITTED, _content()]}, {"a": _content()})
     first = _label([repoqa_row("a")], clients)
 
     untouched = _label(first.rows, clients)

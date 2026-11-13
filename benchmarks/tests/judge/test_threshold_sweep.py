@@ -60,7 +60,9 @@ def test_each_band_reports_its_agreement_against_its_auto_decided_share() -> Non
 
 
 def test_a_band_that_decides_nothing_has_no_agreement_figure() -> None:
-    (row,) = [r for r in sweep_noul_bands([(0.5, True)], band_start=(0.3, 0.7)) if r.band.low == 0.3]
+    (row,) = [
+        r for r in sweep_noul_bands([(0.5, True)], band_start=(0.3, 0.7)) if r.band.low == 0.3
+    ]
 
     assert (row.auto_decided, row.auto_decided_share, row.agreement) == (0, 0.0, None)
 

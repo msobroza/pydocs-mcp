@@ -178,7 +178,9 @@ class ChatRole:
 def _checked_window(value: tuple[float, float], name: str) -> tuple[float, float]:
     low, high = value
     if not 0.0 <= low <= high <= 1.0:
-        raise ValueError(f"{name} = {list(value)!r}, expected [low, high] with 0 <= low <= high <= 1")
+        raise ValueError(
+            f"{name} = {list(value)!r}, expected [low, high] with 0 <= low <= high <= 1"
+        )
     return value
 
 

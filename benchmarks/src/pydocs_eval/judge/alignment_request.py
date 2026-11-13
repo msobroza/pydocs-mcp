@@ -171,7 +171,9 @@ def _asked_questions(
         return every
     unknown = sorted(set(question_ids) - set(every))
     if unknown:
-        raise ValueError(f"questions {unknown!r} are not asked of this item, expected {list(every)}")
+        raise ValueError(
+            f"questions {unknown!r} are not asked of this item, expected {list(every)}"
+        )
     return {qid: question for qid, question in every.items() if qid in question_ids}
 
 

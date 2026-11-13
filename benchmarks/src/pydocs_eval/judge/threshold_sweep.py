@@ -15,7 +15,6 @@ Example:
 
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
@@ -151,14 +150,22 @@ def _bands_outward(start: tuple[float, float]) -> list[NoulBand]:
 
 def _band_row(band: NoulBand, pairs: Sequence[tuple[float, bool]]) -> BandSweepRow:
     verdicts = [(noul_verdict(probability, band), label) for probability, label in pairs]
-    decided = [(verdict is JevVerdict.TRUE, label) for verdict, label in verdicts if verdict is not JevVerdict.IN_BAND]
+    decided = [
+        (verdict is JevVerdict.TRUE, label)
+        for verdict, label in verdicts
+        if verdict is not JevVerdict.IN_BAND
+    ]
     agreeing = sum(1 for said, label in decided if said == label)
     return BandSweepRow(band, len(pairs), len(decided), agreeing)
 
 
-def _gate_row(gate: ScoreGate, pairs: Sequence[tuple[ScoreAnswer, CompletenessLevel]]) -> GateSweepRow:
+def _gate_row(
+    gate: ScoreGate, pairs: Sequence[tuple[ScoreAnswer, CompletenessLevel]]
+) -> GateSweepRow:
     levels = [(completeness_level(answer, gate), label) for answer, label in pairs]
-    decided = [(level, label) for level, label in levels if level is not CompletenessLevel.UNDEFINED]
+    decided = [
+        (level, label) for level, label in levels if level is not CompletenessLevel.UNDEFINED
+    ]
     agreeing = sum(1 for level, label in decided if level is label)
     return GateSweepRow(gate, len(pairs), len(decided), agreeing)
 

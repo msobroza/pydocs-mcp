@@ -47,7 +47,9 @@ def _candidate(
         source=AnswerSource(arm="baseline@60d5a00a", trajectory_id=f"traj-{task_id}"),
         answer=f"The answer to {task_id} is `get_params`.",
         code_check=CodeCheck(
-            needle_cited=cited, gold_site_coverage=float(cited), verdicts={"needle_identified": cited}
+            needle_cited=cited,
+            gold_site_coverage=float(cited),
+            verdicts={"needle_identified": cited},
         ),
         jev_probabilities=probabilities or {},
     )
@@ -178,8 +180,11 @@ def test_a_labeller_never_sees_jevs_first_pass_probability() -> None:
     candidate = _candidate("border", probabilities={"needle_identified": 0.4137})
     pool = AlignmentPool.of([candidate], reserved=frozenset())
     (item,) = select_alignment_items(
-        pool, size=1, config=_CONFIG.model_copy(update={"planted_injections": 0}),
-        injections=_INJECTIONS, seed=0,
+        pool,
+        size=1,
+        config=_CONFIG.model_copy(update={"planted_injections": 0}),
+        injections=_INJECTIONS,
+        seed=0,
     )
 
     request = labeller_request(_row(item), jev=_JEV)

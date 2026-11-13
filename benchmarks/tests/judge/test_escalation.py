@@ -95,7 +95,11 @@ def test_a_second_scoring_pass_makes_zero_calls(tmp_path: Path) -> None:
     first = _judge(tmp_path, first_pass).decide("answer_1", repoqa_context(), asked)
     second = _judge(tmp_path, second_pass).decide("answer_1", repoqa_context(), asked)
 
-    assert first == second == {"needle_identified": JevVerdict.TRUE, "addresses_grader": JevVerdict.FALSE}
+    assert (
+        first
+        == second
+        == {"needle_identified": JevVerdict.TRUE, "addresses_grader": JevVerdict.FALSE}
+    )
     assert (len(first_pass.requests), len(second_pass.requests)) == (1, 0)
 
 
@@ -196,7 +200,10 @@ def test_only_the_in_band_rows_of_a_jev_score_are_escalated(tmp_path: Path) -> N
         AGREEMENT: JevVerdict.TRUE,
     }
     (request,) = client.requests
-    assert list(request.output.schema["properties"]) == ["addresses_grader", "contradicts_reference"]
+    assert list(request.output.schema["properties"]) == [
+        "addresses_grader",
+        "contradicts_reference",
+    ]
 
 
 def test_a_score_with_nothing_in_band_asks_nothing(tmp_path: Path) -> None:
@@ -213,7 +220,11 @@ def test_a_score_with_nothing_in_band_asks_nothing(tmp_path: Path) -> None:
 
 def _alignment_rows(luna_agrees: bool):
     """Ten agreed repoqa items Luna labelled: all as the labellers did, or every needle wrong."""
-    good = {"needle_identified": "true", "addresses_grader": "false", "contradicts_reference": "false"}
+    good = {
+        "needle_identified": "true",
+        "addresses_grader": "false",
+        "contradicts_reference": "false",
+    }
     luna = good if luna_agrees else {**good, "needle_identified": "false"}
     rows = [
         replace(

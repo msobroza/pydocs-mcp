@@ -132,7 +132,11 @@ def _read_rows(args: argparse.Namespace) -> tuple[AlignmentLabelRow, ...]:
 
 
 def _refuse_unconfirmed_spend(args: argparse.Namespace, judge: JudgeConfig) -> None:
-    paid = [flag for flag, on in (("--escalation-pass", args.escalation_pass), ("--sweep", args.sweep)) if on]
+    paid = [
+        flag
+        for flag, on in (("--escalation-pass", args.escalation_pass), ("--sweep", args.sweep))
+        if on
+    ]
     if paid and not args.confirm_spend:
         raise ValueError(f"{', '.join(paid)} calls OpenRouter: it needs --confirm-spend")
     if args.escalation_pass:
@@ -143,7 +147,10 @@ def _refuse_unconfirmed_spend(args: argparse.Namespace, judge: JudgeConfig) -> N
 
 
 def _escalation_pass(
-    labels: Path, rows: Sequence[AlignmentLabelRow], judge: JudgeConfig, open_escalation: EscalationOpener
+    labels: Path,
+    rows: Sequence[AlignmentLabelRow],
+    judge: JudgeConfig,
+    open_escalation: EscalationOpener,
 ) -> tuple[AlignmentLabelRow, ...]:
     """The escalation judge's answers on every labelled item, stored in the label file."""
     model = escalation_role(judge).model

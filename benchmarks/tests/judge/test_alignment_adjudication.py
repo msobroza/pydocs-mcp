@@ -83,9 +83,7 @@ def test_a_disagreement_goes_to_the_owner_with_both_rationales_and_the_code_chec
 def test_an_agreement_both_labellers_hold_against_the_code_check_goes_to_the_owner() -> None:
     against_code = {**_GOOD, "needle_identified": "false"}
 
-    row = _adjudicated(
-        labelled(repoqa_row(), labels_of(**against_code), labels_of(**against_code))
-    )
+    row = _adjudicated(labelled(repoqa_row(), labels_of(**against_code), labels_of(**against_code)))
 
     assert row.agreed["needle_identified"] is LabelVerdict.FALSE
     assert _reasons(row) == {(EscalationReason.CODE_CHECK, "needle_identified")}
@@ -272,9 +270,7 @@ def test_a_grown_share_audits_more_agreed_items_and_keeps_the_earlier_ones() -> 
     fresh = _agreed_rows(400)[20:]
     before = adjudicate(fresh, config=_CONFIG, self_preferring=LabellerSlot.OPUS)
 
-    after = adjudicate(
-        [*record, *before], config=_CONFIG, self_preferring=LabellerSlot.OPUS
-    )
+    after = adjudicate([*record, *before], config=_CONFIG, self_preferring=LabellerSlot.OPUS)
 
     audited_before, audited_after = set(_audited(before)), set(_audited(after[20:]))
     assert audited_before < audited_after

@@ -71,15 +71,17 @@ def _strata(strata: Counter[AlignmentStratum]) -> str:
 
 
 def _skipped(plan: AlignmentLabelPlan) -> str:
-    return ", ".join(f"{reason} {count}" for reason, count in sorted(plan.skipped.items())) or "none"
+    return (
+        ", ".join(f"{reason} {count}" for reason, count in sorted(plan.skipped.items())) or "none"
+    )
 
 
 def _status_lines(report: AlignmentLabelReport) -> Iterator[str]:
-    statuses = Counter(
-        row.labeller(slot).status for row in report.rows for slot in LabellerSlot
-    )
+    statuses = Counter(row.labeller(slot).status for row in report.rows for slot in LabellerSlot)
     cost = report.cost
-    per_item = f"${cost.per_item_usd:.4f} per item" if cost.per_item_usd is not None else "n/a per item"
+    per_item = (
+        f"${cost.per_item_usd:.4f} per item" if cost.per_item_usd is not None else "n/a per item"
+    )
     yield f"items: {len(report.rows)}; asked {report.labelling.asked}, collected {report.labelling.collected}"
     yield "labeller answers: " + ", ".join(
         f"{status.value} {statuses[status]}" for status in LabelStatus if statuses[status]
@@ -112,7 +114,9 @@ def agreement_lines(
 
 def queue_lines(queue: OwnerQueue) -> Iterator[str]:
     """The items the owner sees, by reason, and how many still await a ruling."""
-    reasons = ", ".join(f"{reason.value} {count}" for reason, count in sorted(queue.by_reason.items()))
+    reasons = ", ".join(
+        f"{reason.value} {count}" for reason, count in sorted(queue.by_reason.items())
+    )
     yield f"owner queue: {queue.items} items ({reasons or 'none'}); {queue.awaiting} awaiting a ruling"
 
 

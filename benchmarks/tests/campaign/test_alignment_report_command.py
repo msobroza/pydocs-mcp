@@ -55,7 +55,9 @@ def _label_file(tmp_path: Path) -> Path:
     rows.append(_row("split", "true", "false"))
     no_audit = AlignmentConfig(agreed_audit_share=0.0)
     path = tmp_path / "labels.jsonl"
-    write_alignment_labels(path, adjudicate(rows, config=no_audit, self_preferring=LabellerSlot.OPUS))
+    write_alignment_labels(
+        path, adjudicate(rows, config=no_audit, self_preferring=LabellerSlot.OPUS)
+    )
     return path
 
 
@@ -112,7 +114,9 @@ def test_lunas_agreement_pass_is_stored_and_its_trust_reported_beside_the_labell
         yield luna
 
     code = cmd_report_alignment(
-        _args(labels, "--escalation-pass", "--confirm-spend"), open_escalation=open_luna, open_jev=_no_calls
+        _args(labels, "--escalation-pass", "--confirm-spend"),
+        open_escalation=open_luna,
+        open_jev=_no_calls,
     )
 
     out = capsys.readouterr().out
@@ -138,7 +142,10 @@ def test_the_sweep_emits_agreement_against_auto_decided_share_per_band(
     for row in read_alignment_labels(labels):
         plan = alignment_plan(row.context, jev=jev)
         needle = 0.9 if row.astra.labels["needle_identified"].verdict.value == "true" else 0.05
-        answers = {qid: NoulAnswer(needle if qid == "needle_identified" else 0.1) for qid in plan.question_ids}
+        answers = {
+            qid: NoulAnswer(needle if qid == "needle_identified" else 0.1)
+            for qid in plan.question_ids
+        }
         pairs.append((plan.requests[0], JevResponse("typesafe/jev-1.13-20260917", answers)))
     fake = FakeJevJudgeClient.answering(pairs)
 

@@ -232,7 +232,9 @@ def _submitted(entry: LabellerEntry, batch_id: str) -> LabellerEntry:
     return replace(entry, status=LabelStatus.SUBMITTED, batch_id=batch_id, reason="")
 
 
-def _with_entry(row: AlignmentLabelRow, slot: LabellerSlot, entry: LabellerEntry) -> AlignmentLabelRow:
+def _with_entry(
+    row: AlignmentLabelRow, slot: LabellerSlot, entry: LabellerEntry
+) -> AlignmentLabelRow:
     return replace(row, astra=entry) if slot is LabellerSlot.ASTRA else replace(row, opus=entry)
 
 

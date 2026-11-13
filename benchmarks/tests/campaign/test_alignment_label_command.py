@@ -170,7 +170,9 @@ def test_a_later_pass_grows_the_label_file_without_asking_the_pilot_again(
     _run(_args(arms, "--dry-run", "--labels", str(labels)))
     pilot = read_alignment_labels(labels)
 
-    code = _run(_args(arms, "--dry-run", "--labels", str(labels), "--pass", "pass_1", "--items", "14"))
+    code = _run(
+        _args(arms, "--dry-run", "--labels", str(labels), "--pass", "pass_1", "--items", "14")
+    )
 
     rows = read_alignment_labels(labels)
     assert code == 0
@@ -204,7 +206,11 @@ def _scripted_labellers(labels_path: Path):
     def open_labellers(_judge: JudgeConfig) -> Iterator[LabellerClients]:
         def content(question_ids: Sequence[str]) -> dict[str, object]:
             return {
-                qid: {"verdict": "L1" if qid == "completeness" else "false", "evidence": "e", "confidence": "high"}
+                qid: {
+                    "verdict": "L1" if qid == "completeness" else "false",
+                    "evidence": "e",
+                    "confidence": "high",
+                }
                 for qid in question_ids
             }
 
@@ -212,14 +218,19 @@ def _scripted_labellers(labels_path: Path):
         scripted = {row.item_id: content(row.questions) for row in rows}
         yield LabellerClients(
             astra=FakeOpenRouterChatClient(scripted, "openai/gpt-6-astra", batch_cost_usd=0.9),
-            opus=FakeOpenRouterChatClient(scripted, "anthropic/claude-opus-5.5", batch_cost_usd=0.6),
+            opus=FakeOpenRouterChatClient(
+                scripted, "anthropic/claude-opus-5.5", batch_cost_usd=0.6
+            ),
         )
 
     return open_labellers
 
 
 def test_confirm_spend_labels_with_the_pinned_labellers(
-    arms: list[Path], tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    arms: list[Path],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-synthetic")
     labels = tmp_path / "labels.jsonl"
@@ -238,7 +249,10 @@ def test_confirm_spend_labels_with_the_pinned_labellers(
 
 
 def test_confirm_spend_refuses_without_the_key(
-    arms: list[Path], tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    arms: list[Path],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 

@@ -140,7 +140,10 @@ def test_a_labellers_answer_reads_as_one_label_per_question() -> None:
         ({}, "needle_identified"),
         ({"needle_identified": "true"}, "needle_identified"),
         ({"needle_identified": {"verdict": "L2", "evidence": "", "confidence": "high"}}, "'L2'"),
-        ({"needle_identified": {"verdict": "true", "evidence": "", "confidence": "sure"}}, "'sure'"),
+        (
+            {"needle_identified": {"verdict": "true", "evidence": "", "confidence": "sure"}},
+            "'sure'",
+        ),
         ({"needle_identified": {"verdict": "true", "evidence": 3, "confidence": "high"}}, "3"),
     ],
 )

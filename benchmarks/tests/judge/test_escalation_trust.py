@@ -50,7 +50,11 @@ def test_no_figure_and_no_floor_meet_nothing() -> None:
 
 def _item(index: int, *, labellers: tuple[str, str], luna: str, question: str):
     """A repoqa item both labellers and Luna answered; only ``question`` varies between items."""
-    good = {"needle_identified": "true", "addresses_grader": "false", "contradicts_reference": "false"}
+    good = {
+        "needle_identified": "true",
+        "addresses_grader": "false",
+        "contradicts_reference": "false",
+    }
     astra = labels_of(**{**good, question: labellers[0]})
     opus = labels_of(**{**good, question: labellers[1]})
     cited = (question != "needle_identified") or labellers[0] == "true"
@@ -83,7 +87,10 @@ def _reference_items():
     ]
 
 
-def _trust(rows, config: EscalationConfig = EscalationConfig()):
+_SHIPPED_ESCALATION = EscalationConfig()
+
+
+def _trust(rows, config: EscalationConfig = _SHIPPED_ESCALATION):
     settled = adjudicate(
         rows,
         config=AlignmentConfig(agreed_audit_share=0.0),

@@ -362,7 +362,9 @@ def _entry_of(raw: Mapping[str, object], name: str) -> LabellerEntry:
     return LabellerEntry(
         model=_as_text(raw["model"], f"{name}.model"),
         status=_enum(LabelStatus, _as_text(raw["status"], f"{name}.status"), f"{name}.status"),
-        labels={qid: _label_of(_as_mapping(each, qid), f"{name}.{qid}") for qid, each in labels.items()},
+        labels={
+            qid: _label_of(_as_mapping(each, qid), f"{name}.{qid}") for qid, each in labels.items()
+        },
         batch_id=_as_text(raw["batch_id"], f"{name}.batch_id"),
         batch_cost_usd=_optional_number(raw["batch_cost_usd"], f"{name}.batch_cost_usd"),
         cost_usd=_optional_number(raw["cost_usd"], f"{name}.cost_usd"),

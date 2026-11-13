@@ -153,8 +153,8 @@ class AlignmentPass(StrEnum):
     """Which labelling run an alignment item belongs to."""
 
     PILOT = "pilot"
-    PASS_1 = "pass_1"
-    PASS_2 = "pass_2"
+    PASS_1 = "pass_1"  # noqa: S105 — an alignment pass's name, not a password
+    PASS_2 = "pass_2"  # noqa: S105 — an alignment pass's name, not a password
 
 
 __all__ = (

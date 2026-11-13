@@ -100,7 +100,9 @@ def labeller_pairs(rows: Iterable[AlignmentLabelRow]) -> dict[QuestionKey, list[
 def labeller_agreement(rows: Iterable[AlignmentLabelRow]) -> tuple[QuestionAgreement, ...]:
     """The two labellers' raw agreement and Cohen's κ, per dataset and question."""
     return tuple(
-        QuestionAgreement(dataset, question, len(pairs), percent_agreement(pairs), cohens_kappa(pairs))
+        QuestionAgreement(
+            dataset, question, len(pairs), percent_agreement(pairs), cohens_kappa(pairs)
+        )
         for (dataset, question), pairs in sorted(labeller_pairs(rows).items())
     )
 
@@ -169,7 +171,11 @@ def _favouring(question: str, astra: LabelVerdict, opus: LabelVerdict) -> Labell
     """The labeller whose verdict speaks more for the answer; ``None`` when they agree."""
     if astra == opus:
         return None
-    return LabellerSlot.ASTRA if favour(question, astra) > favour(question, opus) else LabellerSlot.OPUS
+    return (
+        LabellerSlot.ASTRA
+        if favour(question, astra) > favour(question, opus)
+        else LabellerSlot.OPUS
+    )
 
 
 def _awaits_ruling(row: AlignmentLabelRow) -> bool:

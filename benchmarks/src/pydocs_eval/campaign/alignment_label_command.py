@@ -228,7 +228,9 @@ def _plan(
     if not args.jev_first_pass:
         return plan_alignment_labelling(tasks, arms, request=request, judge=judge)
     with open_jev(judge) as jev_judge:
-        return plan_alignment_labelling(tasks, arms, request=request, judge=judge, jev_judge=jev_judge)
+        return plan_alignment_labelling(
+            tasks, arms, request=request, judge=judge, jev_judge=jev_judge
+        )
 
 
 def _label(

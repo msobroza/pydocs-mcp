@@ -110,7 +110,12 @@ class EscalationSpendLedger:
         """Book one call: its reported cost, or the bound when OpenRouter did not price it."""
         booked = _MAX_ANSWER_USD if cost_usd is None else cost_usd
         line = json.dumps(
-            {"key": key, "cost_usd": cost_usd, "booked_usd": booked, "priced": cost_usd is not None},
+            {
+                "key": key,
+                "cost_usd": cost_usd,
+                "booked_usd": booked,
+                "priced": cost_usd is not None,
+            },
             sort_keys=True,
         )
         self.path.parent.mkdir(parents=True, exist_ok=True)
