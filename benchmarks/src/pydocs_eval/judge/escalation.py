@@ -43,6 +43,7 @@ from pydocs_eval.judge.config import JevConfig, JudgeConfig
 from pydocs_eval.judge.escalation_trust import escalation_trust
 from pydocs_eval.judge.jev_questions import SCORE_KINDS, JevQuestionKind, kind_of
 from pydocs_eval.judge.jev_scoring import AGREEMENT, JevScore, agreement_of
+from pydocs_eval.judge.judge_errors import JudgeModelMismatchError
 from pydocs_eval.judge.openrouter_body import redacted_excerpt
 from pydocs_eval.judge.role_config import EscalationConfig
 from pydocs_eval.judge.roles import escalation_role
@@ -200,8 +201,17 @@ class EscalationJudge:
         return verdicts
 
     def _ask(self, request: ChatRequest, key: str) -> Mapping[str, object] | None:
-        """One call, booked in the ledger whatever it returned; ``None`` when it gave no answer."""
-        (outcome,) = self.client.complete_all([request])
+        """One call, booked in the ledger whatever it returned; ``None`` when it gave no answer.
+
+        Raises:
+            JudgeModelMismatchError: another model answered — booked at the bound
+                first, since that answer was served and billed.
+        """
+        try:
+            (outcome,) = self.client.complete_all([request])
+        except JudgeModelMismatchError:
+            self.ledger.record(key, None)
+            raise
         self.ledger.record(key, _reported_cost(outcome))
         if isinstance(outcome, ChatCompletion):
             return outcome.content

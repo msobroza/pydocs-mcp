@@ -22,7 +22,7 @@ from pydocs_eval.judge.escalation import (
     escalate_in_band,
 )
 from pydocs_eval.judge.jev_scoring import AGREEMENT, JevScore
-from pydocs_eval.judge.judge_errors import JudgeConfigError
+from pydocs_eval.judge.judge_errors import JudgeConfigError, JudgeModelMismatchError
 from pydocs_eval.judge.openrouter_chat import FakeOpenRouterChatClient
 from pydocs_eval.judge.role_config import AlignmentConfig
 from pydocs_eval.judge.thresholds import CompletenessLevel, JevVerdict
@@ -305,3 +305,28 @@ def test_a_ledger_line_outside_its_format_is_refused_naming_it(tmp_path: Path) -
 
     with pytest.raises(EscalationLedgerError, match=r"ledger\.jsonl line 2"):
         ledger.spent_usd()
+
+
+class _MismatchedLuna:
+    """A Luna whose served model is not the pin: the real client raises after a billed call."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete_all(self, requests, *, on_submitted=None):
+        self.calls += 1
+        raise JudgeModelMismatchError(model="openai/gpt-6-sol", pinned=_LUNA)
+
+
+def test_a_call_answered_by_another_model_is_still_booked_before_the_error_stops_scoring(
+    tmp_path: Path,
+) -> None:
+    luna = _MismatchedLuna()
+    judge = _judge(tmp_path, FakeOpenRouterChatClient({}, _LUNA))
+    judge = replace(judge, client=luna)
+
+    with pytest.raises(JudgeModelMismatchError):
+        judge.decide("answer_1", repoqa_context(), ["addresses_grader"])
+
+    assert luna.calls == 1
+    assert judge.ledger.spent_usd() == pytest.approx(0.05)
