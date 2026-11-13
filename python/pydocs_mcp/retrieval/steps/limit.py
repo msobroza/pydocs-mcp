@@ -25,6 +25,20 @@ from pydocs_mcp.retrieval.steps._constants import LIMIT_DROPPED_SCRATCH_KEY
 _DEFAULT_MAX_RESULTS = 8
 
 
+def limit_step_cap(query: SearchQuery, max_results: int = _DEFAULT_MAX_RESULTS) -> int:
+    """The item cap a limit step configured with ``max_results`` applies to ``query``.
+
+    The caller's own cap wins when the query carries one, else ``max_results``.
+    A step that must stay inside the limit's window (``child_expand``'s
+    displacement guard, #393) reads the rule here, so the two agree on every
+    query that carries a cap, and on every other query while the limit step
+    keeps its default ``max_results``.
+
+    Example: ``limit_step_cap(SearchQuery(terms="q"))`` is ``8``.
+    """
+    return max_results if query.max_results is None else query.max_results
+
+
 def rows_dropped_by_limit(state: RetrieverState) -> int:
     """How many ranked rows this pipeline's limit step cut (0 when none).
 
@@ -51,15 +65,12 @@ class LimitStep(RetrieverStep):
         target = state.candidates if state.candidates is not None else state.result
         if target is None:
             return state
-        kept = _capped_keeping_list_type(target, self._cap(state.query))
+        # The caller's cap when it has one, else this step's configured default.
+        kept = _capped_keeping_list_type(target, limit_step_cap(state.query, self.max_results))
         scratch = _scratch_with_drop(state.scratch, len(target.items) - len(kept.items))
         if state.candidates is not None:
             return replace(state, candidates=kept, scratch=scratch)
         return replace(state, result=kept, scratch=scratch)
-
-    def _cap(self, query: SearchQuery) -> int:
-        """The caller's cap when it has one, else this step's configured default."""
-        return self.max_results if query.max_results is None else query.max_results
 
     def to_dict(self) -> dict:
         d: dict = {"type": "limit"}
@@ -89,4 +100,4 @@ def _scratch_with_drop(scratch: dict[str, object], dropped: int) -> dict[str, ob
     return {**scratch, LIMIT_DROPPED_SCRATCH_KEY: dropped}
 
 
-__all__ = ("LimitStep", "rows_dropped_by_limit")
+__all__ = ("LimitStep", "limit_step_cap", "rows_dropped_by_limit")
