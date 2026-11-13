@@ -9,20 +9,19 @@ each confidence gate is scored the same way, the level cut at the midpoints
 (``thresholds.completeness_level``) and compared as a level — never averaged.
 
 Example:
-    >>> [row.band.low for row in sweep_noul_bands([(0.9, True)], band_start=(0.3, 0.7))][:3]
+    >>> [row.threshold.low for row in sweep_noul_bands([(0.9, True)], band_start=(0.3, 0.7))][:3]
     [0.3, 0.25, 0.2]
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections import defaultdict
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 
 from pydocs_eval.judge.alignment_adjudication import effective_label
-from pydocs_eval.judge.alignment_report import QuestionKey
-from pydocs_eval.judge.alignment_rows import AlignmentLabelRow
-from pydocs_eval.judge.alignment_vocabulary import LEVEL_VERDICTS, LabelVerdict
-from pydocs_eval.judge.jev_questions import kind_of
+from pydocs_eval.judge.alignment_rows import AlignmentLabelRow, QuestionKey
+from pydocs_eval.judge.alignment_vocabulary import LEVEL_VERDICTS, NOUL_VERDICTS, LabelVerdict
 from pydocs_eval.judge.jev_wire import JevAnswer, NoulAnswer, ScoreAnswer
 from pydocs_eval.judge.thresholds import (
     CompletenessLevel,
@@ -42,28 +41,14 @@ _EDGE_DIGITS = 6
 
 
 @dataclass(frozen=True, slots=True)
-class BandSweepRow:
-    """One review band: of ``items`` labelled answers, Jev decides ``auto_decided`` and ``agreeing`` agree."""
+class SweepRow:
+    """One threshold (a review band, or a confidence gate on a Score) scored on the labelled answers.
 
-    band: NoulBand
-    items: int
-    auto_decided: int
-    agreeing: int
+    Of ``items`` answers whose label stands, Jev decides ``auto_decided`` alone
+    under ``threshold``, and ``agreeing`` of those agree with the label.
+    """
 
-    @property
-    def auto_decided_share(self) -> float:
-        return self.auto_decided / self.items if self.items else 0.0
-
-    @property
-    def agreement(self) -> float | None:
-        return self.agreeing / self.auto_decided if self.auto_decided else None
-
-
-@dataclass(frozen=True, slots=True)
-class GateSweepRow:
-    """One confidence gate on a Score: the share it lets Jev decide, and how often its level is the label."""
-
-    gate: ScoreGate
+    threshold: NoulBand | ScoreGate
     items: int
     auto_decided: int
     agreeing: int
@@ -81,27 +66,25 @@ class GateSweepRow:
 class SweepPairs:
     """Jev's answers beside the labels that stand, per dataset and question."""
 
-    nouls: dict[QuestionKey, list[tuple[float, bool]]] = field(default_factory=dict)
-    scores: dict[QuestionKey, list[tuple[ScoreAnswer, CompletenessLevel]]] = field(
-        default_factory=dict
-    )
+    nouls: Mapping[QuestionKey, Sequence[tuple[float, bool]]]
+    scores: Mapping[QuestionKey, Sequence[tuple[ScoreAnswer, CompletenessLevel]]]
 
 
 def sweep_noul_bands(
     pairs: Sequence[tuple[float, bool]], *, band_start: tuple[float, float]
-) -> tuple[BandSweepRow, ...]:
+) -> tuple[SweepRow, ...]:
     """Each band from ``band_start`` outward to 0/1, scored on ``(probability, label)`` pairs."""
     return tuple(_band_row(band, pairs) for band in _bands_outward(band_start))
 
 
 def sweep_score_gates(
     pairs: Sequence[tuple[ScoreAnswer, CompletenessLevel]],
-) -> tuple[GateSweepRow, ...]:
+) -> tuple[SweepRow, ...]:
     """Each confidence gate from 0.0 to 0.9, scored on ``(Jev's answer, label level)`` pairs."""
     return tuple(_gate_row(ScoreGate(min_confidence=gate), pairs) for gate in _SCORE_GATES)
 
 
-def first_band_reaching(rows: Sequence[BandSweepRow], agreement: float) -> NoulBand | None:
+def first_band_reaching(rows: Sequence[SweepRow], agreement: float) -> NoulBand | None:
     """The first band, from the start outward, whose agreement reaches ``agreement``: it decides the most.
 
     Example:
@@ -109,8 +92,9 @@ def first_band_reaching(rows: Sequence[BandSweepRow], agreement: float) -> NoulB
         True
     """
     for row in rows:
-        if row.agreement is not None and row.agreement >= agreement:
-            return row.band
+        reached = row.agreement is not None and row.agreement >= agreement
+        if reached and isinstance(row.threshold, NoulBand):
+            return row.threshold
     return None
 
 
@@ -118,22 +102,23 @@ def sweep_pairs(
     rows: Iterable[AlignmentLabelRow], answers: Mapping[str, Mapping[str, JevAnswer]]
 ) -> SweepPairs:
     """Jev's answer (``answers[item_id][question_id]``) beside each label that stands, per question."""
-    pairs = SweepPairs()
+    nouls: dict[QuestionKey, list[tuple[float, bool]]] = defaultdict(list)
+    scores: dict[QuestionKey, list[tuple[ScoreAnswer, CompletenessLevel]]] = defaultdict(list)
+    for key, answer, label in _answers_beside_labels(rows, answers):
+        if isinstance(answer, NoulAnswer) and label in NOUL_VERDICTS:
+            nouls[key].append((answer.probability, label is LabelVerdict.TRUE))
+        if isinstance(answer, ScoreAnswer) and label in LEVEL_VERDICTS:
+            scores[key].append((answer, CompletenessLevel(label.value)))
+    return SweepPairs(dict(nouls), dict(scores))
+
+
+def _answers_beside_labels(
+    rows: Iterable[AlignmentLabelRow], answers: Mapping[str, Mapping[str, JevAnswer]]
+) -> Iterator[tuple[QuestionKey, JevAnswer, LabelVerdict]]:
+    """Each of Jev's answers on an item, with its question's key and the item's label there."""
     for row in rows:
         for question_id, answer in answers.get(row.item_id, {}).items():
-            _add_pair(pairs, row, question_id, answer)
-    return pairs
-
-
-def _add_pair(
-    pairs: SweepPairs, row: AlignmentLabelRow, question_id: str, answer: JevAnswer
-) -> None:
-    label = effective_label(row, question_id)
-    key = (row.dataset.value, kind_of(question_id).value)
-    if isinstance(answer, NoulAnswer) and label in (LabelVerdict.TRUE, LabelVerdict.FALSE):
-        pairs.nouls.setdefault(key, []).append((answer.probability, label is LabelVerdict.TRUE))
-    elif isinstance(answer, ScoreAnswer) and label in LEVEL_VERDICTS:
-        pairs.scores.setdefault(key, []).append((answer, CompletenessLevel(label.value)))
+            yield row.question_key(question_id), answer, effective_label(row, question_id)
 
 
 def _bands_outward(start: tuple[float, float]) -> list[NoulBand]:
@@ -148,7 +133,7 @@ def _bands_outward(start: tuple[float, float]) -> list[NoulBand]:
     return bands
 
 
-def _band_row(band: NoulBand, pairs: Sequence[tuple[float, bool]]) -> BandSweepRow:
+def _band_row(band: NoulBand, pairs: Sequence[tuple[float, bool]]) -> SweepRow:
     verdicts = [(noul_verdict(probability, band), label) for probability, label in pairs]
     decided = [
         (verdict is JevVerdict.TRUE, label)
@@ -156,24 +141,21 @@ def _band_row(band: NoulBand, pairs: Sequence[tuple[float, bool]]) -> BandSweepR
         if verdict is not JevVerdict.IN_BAND
     ]
     agreeing = sum(1 for said, label in decided if said == label)
-    return BandSweepRow(band, len(pairs), len(decided), agreeing)
+    return SweepRow(band, len(pairs), len(decided), agreeing)
 
 
-def _gate_row(
-    gate: ScoreGate, pairs: Sequence[tuple[ScoreAnswer, CompletenessLevel]]
-) -> GateSweepRow:
+def _gate_row(gate: ScoreGate, pairs: Sequence[tuple[ScoreAnswer, CompletenessLevel]]) -> SweepRow:
     levels = [(completeness_level(answer, gate), label) for answer, label in pairs]
     decided = [
         (level, label) for level, label in levels if level is not CompletenessLevel.UNDEFINED
     ]
     agreeing = sum(1 for level, label in decided if level is label)
-    return GateSweepRow(gate, len(pairs), len(decided), agreeing)
+    return SweepRow(gate, len(pairs), len(decided), agreeing)
 
 
 __all__ = (
-    "BandSweepRow",
-    "GateSweepRow",
     "SweepPairs",
+    "SweepRow",
     "first_band_reaching",
     "sweep_noul_bands",
     "sweep_pairs",

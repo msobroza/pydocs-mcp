@@ -14,7 +14,7 @@ from pydocs_eval.judge.alignment_adjudication import (
     self_preferring_slot,
 )
 from pydocs_eval.judge.alignment_label_file import read_alignment_labels, write_alignment_labels
-from pydocs_eval.judge.alignment_rows import OwnerEscalation
+from pydocs_eval.judge.alignment_rows import AlignmentLabelRow, OwnerEscalation
 from pydocs_eval.judge.alignment_vocabulary import (
     AlignmentStratum,
     EscalationReason,
@@ -41,7 +41,7 @@ _CONFIG = AlignmentConfig()
 _GOOD = {"needle_identified": "true", "addresses_grader": "false", "contradicts_reference": "false"}
 
 
-def _adjudicated(row, *, config: AlignmentConfig = _CONFIG):
+def _adjudicated(row, *, config: AlignmentConfig = _CONFIG) -> AlignmentLabelRow:
     """``row`` adjudicated alone, with the audit off so only its own conditions route it."""
     no_audit = config.model_copy(update={"agreed_audit_share": 0.0})
     (settled,) = adjudicate([row], config=no_audit, self_preferring=LabellerSlot.OPUS)
@@ -194,7 +194,7 @@ def test_an_item_one_labeller_has_not_answered_is_left_unsettled() -> None:
     assert effective_label(row, "needle_identified") is LabelVerdict.UNDECIDED
 
 
-def _agreed_rows(count: int):
+def _agreed_rows(count: int) -> list[AlignmentLabelRow]:
     return [
         labelled(repoqa_row(f"item_{i:04d}"), labels_of(**_GOOD), labels_of(**_GOOD))
         for i in range(count)
@@ -239,7 +239,7 @@ def test_the_audit_draws_only_items_no_other_condition_sent_to_the_owner() -> No
     assert _audited(settled) == ["item_0000", "item_0001", "item_0002"]
 
 
-def _audit_record(wrong: int, decided: int):
+def _audit_record(wrong: int, decided: int) -> list[AlignmentLabelRow]:
     """``decided`` audited items the owner has ruled on, ``wrong`` of them against the label."""
     rows = []
     for i, row in enumerate(_agreed_rows(decided)):
@@ -284,3 +284,18 @@ def test_the_opus_labeller_entry_names_its_own_model() -> None:
         ASTRA_MODEL,
         OPUS_MODEL,
     )
+
+
+def test_an_audited_agreement_stands_unless_the_owner_rules_otherwise() -> None:
+    every = _CONFIG.model_copy(update={"agreed_audit_share": 1.0})
+    (audited,) = adjudicate(
+        [labelled(repoqa_row(), labels_of(**_GOOD), labels_of(**_GOOD))],
+        config=every,
+        self_preferring=LabellerSlot.OPUS,
+    )
+
+    overruled = replace(audited, owner_decision={"needle_identified": LabelVerdict.FALSE})
+
+    assert OwnerEscalation(EscalationReason.AUDIT) in audited.escalation_reasons
+    assert effective_label(audited, "needle_identified") is LabelVerdict.TRUE
+    assert effective_label(overruled, "needle_identified") is LabelVerdict.FALSE

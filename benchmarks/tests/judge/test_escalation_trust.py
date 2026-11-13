@@ -7,13 +7,15 @@ from dataclasses import replace
 import pytest
 
 from pydocs_eval.judge.alignment_adjudication import adjudicate
-from pydocs_eval.judge.alignment_rows import CodeCheck
+from pydocs_eval.judge.alignment_rows import AlignmentLabelRow, CodeCheck
 from pydocs_eval.judge.alignment_vocabulary import LabellerSlot
 from pydocs_eval.judge.escalation_trust import (
+    EscalationTrustRow,
     escalation_floor,
     escalation_trust,
     meets_floor,
 )
+from pydocs_eval.judge.config import JudgeConfig
 from pydocs_eval.judge.role_config import AlignmentConfig, EscalationConfig, EscalationFloorScale
 
 from ._alignment_fakes import answered, labelled, labels_of, repoqa_row
@@ -23,13 +25,13 @@ _LUNA = "openai/gpt-6-luna"
 
 @pytest.mark.parametrize(
     ("labeller_kappa", "floor"),
-    [(None, 0.90), (0.75, 0.75), (0.95, 0.90), (0.0, None), (-0.2, None)],
+    [(None, 0.90), (0.75, 0.75), (0.95, 0.90), (0.40, 0.40), (0.39, None), (-0.2, None)],
 )
 def test_the_floor_is_the_agreement_floor_or_the_labellers_kappa_where_lower(
     labeller_kappa: float | None, floor: float | None
 ) -> None:
-    """At or below chance (κ <= 0) the labellers settle nothing, so no floor can be met."""
-    assert escalation_floor(0.90, labeller_kappa) == floor
+    """Below ``min_labeller_kappa`` a question is ill-posed: no floor can be met on it."""
+    assert escalation_floor(0.90, labeller_kappa, min_labeller_kappa=0.40) == floor
 
 
 @pytest.mark.parametrize(
@@ -48,7 +50,7 @@ def test_no_figure_and_no_floor_meet_nothing() -> None:
     assert not meets_floor(percent_agreement=1.0, kappa=1.0, floor=None, scale=percent)
 
 
-def _item(index: int, *, labellers: tuple[str, str], luna: str, question: str):
+def _item(index: int, *, labellers: tuple[str, str], luna: str, question: str) -> AlignmentLabelRow:
     """A repoqa item both labellers and Luna answered; only ``question`` varies between items."""
     good = {
         "needle_identified": "true",
@@ -67,7 +69,7 @@ def _item(index: int, *, labellers: tuple[str, str], luna: str, question: str):
     return row
 
 
-def _needle_items():
+def _needle_items() -> list[AlignmentLabelRow]:
     # Labellers agree on all ten (8 true, 2 false): κ 1.0. Luna misses one true: 9/10.
     specs = [("true", "true", "true")] * 7 + [("true", "true", "false")]
     specs += [("false", "false", "false")] * 2
@@ -77,7 +79,7 @@ def _needle_items():
     ]
 
 
-def _reference_items():
+def _reference_items() -> list[AlignmentLabelRow]:
     # Labellers agree on 8 (4 + 4) and split twice: κ 0.6. Luna sides with Astra every time.
     specs = [("true", "true", "true")] * 4 + [("false", "false", "false")] * 4
     specs += [("true", "false", "true"), ("false", "true", "false")]
@@ -90,13 +92,14 @@ def _reference_items():
 _SHIPPED_ESCALATION = EscalationConfig()
 
 
-def _trust(rows, config: EscalationConfig = _SHIPPED_ESCALATION):
+def _trust(rows, config: EscalationConfig = _SHIPPED_ESCALATION) -> dict[str, EscalationTrustRow]:
     settled = adjudicate(
         rows,
         config=AlignmentConfig(agreed_audit_share=0.0),
         self_preferring=LabellerSlot.OPUS,
     )
-    return {row.question: row for row in escalation_trust(settled, config)}
+    judge = JudgeConfig(escalation=config)
+    return {row.question: row for row in escalation_trust(settled, judge)}
 
 
 def test_luna_is_trusted_on_a_question_whose_agreement_reaches_the_floor() -> None:
@@ -153,3 +156,22 @@ def test_a_question_luna_never_labelled_is_not_trusted() -> None:
     needle = _trust(rows)["needle_identified"]
 
     assert (needle.items, needle.percent_agreement, needle.trusted) == (0, None, False)
+
+
+def _low_kappa_items() -> list[AlignmentLabelRow]:
+    # contradicts_reference: 2 (T,T), 5 (F,F), 2 (T,F), 1 (F,T): p_o 0.7, p_e 0.54, κ about 0.35.
+    specs = [("true", "true")] * 2 + [("false", "false")] * 5
+    specs += [("true", "false")] * 2 + [("false", "true")]
+    return [
+        _item(i, labellers=(a, o), luna=a, question="contradicts_reference")
+        for i, (a, o) in enumerate(specs)
+    ]
+
+
+def test_on_a_question_the_labellers_cannot_agree_on_no_judge_is_trusted() -> None:
+    reference = _trust(_low_kappa_items())["contradicts_reference"]
+
+    assert reference.labeller_kappa == pytest.approx(0.16 / 0.46)
+    assert reference.percent_agreement == 1.0
+    assert (reference.floor, reference.trusted) == (None, False)
+    assert reference.labeller_kappa_low

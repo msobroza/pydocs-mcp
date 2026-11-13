@@ -9,7 +9,12 @@ import pytest
 from pydocs_eval.judge.alignment_vocabulary import LabelVerdict
 from pydocs_eval.judge.config import JevConfig, JudgeConfig
 from pydocs_eval.judge.jev_client import FakeJevJudgeClient
-from pydocs_eval.judge.jev_requests import JudgedAnswer, JudgedSite, repoqa_request_plan
+from pydocs_eval.judge.jev_requests import (
+    JevRequestPlan,
+    JudgedAnswer,
+    JudgedSite,
+    repoqa_request_plan,
+)
 from pydocs_eval.judge.jev_scoring import calibration_answers
 from pydocs_eval.judge.jev_wire import JevResponse, NoulAnswer, ScoreAnswer
 from pydocs_eval.judge.judge_errors import JudgeModelMismatchError
@@ -37,7 +42,7 @@ _PAIRS = [
 def test_the_band_is_swept_from_its_start_outward() -> None:
     rows = sweep_noul_bands(_PAIRS, band_start=(0.3, 0.7))
 
-    assert [(row.band.low, row.band.high) for row in rows] == [
+    assert [(row.threshold.low, row.threshold.high) for row in rows] == [
         (0.3, 0.7),
         (0.25, 0.75),
         (0.2, 0.8),
@@ -61,7 +66,7 @@ def test_each_band_reports_its_agreement_against_its_auto_decided_share() -> Non
 
 def test_a_band_that_decides_nothing_has_no_agreement_figure() -> None:
     (row,) = [
-        r for r in sweep_noul_bands([(0.5, True)], band_start=(0.3, 0.7)) if r.band.low == 0.3
+        r for r in sweep_noul_bands([(0.5, True)], band_start=(0.3, 0.7)) if r.threshold.low == 0.3
     ]
 
     assert (row.auto_decided, row.auto_decided_share, row.agreement) == (0, 0.0, None)
@@ -88,7 +93,7 @@ def test_a_score_is_cut_at_the_level_midpoints_and_compared_as_a_level_never_ave
         (_score(1.6, 0.9), CompletenessLevel.L1),
     ]
 
-    (gate0,) = [row for row in sweep_score_gates(pairs) if row.gate.min_confidence == 0.0]
+    (gate0,) = [row for row in sweep_score_gates(pairs) if row.threshold.min_confidence == 0.0]
 
     # 1.5 -> L2, 1.49 -> L1, 2.6 -> L3 agree; 1.6 -> L2 is not the label L1.
     assert (gate0.auto_decided, gate0.agreeing) == (4, 3)
@@ -101,13 +106,13 @@ def test_each_confidence_gate_reports_its_agreement_against_its_auto_decided_sha
         (_score(2.2, 0.75), CompletenessLevel.L2),
     ]
 
-    rows = {row.gate.min_confidence: row for row in sweep_score_gates(pairs)}
+    rows = {row.threshold.min_confidence: row for row in sweep_score_gates(pairs)}
 
     assert [round(gate, 1) for gate in rows] == [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
     assert (rows[0.0].auto_decided, rows[0.0].agreement) == (3, pytest.approx(2 / 3))
     assert (rows[0.5].auto_decided, rows[0.5].agreement) == (2, 1.0)
     assert (rows[0.9].auto_decided, rows[0.9].auto_decided_share) == (1, pytest.approx(1 / 3))
-    assert rows[0.9].gate == ScoreGate(min_confidence=0.9)
+    assert rows[0.9].threshold == ScoreGate(min_confidence=0.9)
 
 
 _GOOD = {"needle_identified": "true", "addresses_grader": "false", "contradicts_reference": "false"}
@@ -136,7 +141,7 @@ _JEV = JevConfig(model="jev-1.13")
 _SERVED = "typesafe/jev-1.13-20260917"
 
 
-def _plan():
+def _plan() -> JevRequestPlan:
     judged = JudgedAnswer("Where?", "It is `get_params`.", "ref")
     return repoqa_request_plan(judged, JudgedSite("sklearn/base.py", "get_params"), jev=_JEV)
 

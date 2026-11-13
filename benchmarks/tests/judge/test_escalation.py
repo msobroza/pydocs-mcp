@@ -9,12 +9,14 @@ from pathlib import Path
 import pytest
 
 from pydocs_eval.judge.alignment_adjudication import adjudicate
+from pydocs_eval.judge.alignment_rows import AlignmentLabelRow
 from pydocs_eval.judge.alignment_vocabulary import LabellerSlot
 from pydocs_eval.judge.chat_wire import ChatFailureKind
 from pydocs_eval.judge.config import JevConfig, JudgeConfig
 from pydocs_eval.judge.escalation import (
     EscalationCache,
     EscalationJudge,
+    EscalationLedgerError,
     EscalationSpendLedger,
     build_escalation_judge,
     escalate_in_band,
@@ -51,14 +53,16 @@ def _judge(
     *,
     trusted: frozenset[tuple[str, str]] = _EVERY_REPOQA_QUESTION,
     spend_cap_usd: float = 2.0,
+    answer_cost_bound_usd: float = 0.05,
 ) -> EscalationJudge:
+    ledger_path = tmp_path / "escalation" / "spend_ledger.jsonl"
     return EscalationJudge(
         client=client,
         model=_LUNA,
         jev=_JEV,
         trusted=trusted,
         cache=EscalationCache(tmp_path / "escalation"),
-        ledger=EscalationSpendLedger(tmp_path / "escalation" / "spend_ledger.jsonl"),
+        ledger=EscalationSpendLedger(ledger_path, answer_cost_bound_usd=answer_cost_bound_usd),
         spend_cap_usd=spend_cap_usd,
     )
 
@@ -125,14 +129,14 @@ def test_a_zero_cap_never_calls(tmp_path: Path) -> None:
     assert client.requests == []
 
 
-@pytest.mark.parametrize(("reported", "booked"), [(0.004, 0.004), (None, 0.05)])
-def test_every_call_is_metered_and_an_unpriced_one_at_its_bound(
+@pytest.mark.parametrize(("reported", "booked"), [(0.004, 0.004), (None, 0.08)])
+def test_every_call_is_metered_and_an_unpriced_one_at_its_configured_bound(
     tmp_path: Path, reported: float | None, booked: float
 ) -> None:
     client = FakeOpenRouterChatClient(
         {"answer_1": _content(addresses_grader="false")}, _LUNA, batch_cost_usd=reported
     )
-    judge = _judge(tmp_path, client)
+    judge = _judge(tmp_path, client, answer_cost_bound_usd=0.08)
 
     judge.decide("answer_1", repoqa_context(), ["addresses_grader"])
 
@@ -218,7 +222,7 @@ def test_a_score_with_nothing_in_band_asks_nothing(tmp_path: Path) -> None:
     assert client.requests == []
 
 
-def _alignment_rows(luna_agrees: bool):
+def _alignment_rows(luna_agrees: bool) -> tuple[AlignmentLabelRow, ...]:
     """Ten agreed repoqa items Luna labelled: all as the labellers did, or every needle wrong."""
     good = {
         "needle_identified": "true",
@@ -259,3 +263,45 @@ def test_the_trusted_questions_are_read_from_the_alignment_labels(tmp_path: Path
 def test_an_unpinned_escalation_judge_refuses_by_its_key() -> None:
     with pytest.raises(JudgeConfigError, match=r"judge\.escalation\.model"):
         build_escalation_judge(JudgeConfig(), [], FakeOpenRouterChatClient({}, _LUNA))
+
+
+def test_no_call_starts_unless_one_more_answer_at_its_bound_fits_under_the_cap(
+    tmp_path: Path,
+) -> None:
+    client = FakeOpenRouterChatClient({"answer_1": _content(addresses_grader="false")}, _LUNA)
+    judge = _judge(tmp_path, client, spend_cap_usd=1.0, answer_cost_bound_usd=0.3)
+    judge.ledger.record("earlier", 0.75)
+
+    verdicts = judge.decide("answer_1", repoqa_context(), ["addresses_grader"])
+
+    assert verdicts == {"addresses_grader": JevVerdict.UNDECIDED}
+    assert client.requests == []
+
+
+def test_reaching_the_cap_and_an_outage_are_each_logged_as_json(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("WARNING", logger="pydocs_eval.judge.escalation")
+    failing = FakeOpenRouterChatClient({"answer_1": ChatFailureKind.JOB_FAILED}, _LUNA)
+    _judge(tmp_path, failing).decide("answer_1", repoqa_context(), ["addresses_grader"])
+    capped = _judge(tmp_path / "capped", FakeOpenRouterChatClient({}, _LUNA), spend_cap_usd=0.0)
+    capped.decide("answer_2", repoqa_context(), ["addresses_grader"])
+
+    events = [json.loads(record.getMessage()) for record in caplog.records]
+
+    assert [event["event"] for event in events] == [
+        "escalation_outage",
+        "escalation_spend_cap_reached",
+    ]
+    assert events[0]["reason"] == "fake chat client: job_failed"
+    assert events[1]["spend_cap_usd"] == 0.0
+
+
+def test_a_ledger_line_outside_its_format_is_refused_naming_it(tmp_path: Path) -> None:
+    ledger = EscalationSpendLedger(tmp_path / "ledger.jsonl", answer_cost_bound_usd=0.05)
+    ledger.record("first", 0.01)
+    with ledger.path.open("a", encoding="utf-8") as handle:
+        handle.write("not json\n")
+
+    with pytest.raises(EscalationLedgerError, match=r"ledger\.jsonl line 2"):
+        ledger.spent_usd()

@@ -17,7 +17,7 @@ from pydocs_eval.campaign.alignment_report_command import (
 from pydocs_eval.judge.alignment_adjudication import adjudicate
 from pydocs_eval.judge.alignment_label_file import read_alignment_labels, write_alignment_labels
 from pydocs_eval.judge.alignment_request import alignment_plan
-from pydocs_eval.judge.alignment_rows import CodeCheck
+from pydocs_eval.judge.alignment_rows import AlignmentLabelRow, CodeCheck
 from pydocs_eval.judge.alignment_vocabulary import LabellerSlot, LabelVerdict
 from pydocs_eval.judge.chat_wire import ChatCompleter
 from pydocs_eval.judge.config import JevConfig, JudgeConfig
@@ -36,7 +36,7 @@ _LUNA = "openai/gpt-6-luna"
 _NEEDLE = {"t0": "true", "t1": "true", "t2": "true", "t3": "true", "f0": "false", "f1": "false"}
 
 
-def _row(item_id: str, astra_needle: str, opus_needle: str):
+def _row(item_id: str, astra_needle: str, opus_needle: str) -> AlignmentLabelRow:
     cited = astra_needle == "true"
     return labelled(
         repoqa_row(

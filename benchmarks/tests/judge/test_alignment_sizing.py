@@ -17,8 +17,8 @@ def test_a_pilot_at_15_cents_an_item_leaves_room_for_fewer_items_than_both_passe
     assert sizing.per_item_usd == pytest.approx(0.15)
     assert sizing.remaining_usd == pytest.approx(13.5)
     assert sizing.affordable_items == 90
-    # 90 split 90:60 between the 90 more items pass 1 wants and the 60 of pass 2.
-    assert (sizing.pass_1_items, sizing.pass_2_items) == (10 + 54, 36)
+    # The pilot is its own draw: 90 items split 100:60 between pass 1 and pass 2.
+    assert (sizing.pass_1_items, sizing.pass_2_items) == (56, 34)
     assert sizing.within_assumed_band
 
 
@@ -42,4 +42,4 @@ def test_a_pilot_that_spent_the_whole_sub_budget_buys_nothing_more() -> None:
     sizing = size_alignment_passes(LabellingCost(16.0, 10, 0), _CONFIG)
 
     assert sizing.affordable_items == 0
-    assert (sizing.pass_1_items, sizing.pass_2_items) == (10, 0)
+    assert (sizing.pass_1_items, sizing.pass_2_items) == (0, 0)

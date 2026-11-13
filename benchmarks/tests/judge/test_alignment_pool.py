@@ -12,6 +12,7 @@ from pydocs_eval.judge.alignment_pool import (
     AlignmentCandidate,
     AlignmentPassLockedError,
     AlignmentPool,
+    DrawnItem,
     alignment_row,
     code_check_of,
     refuse_locked_pass,
@@ -20,12 +21,12 @@ from pydocs_eval.judge.alignment_pool import (
     swe_qa_questions_unlocked,
 )
 from pydocs_eval.judge.alignment_request import labeller_request
-from pydocs_eval.judge.alignment_rows import AnswerSource, CodeCheck
+from pydocs_eval.judge.alignment_rows import AlignmentLabelRow, AnswerSource, CodeCheck
 from pydocs_eval.judge.alignment_vocabulary import AlignmentPass, AlignmentStratum
-from pydocs_eval.judge.config import JevConfig
+from pydocs_eval.judge.config import JevConfig, JudgeConfig
 from pydocs_eval.judge.jev_requests import JudgedDataset, JudgedSite
 from pydocs_eval.judge.planted_injections import load_planted_injections
-from pydocs_eval.judge.role_config import AlignmentConfig
+from pydocs_eval.judge.role_config import AlignmentConfig, ChatRoleConfig
 
 from ._alignment_fakes import ASTRA_MODEL, JEV_MODEL, OPUS_MODEL, repoqa_context
 
@@ -166,13 +167,20 @@ def test_items_already_in_the_label_file_are_never_drawn_again() -> None:
     assert not {(item.candidate.task_id, item.injection is None) for item in more} & used
 
 
-def _row(item):
+_JUDGE = JudgeConfig(
+    jev=_JEV,
+    alignment=AlignmentConfig(
+        labellers=(ChatRoleConfig(model=ASTRA_MODEL), ChatRoleConfig(model=OPUS_MODEL))
+    ),
+)
+
+
+def _row(item: DrawnItem, alignment_pass: AlignmentPass = AlignmentPass.PILOT) -> AlignmentLabelRow:
     return alignment_row(
         item,
         context=repoqa_context(answer=item.candidate.answer),
-        jev_model=JEV_MODEL,
-        labeller_models=(ASTRA_MODEL, OPUS_MODEL),
-        jev=_JEV,
+        judge=_JUDGE,
+        alignment_pass=alignment_pass,
     )
 
 
@@ -206,6 +214,7 @@ def test_a_planted_item_carries_its_injection_in_the_answer_and_its_own_id() -> 
     assert row.context.agent_answer.endswith(_INJECTIONS[0].text)
     assert row.questions == ("needle_identified", "addresses_grader", "contradicts_reference")
     assert (row.astra.model, row.opus.model) == (ASTRA_MODEL, OPUS_MODEL)
+    assert (row.jev_model, row.alignment_pass) == (JEV_MODEL, AlignmentPass.PILOT)
 
 
 def test_the_code_check_gives_codes_verdict_on_each_gold_question() -> None:
@@ -265,3 +274,13 @@ def test_the_unlock_is_read_from_the_swe_qa_questions_slices_marker(
     assert swe_qa_questions_unlocked("landed_slices")
     assert not swe_qa_questions_unlocked("other_module")
     assert not swe_qa_questions_unlocked("no_such_module_anywhere")
+
+
+def test_a_slices_module_that_fails_to_import_is_an_error_not_a_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "broken_slices.py").write_text("import a_dependency_nobody_installed\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    with pytest.raises(ModuleNotFoundError, match="a_dependency_nobody_installed"):
+        swe_qa_questions_unlocked("broken_slices")

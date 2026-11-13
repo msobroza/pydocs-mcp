@@ -12,6 +12,7 @@ import pytest
 
 from pydocs_eval.campaign.__main__ import main
 from pydocs_eval.campaign.alignment_label_command import (
+    LabellerOpener,
     add_label_alignment_command,
     cmd_label_alignment,
 )
@@ -22,7 +23,7 @@ from pydocs_eval.datasets.repo_qa import RepoQaQuestionDataset
 from pydocs_eval.datasets.repoqa import RepoQADataset
 from pydocs_eval.judge.alignment_label_file import read_alignment_labels
 from pydocs_eval.judge.alignment_labelling import LabellerClients
-from pydocs_eval.judge.alignment_vocabulary import AlignmentStratum, LabelStatus
+from pydocs_eval.judge.alignment_vocabulary import AlignmentPass, AlignmentStratum, LabelStatus
 from pydocs_eval.judge.config import JudgeConfig
 from pydocs_eval.judge.openrouter_chat import FakeOpenRouterChatClient
 from pydocs_eval.trajectory.ask_outcome import TaskOutcome
@@ -171,14 +172,19 @@ def test_a_later_pass_grows_the_label_file_without_asking_the_pilot_again(
     pilot = read_alignment_labels(labels)
 
     code = _run(
-        _args(arms, "--dry-run", "--labels", str(labels), "--pass", "pass_1", "--items", "14")
+        _args(arms, "--dry-run", "--labels", str(labels), "--pass", "pass_1", "--items", "4")
+    )
+    again = _run(
+        _args(arms, "--dry-run", "--labels", str(labels), "--pass", "pass_1", "--items", "4")
     )
 
     rows = read_alignment_labels(labels)
-    assert code == 0
+    assert (code, again) == (0, 0)
     assert len(rows) == 14
     assert [row.item_id for row in rows[:10]] == [row.item_id for row in pilot]
     assert [row.astra for row in rows[:10]] == [row.astra for row in pilot]
+    assert {row.alignment_pass for row in rows[:10]} == {AlignmentPass.PILOT}
+    assert {row.alignment_pass for row in rows[10:]} == {AlignmentPass.PASS_1}
 
 
 def test_pass_2_refuses_before_the_swe_qa_questions_unlock(
@@ -199,7 +205,7 @@ def test_the_jev_first_pass_is_a_spend(
     assert "--confirm-spend" in capsys.readouterr().err
 
 
-def _scripted_labellers(labels_path: Path):
+def _scripted_labellers(labels_path: Path) -> LabellerOpener:
     """Labellers answering every row of whatever the run drew, agreeing on everything."""
 
     @contextmanager

@@ -159,7 +159,7 @@ def parse_labels(
     Raises:
         AlignmentLabelError: a question unanswered, or a field outside its vocabulary.
     """
-    return {question_id: _label(content, question_id) for question_id in question_ids}
+    return {question_id: _question_label(content, question_id) for question_id in question_ids}
 
 
 def _asked_questions(
@@ -184,12 +184,12 @@ def _with_shown_code(state: Mapping[str, object], code: Sequence[ShownCode]) -> 
     shown: dict[str, object] = {}
     for key, value in state.items():
         if key in _SHOWN_BEFORE and _SHOWN_CODE_KEY not in shown:
-            shown[_SHOWN_CODE_KEY] = [_shown_code(each) for each in code]
+            shown[_SHOWN_CODE_KEY] = [_numbered_gold_code(each) for each in code]
         shown[key] = value
     return shown
 
 
-def _shown_code(code: ShownCode) -> dict[str, object]:
+def _numbered_gold_code(code: ShownCode) -> dict[str, object]:
     width = len(str(code.last_line))
     numbered = [
         f"{number:>{width}} | {line}".rstrip()
@@ -226,7 +226,7 @@ def _label_schema(question_id: str) -> dict[str, object]:
     }
 
 
-def _label(content: Mapping[str, object], question_id: str) -> QuestionLabel:
+def _question_label(content: Mapping[str, object], question_id: str) -> QuestionLabel:
     raw = content.get(question_id)
     if not isinstance(raw, Mapping):
         raise AlignmentLabelError(f"{question_id} = {raw!r}, expected an object of {_FIELDS}")

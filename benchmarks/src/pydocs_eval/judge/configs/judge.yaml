@@ -46,6 +46,10 @@ escalation:
   # In-band escalations stop for the whole program once this is spent,
   # metered from OpenRouter's reported cost into a ledger beside the cache.
   spend_cap_usd: 2.00
+  # The most one answer can cost at the pinned model's price: an answer
+  # OpenRouter does not price is booked at it, and no call starts unless it
+  # still fits under the cap. Re-derive it whenever `model` changes.
+  answer_cost_bound_usd: 0.05
   # Escalations are cached by input hash; "" = cache_root()/escalation.
   cache_dir: ""
 
@@ -84,6 +88,9 @@ alignment:
   # audit_growth_threshold of the audited items prove wrong.
   agreed_audit_share: 0.10
   audit_growth_threshold: 0.05
+  # Below this inter-labeller Cohen's kappa a question is ill-posed: no judge is
+  # trusted on it until its criteria are rewritten.
+  min_labeller_kappa: 0.40
   # <dataset>: <path> to write a dataset's labels elsewhere; a dataset not listed
   # uses judge/data/alignment/<dataset>__<jev-model>.jsonl.
   label_file: {}

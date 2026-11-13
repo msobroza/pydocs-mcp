@@ -16,7 +16,7 @@ from pydocs_eval.judge.alignment_label_file import (
     vendored_alignment_label_path,
     write_alignment_labels,
 )
-from pydocs_eval.judge.alignment_rows import LabellerEntry, OwnerEscalation
+from pydocs_eval.judge.alignment_rows import AlignmentLabelRow, LabellerEntry, OwnerEscalation
 from pydocs_eval.judge.alignment_vocabulary import (
     EscalationReason,
     LabelConfidence,
@@ -38,7 +38,7 @@ from ._alignment_fakes import (
 _GOLDEN_LINE = Path(__file__).parent / "goldens" / "alignment_label_line.json"
 
 
-def _settled_row():
+def _settled_row() -> AlignmentLabelRow:
     """A repoqa item both labellers answered, adjudicated, decided by the owner and run past Luna."""
     astra = answered(
         ASTRA_MODEL,
@@ -147,6 +147,7 @@ def test_two_rows_with_one_item_id_are_refused(tmp_path: Path) -> None:
     [
         (lambda row: {**row, "revision": "0.9"}, "revision '0.9'"),
         (lambda row: {**row, "stratum": "lucky"}, "'lucky'"),
+        (lambda row: {**row, "alignment_pass": "pass_3"}, "'pass_3'"),
         (lambda row: {**row, "owner_decision": {"needle_identified": "maybe"}}, "'maybe'"),
         (lambda row: {**row, "ownr_note": "typo"}, "ownr_note"),
         (lambda row: {key: value for key, value in row.items() if key != "questions"}, "questions"),

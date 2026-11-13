@@ -26,6 +26,7 @@ import importlib
 import random
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from itertools import zip_longest
 
 from pydocs_eval.judge.alignment_request import alignment_plan
 from pydocs_eval.judge.alignment_rows import (
@@ -36,12 +37,13 @@ from pydocs_eval.judge.alignment_rows import (
     LabellerEntry,
 )
 from pydocs_eval.judge.alignment_vocabulary import AlignmentPass, AlignmentStratum
-from pydocs_eval.judge.config import JevConfig
+from pydocs_eval.judge.config import JudgeConfig
 from pydocs_eval.judge.jev_questions import SCORE_KINDS, JevQuestionKind, kind_of
 from pydocs_eval.judge.jev_requests import JudgedDataset, JudgedSite
 from pydocs_eval.judge.needle_citation import NeedleSite, score_needle_citation
 from pydocs_eval.judge.planted_injections import PlantedInjection, planted_answer
 from pydocs_eval.judge.role_config import AlignmentConfig
+from pydocs_eval.judge.roles import jev_model
 from pydocs_eval.judge.thresholds import JevVerdict, NoulBand, noul_verdict
 
 # The swe-qa-questions unlock (step 7d): the module that defines its slices, and the name.
@@ -124,7 +126,11 @@ def alignment_item_id(candidate: AlignmentCandidate, injection_id: str = "") -> 
 
 
 def stratum_of(candidate: AlignmentCandidate, config: AlignmentConfig) -> AlignmentStratum:
-    """The active stratum ``candidate`` belongs to, else ``RANDOM``; borderline comes first."""
+    """The active stratum ``candidate`` belongs to, else ``RANDOM``; borderline comes first.
+
+    Before thresholds are fitted, Jev's verdict is read against ``band_start``:
+    a disagreement is a verdict decided outside it against the code check.
+    """
     low, high = config.borderline_window
     nouls = {
         question_id: probability
@@ -134,11 +140,17 @@ def stratum_of(candidate: AlignmentCandidate, config: AlignmentConfig) -> Alignm
     if any(low <= probability <= high for probability in nouls.values()):
         return AlignmentStratum.BORDERLINE
     band = NoulBand(low=config.band_start[0], high=config.band_start[1])
-    for question_id, cited in candidate.code_check.verdicts.items():
-        verdict = noul_verdict(nouls[question_id], band) if question_id in nouls else None
-        if verdict in (JevVerdict.TRUE, JevVerdict.FALSE) and (verdict is JevVerdict.TRUE) != cited:
-            return AlignmentStratum.CODE_VS_JEV
+    check = candidate.code_check
+    if any(check.contradicts(qid, _jev_says_yes(nouls.get(qid), band)) for qid in check.verdicts):
+        return AlignmentStratum.CODE_VS_JEV
     return AlignmentStratum.RANDOM
+
+
+def _jev_says_yes(probability: float | None, band: NoulBand) -> bool | None:
+    """Jev's decided verdict outside ``band`` as a flag; ``None`` inside it or unasked."""
+    if probability is None:
+        return None
+    return {JevVerdict.TRUE: True, JevVerdict.FALSE: False}.get(noul_verdict(probability, band))
 
 
 def select_alignment_items(
@@ -215,52 +227,52 @@ def _active(
     candidates: Sequence[AlignmentCandidate], count: int, config: AlignmentConfig
 ) -> list[DrawnItem]:
     """Up to ``count`` items taken in turn from the borderline and the code-vs-Jev strata."""
-    queues = {
-        stratum: [c for c in candidates if stratum_of(c, config) is stratum] for stratum in _ACTIVE
-    }
-    drawn: list[DrawnItem] = []
-    while len(drawn) < count and any(queues.values()):
-        for stratum in _ACTIVE:
-            if queues[stratum] and len(drawn) < count:
-                drawn.append(DrawnItem(queues[stratum].pop(0), stratum))
-    return drawn
+    queues = [
+        [DrawnItem(c, stratum) for c in candidates if stratum_of(c, config) is stratum]
+        for stratum in _ACTIVE
+    ]
+    interleaved = [item for turn in zip_longest(*queues) for item in turn if item is not None]
+    return interleaved[:count]
 
 
 def alignment_row(
     item: DrawnItem,
     *,
     context: AlignmentItemContext,
-    jev_model: str,
-    labeller_models: tuple[str, str],
-    jev: JevConfig,
+    judge: JudgeConfig,
+    alignment_pass: AlignmentPass,
 ) -> AlignmentLabelRow:
-    """``item`` as a label-file row, asked of no labeller yet; ``context`` is its task's ground truth.
+    """``item`` as a label-file row of ``alignment_pass``, asked of no labeller yet.
 
-    A planted item's answer is the host's with the injection after it, and its
-    code check is the planted answer's.
+    ``context`` is its task's ground truth. A planted item's answer is the
+    host's with the injection after it, and its code check is the planted answer's.
+
+    Raises:
+        JudgeConfigError: ``judge.jev.model`` is empty: labels are fitted per Jev model.
     """
     if item.injection is not None:
-        planted = planted_answer(context.agent_answer, item.injection)
-        context = replace(context, agent_answer=planted)
-    candidate = item.candidate
-    astra_model, opus_model = labeller_models
+        context = replace(
+            context, agent_answer=planted_answer(context.agent_answer, item.injection)
+        )
+    candidate, (astra, opus) = item.candidate, judge.alignment.labellers
     return AlignmentLabelRow(
         item_id=item.item_id,
         dataset=candidate.dataset,
-        jev_model=jev_model,
+        jev_model=jev_model(judge),
         task_id=candidate.task_id,
         source=candidate.source,
+        alignment_pass=alignment_pass,
         stratum=item.stratum,
         context=context,
-        questions=alignment_plan(context, jev=jev).question_ids,
+        questions=alignment_plan(context, jev=judge.jev).question_ids,
         code_check=code_check_of(
             candidate.dataset,
             context.gold,
             context.agent_answer,
-            extensions=jev.citation_extensions,
+            extensions=judge.jev.citation_extensions,
         ),
-        astra=LabellerEntry(model=astra_model),
-        opus=LabellerEntry(model=opus_model),
+        astra=LabellerEntry(model=astra.model),
+        opus=LabellerEntry(model=opus.model),
         planted_injection=item.injection.id if item.injection else "",
     )
 
@@ -303,8 +315,12 @@ def swe_qa_questions_unlocked(module: str = _UNLOCK_MODULE) -> bool:
     """
     try:
         loaded = importlib.import_module(module)
-    except ModuleNotFoundError:
-        return False
+    except ModuleNotFoundError as exc:
+        # Only the slices module itself being absent is the lock; a slices module
+        # that fails to import is a broken install, which must not read as locked.
+        if exc.name == module:
+            return False
+        raise
     return hasattr(loaded, _UNLOCK_NAME)
 
 

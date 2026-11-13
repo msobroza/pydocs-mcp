@@ -47,6 +47,7 @@ from pydocs_eval.campaign.alignment_label_text import render_plan, render_report
 from pydocs_eval.campaign.before_after import MeasurementPlanError, parse_split
 from pydocs_eval.campaign.before_after_arm import read_arm_summary
 from pydocs_eval.campaign.before_after_split import load_split_tasks
+from pydocs_eval.campaign.judge_openers import JevOpener, open_openrouter_jev
 from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.judge.alignment_label_file import (
     AlignmentLabelFileError,
@@ -61,10 +62,7 @@ from pydocs_eval.judge.alignment_pool import (
 )
 from pydocs_eval.judge.alignment_vocabulary import AlignmentPass
 from pydocs_eval.judge.config import JudgeConfig, JudgeDeployment, load_judge_deployment
-from pydocs_eval.judge.jev_cache import JevResponseCache, jev_cache_dir
-from pydocs_eval.judge.jev_client import JevJudgeClient
 from pydocs_eval.judge.jev_requests import JudgedDataset
-from pydocs_eval.judge.jev_wire import JevJudge
 from pydocs_eval.judge.judge_errors import (
     JudgeConfigError,
     JudgeModelMismatchError,
@@ -94,8 +92,6 @@ _SPEND_ERRORS = (JudgeRequestError, JudgeModelMismatchError)
 TaskLoader = Callable[..., Coroutine[Any, Any, tuple[EvalTask, ...]]]
 #: Opens the two pinned labellers for the run's duration.
 LabellerOpener = Callable[[JudgeConfig], AbstractContextManager[LabellerClients]]
-#: Opens the pinned Jev judge for a first pass.
-JevOpener = Callable[[JudgeConfig], AbstractContextManager[JevJudge]]
 
 
 def add_label_alignment_command(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -105,6 +101,13 @@ def add_label_alignment_command(sub: argparse._SubParsersAction[argparse.Argumen
         help="draw alignment items from stored arms and label them blind (a plan unless "
         "--dry-run or --confirm-spend)",
     )
+    _add_draw_arguments(parser)
+    _add_spend_arguments(parser)
+    parser.set_defaults(func=cmd_label_alignment)
+
+
+def _add_draw_arguments(parser: argparse.ArgumentParser) -> None:
+    """What to draw from, for which pass, how many, and where the labels go."""
     parser.add_argument("--split", required=True, help="the arms' split, e.g. repoqa-qa/small_dev")
     parser.add_argument(
         "--arm", type=Path, action="append", required=True, help="an arm directory (arm.json)"
@@ -116,12 +119,20 @@ def add_label_alignment_command(sub: argparse._SubParsersAction[argparse.Argumen
         default=AlignmentPass.PILOT.value,
         help="pilot (judge.alignment.pilot_items), pass_1 or pass_2 (judge.alignment.n_items)",
     )
-    parser.add_argument("--items", type=int, help="the label file's target size for the pass")
+    parser.add_argument(
+        "--items",
+        type=int,
+        help="the pass's size (default judge.alignment.pilot_items, or n_items for pass_1/pass_2)",
+    )
     parser.add_argument("--seed", type=int, default=0, help="the draw's seed")
     parser.add_argument(
         "--deployment", type=Path, default=Path(DEPLOYMENT_YAML), help="the judge deployment YAML"
     )
     parser.add_argument("--labels", type=Path, help="the label file (default: the vendored one)")
+
+
+def _add_spend_arguments(parser: argparse.ArgumentParser) -> None:
+    """Whether the run spends, rehearses offline, or only prints its plan."""
     parser.add_argument(
         "--jev-first-pass",
         action="store_true",
@@ -137,7 +148,6 @@ def add_label_alignment_command(sub: argparse._SubParsersAction[argparse.Argumen
     mode.add_argument(
         "--confirm-spend", action="store_true", help="ask the labellers: spends at OpenRouter"
     )
-    parser.set_defaults(func=cmd_label_alignment)
 
 
 def cmd_label_alignment(
@@ -152,7 +162,7 @@ def cmd_label_alignment(
     try:
         deployment = load_judge_deployment(args.deployment)
         request = _request(args, deployment, load_tasks, unlocked)
-        plan = _plan(args, request, deployment.judge, load_tasks, open_jev or _openrouter_jev)
+        plan = _plan(args, request, deployment.judge, load_tasks, open_jev or open_openrouter_jev)
     except _INPUT_ERRORS as exc:
         print(f"label-alignment: {exc}", file=sys.stderr)
         return _EXIT_REFUSED
@@ -160,7 +170,7 @@ def cmd_label_alignment(
     if not (args.dry_run or args.confirm_spend):
         print("Spends nothing without --confirm-spend (--dry-run rehearses offline at $0).")
         return _EXIT_COMPLETE
-    return _label(args, plan, deployment, open_labellers or _openrouter_labellers)
+    return _run_labelling(args, plan, deployment, open_labellers or _openrouter_labellers)
 
 
 def _request(
@@ -186,7 +196,7 @@ def _request(
         split=args.split,
         dataset=dataset,
         alignment_pass=alignment_pass,
-        target_items=_target_items(args.items, alignment_pass, judge),
+        target_items=_pass_size(args.items, alignment_pass, judge),
         labels_path=args.labels or alignment_label_path(judge.alignment, dataset.value, pinned_jev),
         seed=args.seed,
         reserved=frozenset(task.task_id for task in reserved),
@@ -203,7 +213,8 @@ def _refuse_unsafe_modes(args: argparse.Namespace) -> None:
         raise ValueError("--jev-first-pass calls Jev on OpenRouter: it needs --confirm-spend")
 
 
-def _target_items(items: int | None, alignment_pass: AlignmentPass, judge: JudgeConfig) -> int:
+def _pass_size(items: int | None, alignment_pass: AlignmentPass, judge: JudgeConfig) -> int:
+    """How many items the pass labels: ``--items``, else the pass's configured size."""
     if items is not None:
         if items < 1:
             raise ValueError(f"--items {items}, expected at least 1")
@@ -233,7 +244,7 @@ def _plan(
         )
 
 
-def _label(
+def _run_labelling(
     args: argparse.Namespace,
     plan: AlignmentLabelPlan,
     deployment: JudgeDeployment,
@@ -260,7 +271,7 @@ def _label(
             file=sys.stderr,
         )
         return _EXIT_REFUSED
-    print(render_report(report, dry_run=args.dry_run))
+    print(render_report(report, judge, dry_run=args.dry_run))
     print(f"label file: {plan.request.labels_path}")
     return _EXIT_COMPLETE if report.complete else _EXIT_INCOMPLETE
 
@@ -283,14 +294,6 @@ def _openrouter_labellers(judge: JudgeConfig) -> Iterator[LabellerClients]:
         yield LabellerClients(
             astra=OpenRouterChatClient(astra, http), opus=OpenRouterChatClient(opus, http)
         )
-
-
-@contextmanager
-def _openrouter_jev(judge: JudgeConfig) -> Iterator[JevJudge]:
-    """The pinned Jev judge, cached by input hash."""
-    bearer_from_env(judge.jev.api_key_env)
-    with httpx.Client() as http:
-        yield JevJudgeClient(judge.jev, cache=JevResponseCache(jev_cache_dir(judge.jev)), http=http)
 
 
 __all__ = ("add_label_alignment_command", "cmd_label_alignment")

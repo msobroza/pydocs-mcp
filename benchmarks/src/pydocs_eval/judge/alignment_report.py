@@ -3,8 +3,9 @@
 Every figure is per dataset and per question, where a question is a kind:
 ``site_0`` and ``site_1`` pool into ``site``, as Jev's thresholds do. The
 labellers' Cohen's κ on a question is the ceiling for every judge's agreement
-target on it; a low κ marks a question whose criteria are rewritten before any
-judge is trusted on it. The direction table counts, per question, the
+target on it; below ``judge.alignment.min_labeller_kappa`` the question is
+ill-posed, and its criteria are rewritten before any judge is trusted on it
+(:func:`is_low_kappa`). The direction table counts, per question, the
 disagreements in which each labeller was the one favouring the answer — on the
 reference-based questions an excess on the reference writer's side is
 self-preference.
@@ -17,23 +18,22 @@ Example:
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
-from pydocs_eval.judge.alignment_adjudication import overruled_questions
-from pydocs_eval.judge.alignment_rows import AlignmentLabelRow
+from pydocs_eval.judge.alignment_adjudication import is_audited, overruled_questions
+from pydocs_eval.judge.alignment_rows import AlignmentLabelRow, QuestionKey
 from pydocs_eval.judge.alignment_vocabulary import (
     EscalationReason,
     LabellerSlot,
     LabelVerdict,
     favour,
 )
-from pydocs_eval.judge.jev_questions import kind_of
+from pydocs_eval.judge.jev_questions import JevQuestionKind
+from pydocs_eval.judge.jev_requests import JudgedDataset
 from pydocs_eval.judge.role_config import AlignmentConfig
 from pydocs_eval.metrics.agreement import cohens_kappa, percent_agreement
 
-#: One question of one dataset: ``("repoqa-qa", "needle_identified")``.
-QuestionKey = tuple[str, str]
 _Pair = tuple[LabelVerdict, LabelVerdict]
 
 
@@ -41,8 +41,8 @@ _Pair = tuple[LabelVerdict, LabelVerdict]
 class QuestionAgreement:
     """Two raters on one question: how many items both rated, their raw agreement and κ."""
 
-    dataset: str
-    question: str
+    dataset: JudgedDataset
+    question: JevQuestionKind
     items: int
     percent_agreement: float | None
     kappa: float | None
@@ -52,8 +52,8 @@ class QuestionAgreement:
 class DisagreementDirection:
     """One question's disagreements, split by which labeller favoured the answer."""
 
-    dataset: str
-    question: str
+    dataset: JudgedDataset
+    question: JevQuestionKind
     disagreements: int
     astra_favours_answer: int
     opus_favours_answer: int
@@ -64,7 +64,7 @@ class OwnerQueue:
     """The items the owner sees: how many, why, and how many still wait on a ruling."""
 
     items: int
-    by_reason: Mapping[EscalationReason, int]
+    by_reason: dict[EscalationReason, int]
     awaiting: int
 
 
@@ -72,11 +72,21 @@ class OwnerQueue:
 class AuditReview:
     """One question's audit: agreed labels the owner ruled on, those wrong, and whether to review it."""
 
-    dataset: str
-    question: str
+    dataset: JudgedDataset
+    question: JevQuestionKind
     ruled: int
     wrong: int
     review_criteria: bool
+
+
+def is_low_kappa(kappa: float | None, min_labeller_kappa: float) -> bool:
+    """Whether the labellers' κ marks a question ill-posed; an undefined κ (one category) does not.
+
+    Example:
+        >>> is_low_kappa(0.35, 0.40), is_low_kappa(None, 0.40)
+        (True, False)
+    """
+    return kappa is not None and kappa < min_labeller_kappa
 
 
 def labeller_pairs(rows: Iterable[AlignmentLabelRow]) -> dict[QuestionKey, list[_Pair]]:
@@ -87,13 +97,8 @@ def labeller_pairs(rows: Iterable[AlignmentLabelRow]) -> dict[QuestionKey, list[
         {}
     """
     pairs: dict[QuestionKey, list[_Pair]] = defaultdict(list)
-    for row in rows:
-        if not (row.astra.answered and row.opus.answered):
-            continue
-        for question_id in row.questions:
-            astra, opus = row.astra.labels.get(question_id), row.opus.labels.get(question_id)
-            if astra is not None and opus is not None:
-                pairs[_key(row, question_id)].append((astra.verdict, opus.verdict))
+    for key, pair in (each for row in rows for each in _row_pairs(row)):
+        pairs[key].append(pair)
     return dict(pairs)
 
 
@@ -101,26 +106,17 @@ def labeller_agreement(rows: Iterable[AlignmentLabelRow]) -> tuple[QuestionAgree
     """The two labellers' raw agreement and Cohen's κ, per dataset and question."""
     return tuple(
         QuestionAgreement(
-            dataset, question, len(pairs), percent_agreement(pairs), cohens_kappa(pairs)
+            key.dataset, key.question, len(pairs), percent_agreement(pairs), cohens_kappa(pairs)
         )
-        for (dataset, question), pairs in sorted(labeller_pairs(rows).items())
+        for key, pairs in sorted(labeller_pairs(rows).items())
     )
 
 
 def disagreement_directions(rows: Iterable[AlignmentLabelRow]) -> tuple[DisagreementDirection, ...]:
     """Per dataset and question, which labeller favoured the answer in each disagreement."""
-    counts: dict[QuestionKey, Counter[LabellerSlot | None]] = defaultdict(Counter)
-    for key, pairs in labeller_pairs(rows).items():
-        counts[key].update(_favouring(key[1], astra, opus) for astra, opus in pairs)
     return tuple(
-        DisagreementDirection(
-            dataset,
-            question,
-            disagreements=tally[LabellerSlot.ASTRA] + tally[LabellerSlot.OPUS],
-            astra_favours_answer=tally[LabellerSlot.ASTRA],
-            opus_favours_answer=tally[LabellerSlot.OPUS],
-        )
-        for (dataset, question), tally in sorted(counts.items())
+        _direction(key, Counter(_favouring(key.question, astra, opus) for astra, opus in pairs))
+        for key, pairs in sorted(labeller_pairs(rows).items())
     )
 
 
@@ -144,38 +140,46 @@ def audit_review(
     """
     ruled: Counter[QuestionKey] = Counter()
     wrong: Counter[QuestionKey] = Counter()
-    for row in rows:
-        if not any(each.reason is EscalationReason.AUDIT for each in row.escalation_reasons):
-            continue
+    for row in (row for row in rows if is_audited(row)):
         overruled = set(overruled_questions(row))
-        for question_id in row.owner_decision:
-            ruled[_key(row, question_id)] += 1
-            wrong[_key(row, question_id)] += question_id in overruled
+        ruled.update(row.question_key(qid) for qid in row.owner_decision)
+        wrong.update(row.question_key(qid) for qid in row.owner_decision if qid in overruled)
     return tuple(
         AuditReview(
-            dataset,
-            question,
+            key.dataset,
+            key.question,
             count,
-            wrong[(dataset, question)],
-            wrong[(dataset, question)] / count > config.audit_growth_threshold,
+            wrong[key],
+            wrong[key] / count > config.audit_growth_threshold,
         )
-        for (dataset, question), count in sorted(ruled.items())
+        for key, count in sorted(ruled.items())
     )
 
 
-def _key(row: AlignmentLabelRow, question_id: str) -> QuestionKey:
-    return row.dataset.value, kind_of(question_id).value
+def _row_pairs(row: AlignmentLabelRow) -> Iterator[tuple[QuestionKey, _Pair]]:
+    """``row``'s verdict pair on every question both labellers answered."""
+    if not row.labelled_by_both:
+        return
+    for question_id in row.questions:
+        astra, opus = row.astra.labels.get(question_id), row.opus.labels.get(question_id)
+        if astra is not None and opus is not None:
+            yield row.question_key(question_id), (astra.verdict, opus.verdict)
 
 
-def _favouring(question: str, astra: LabelVerdict, opus: LabelVerdict) -> LabellerSlot | None:
+def _direction(key: QuestionKey, tally: Counter[LabellerSlot | None]) -> DisagreementDirection:
+    astra, opus = tally[LabellerSlot.ASTRA], tally[LabellerSlot.OPUS]
+    return DisagreementDirection(key.dataset, key.question, astra + opus, astra, opus)
+
+
+def _favouring(
+    question: JevQuestionKind, astra: LabelVerdict, opus: LabelVerdict
+) -> LabellerSlot | None:
     """The labeller whose verdict speaks more for the answer; ``None`` when they agree."""
     if astra == opus:
         return None
-    return (
-        LabellerSlot.ASTRA
-        if favour(question, astra) > favour(question, opus)
-        else LabellerSlot.OPUS
-    )
+    if favour(question.value, astra) > favour(question.value, opus):
+        return LabellerSlot.ASTRA
+    return LabellerSlot.OPUS
 
 
 def _awaits_ruling(row: AlignmentLabelRow) -> bool:
@@ -193,9 +197,9 @@ __all__ = (
     "DisagreementDirection",
     "OwnerQueue",
     "QuestionAgreement",
-    "QuestionKey",
     "audit_review",
     "disagreement_directions",
+    "is_low_kappa",
     "labeller_agreement",
     "labeller_pairs",
     "owner_queue",

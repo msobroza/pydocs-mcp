@@ -61,6 +61,18 @@ _DEFAULT_AUDIT_GROWTH_THRESHOLD = 0.05
 _DEFAULT_AGREEMENT_FLOOR = 0.90
 # In-band escalations stop here for the whole program (Q52).
 _DEFAULT_SPEND_CAP_USD = 2.00
+# The most one in-band answer can cost at the pinned escalation model's price.
+# Luna lists $0.10/M in and $0.50/M out; an in-band request is under ~15k tokens
+# in, and its labels plus reasoning at xhigh stay under ~60k out: about $0.032.
+# An answer OpenRouter does not price (or a call that failed, which may still
+# have been billed) is booked at this bound, and no call starts unless it still
+# fits under the cap, so the cap holds even when a price is missing. Re-derive
+# it whenever judge.escalation.model changes.
+_DEFAULT_ANSWER_COST_BOUND_USD = 0.05
+# Below this inter-labeller Cohen's kappa a question is ill-posed: its criteria
+# are rewritten before any judge is trusted on it (spec 9d). The spec names no
+# number; 0.40 is the top of Landis and Koch's "fair" band.
+_DEFAULT_MIN_LABELLER_KAPPA = 0.40
 
 
 def labeller_model_key(index: int) -> str:
@@ -133,6 +145,9 @@ class EscalationFloorScale(StrEnum):
     judge's side of the comparison is its percent agreement (Q53 and Round 5f,
     the spec as written) or its own κ (one κ scale for both) is an open owner
     word on the turn-efficiency umbrella; this knob is where it is answered.
+    Under ``KAPPA`` a question whose labellers' κ is below ``agreement_floor``
+    asks the judge's κ to reach the labellers' own: reaching it is the floor,
+    and a judge κ above it is still flagged in the report, never rewarded.
     """
 
     #: The judge's raw agreement rate with the alignment label (as written).
@@ -142,8 +157,11 @@ class EscalationFloorScale(StrEnum):
 
 
 class EscalationConfig(ChatRoleConfig):
-    """``judge.escalation``: the in-band judge, its trust floor, its spend cap and its cache.
+    """``judge.escalation``: the in-band judge, at the highest effort its endpoint accepts.
 
+    It is trusted on a question only at ``agreement_floor`` (see
+    :class:`EscalationFloorScale`), and stops calling once ``spend_cap_usd`` is
+    spent, booking an unpriced answer at ``answer_cost_bound_usd``.
     ``cache_dir`` empty means the derived default (``cache_root()/escalation``),
     where the spend ledger also lives.
     """
@@ -153,6 +171,7 @@ class EscalationConfig(ChatRoleConfig):
     agreement_floor: float = Field(default=_DEFAULT_AGREEMENT_FLOOR, ge=0.0, le=1.0)
     floor_scale: EscalationFloorScale = EscalationFloorScale.PERCENT_AGREEMENT
     spend_cap_usd: float = Field(default=_DEFAULT_SPEND_CAP_USD, ge=0.0)
+    answer_cost_bound_usd: float = Field(default=_DEFAULT_ANSWER_COST_BOUND_USD, gt=0.0)
     cache_dir: str = ""
 
 
@@ -213,6 +232,7 @@ class AlignmentConfig(BaseModel):
     random_share: float = Field(default=_DEFAULT_RANDOM_SHARE, ge=0.0, le=1.0)
     agreed_audit_share: float = Field(default=_DEFAULT_AGREED_AUDIT_SHARE, ge=0.0, le=1.0)
     audit_growth_threshold: float = Field(default=_DEFAULT_AUDIT_GROWTH_THRESHOLD, gt=0.0, le=1.0)
+    min_labeller_kappa: float = Field(default=_DEFAULT_MIN_LABELLER_KAPPA, ge=-1.0, le=1.0)
     label_file: Mapping[str, str] = Field(default_factory=dict)
 
     @field_validator("band_start", "borderline_window")

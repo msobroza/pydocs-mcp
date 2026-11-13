@@ -7,13 +7,15 @@ from collections.abc import Sequence
 import pytest
 
 from pydocs_eval.judge.alignment_labelling import (
+    EndedBatch,
     LabellerClients,
+    LabellingResult,
     label_alignment_rows,
     label_with_escalation_judge,
     labelling_cost,
 )
 from pydocs_eval.judge.alignment_rows import AlignmentLabelRow
-from pydocs_eval.judge.alignment_vocabulary import LabelStatus, LabelVerdict
+from pydocs_eval.judge.alignment_vocabulary import LabellerSlot, LabelStatus, LabelVerdict
 from pydocs_eval.judge.chat_wire import ChatFailureKind
 from pydocs_eval.judge.config import JevConfig
 from pydocs_eval.judge.openrouter_chat import FakeOpenRouterChatClient
@@ -53,7 +55,7 @@ class _Snapshots:
         self.saved.append(tuple(rows))
 
 
-def _label(rows, clients, persist=None, **options):
+def _label(rows, clients, persist=None, **options) -> LabellingResult:
     return label_alignment_rows(rows, clients, jev=_JEV, persist=persist or _Snapshots(), **options)
 
 
@@ -137,7 +139,7 @@ def test_ended_batches_are_named_for_deletion_and_a_running_one_is_not() -> None
 
     result = _label([repoqa_row("a"), repoqa_row("b")], clients)
 
-    assert set(result.ended_batches) == {("opus", "opus_1")}
+    assert set(result.ended_batches) == {EndedBatch(LabellerSlot.OPUS, "opus_1")}
 
 
 def test_the_labelling_cost_counts_each_batch_once_per_item() -> None:

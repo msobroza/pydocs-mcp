@@ -115,8 +115,10 @@ def test_the_alignment_and_escalation_defaults_are_the_tickets() -> None:
     assert alignment.planted_injections == 4
     assert alignment.random_share == 0.25
     assert (alignment.agreed_audit_share, alignment.audit_growth_threshold) == (0.10, 0.05)
+    assert alignment.min_labeller_kappa == 0.40
     assert alignment.label_file == {}
     assert (escalation.agreement_floor, escalation.spend_cap_usd) == (0.90, 2.00)
+    assert escalation.answer_cost_bound_usd == 0.05
     assert escalation.floor_scale is EscalationFloorScale.PERCENT_AGREEMENT
     assert escalation.cache_dir == ""
 

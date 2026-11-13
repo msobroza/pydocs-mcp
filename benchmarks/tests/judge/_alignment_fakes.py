@@ -13,6 +13,7 @@ from pydocs_eval.judge.alignment_rows import (
     LabellerEntry,
 )
 from pydocs_eval.judge.alignment_vocabulary import (
+    AlignmentPass,
     AlignmentStratum,
     LabelConfidence,
     LabelStatus,
@@ -48,7 +49,9 @@ REPOQA_REFERENCE = (
 REPOQA_ANSWER = "The parameters are read by `BaseEstimator.get_params` in `sklearn/base.py`."
 
 
-def repoqa_context(answer: str = REPOQA_ANSWER, reference: str | None = REPOQA_REFERENCE):
+def repoqa_context(
+    answer: str = REPOQA_ANSWER, reference: str | None = REPOQA_REFERENCE
+) -> AlignmentItemContext:
     return AlignmentItemContext(
         dataset=JudgedDataset.REPOQA_QA,
         question="Find the function that returns the estimator's parameters as a dict.",
@@ -67,6 +70,7 @@ def repoqa_row(item_id: str = "item_repoqa_1", **changes: object) -> AlignmentLa
         jev_model=JEV_MODEL,
         task_id="repoqa-qa/repo_qa/sklearn::get_params",
         source=AnswerSource(arm="baseline@60d5a00a", trajectory_id="traj-1"),
+        alignment_pass=AlignmentPass.PILOT,
         stratum=AlignmentStratum.BORDERLINE,
         context=repoqa_context(),
         questions=("needle_identified", "addresses_grader", "contradicts_reference"),
@@ -113,6 +117,7 @@ def chat_row(item_id: str = "item_chat_1", **changes: object) -> AlignmentLabelR
         jev_model=JEV_MODEL,
         task_id="example-needle-chat/q01",
         source=AnswerSource(arm="baseline@60d5a00a", trajectory_id="traj-2"),
+        alignment_pass=AlignmentPass.PASS_1,
         stratum=AlignmentStratum.RANDOM,
         context=AlignmentItemContext(
             dataset=JudgedDataset.EXAMPLE_NEEDLE_CHAT,

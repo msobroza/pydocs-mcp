@@ -13,6 +13,7 @@ from pydocs_eval.judge.alignment_request import (
     labels_output,
     parse_labels,
 )
+from pydocs_eval.judge.alignment_rows import AlignmentLabelRow
 from pydocs_eval.judge.alignment_vocabulary import LabelConfidence, LabelVerdict, QuestionLabel
 from pydocs_eval.judge.config import JevConfig
 
@@ -32,7 +33,7 @@ _JEV = JevConfig(model="jev-1.13")
 _OTHER_LABELLERS_EVIDENCE = "ASTRA-ONLY-EVIDENCE-SENTINEL"
 
 
-def _row_with_astra_answered():
+def _row_with_astra_answered() -> AlignmentLabelRow:
     astra = answered(
         ASTRA_MODEL,
         {

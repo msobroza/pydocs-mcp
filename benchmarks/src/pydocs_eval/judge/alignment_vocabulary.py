@@ -109,6 +109,11 @@ class LabellerSlot(StrEnum):
     ASTRA = "astra"
     OPUS = "opus"
 
+    @property
+    def other(self) -> LabellerSlot:
+        """The other blind labeller."""
+        return LabellerSlot.OPUS if self is LabellerSlot.ASTRA else LabellerSlot.ASTRA
+
 
 class LabelStatus(StrEnum):
     """Where one labeller's answer to one item stands."""

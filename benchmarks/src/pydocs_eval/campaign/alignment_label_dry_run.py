@@ -20,54 +20,52 @@ from collections.abc import Sequence
 
 from pydocs_eval.judge.alignment_labelling import LabellerClients
 from pydocs_eval.judge.alignment_rows import AlignmentLabelRow
-from pydocs_eval.judge.alignment_vocabulary import LabellerSlot, verdicts_for
+from pydocs_eval.judge.alignment_vocabulary import LabelConfidence, LabellerSlot, verdicts_for
 from pydocs_eval.judge.openrouter_chat import FakeOpenRouterChatClient
 
 # A dry run's synthetic price for each labeller's batch: inside the $0.09-0.20 per
 # item the sub-budget assumed for a 10-item pilot, so the sizing reads plausibly.
 DRY_RUN_BATCH_USD = 0.75
 _DRY_RUN_EVIDENCE = "dry run: synthetic label, no model was asked"
-# One question in five gets the second labeller's opposite verdict, one in ten a low confidence.
+# The second labeller flips about one verdict in five; one label in ten is low-confidence.
 _DRY_RUN_DISAGREE_EVERY = 5
 _DRY_RUN_LOW_EVERY = 10
 
 
 def dry_run_clients(rows: Sequence[AlignmentLabelRow]) -> LabellerClients:
     """Offline labellers that answer every row with synthetic labels: a $0 rehearsal of a run."""
-    scripts = {
-        slot: {row.item_id: _synthetic_answer(row, slot) for row in rows} for slot in LabellerSlot
+    clients = {
+        slot: FakeOpenRouterChatClient(
+            {row.item_id: _synthetic_answer(row, slot) for row in rows},
+            rows[0].labeller(slot).model if rows else "",
+            batch_prefix=f"dry_run_{slot.value}",
+            batch_cost_usd=DRY_RUN_BATCH_USD,
+        )
+        for slot in LabellerSlot
     }
-    return LabellerClients(
-        astra=FakeOpenRouterChatClient(
-            scripts[LabellerSlot.ASTRA],
-            rows[0].astra.model if rows else "",
-            batch_prefix="dry_run_astra",
-            batch_cost_usd=DRY_RUN_BATCH_USD,
-        ),
-        opus=FakeOpenRouterChatClient(
-            scripts[LabellerSlot.OPUS],
-            rows[0].opus.model if rows else "",
-            batch_prefix="dry_run_opus",
-            batch_cost_usd=DRY_RUN_BATCH_USD,
-        ),
-    )
+    return LabellerClients(astra=clients[LabellerSlot.ASTRA], opus=clients[LabellerSlot.OPUS])
 
 
 def _synthetic_answer(row: AlignmentLabelRow, slot: LabellerSlot) -> dict[str, object]:
-    answer: dict[str, object] = {}
-    for question_id in row.questions:
-        draw = int(hashlib.sha256(f"{row.item_id}:{question_id}".encode()).hexdigest(), 16)
-        allowed = verdicts_for(question_id)
-        index = draw % len(allowed)
-        if slot is LabellerSlot.OPUS and draw % _DRY_RUN_DISAGREE_EVERY == 0:
-            index = (index + 1) % len(allowed)
-        low = (draw // 7) % _DRY_RUN_LOW_EVERY == 0
-        answer[question_id] = {
-            "verdict": allowed[index].value,
-            "evidence": _DRY_RUN_EVIDENCE,
-            "confidence": "low" if low else "high",
-        }
-    return answer
+    return {qid: _synthetic_label(row.item_id, qid, slot) for qid in row.questions}
+
+
+def _synthetic_label(item_id: str, question_id: str, slot: LabellerSlot) -> dict[str, str]:
+    """A verdict, a confidence and a disagreement, each read off its own byte of a hash."""
+    verdict_byte, disagree_byte, confidence_byte = hashlib.sha256(
+        f"{item_id}:{question_id}".encode()
+    ).digest()[:3]
+    allowed = verdicts_for(question_id)
+    index = verdict_byte % len(allowed)
+    if slot is LabellerSlot.OPUS and disagree_byte % _DRY_RUN_DISAGREE_EVERY == 0:
+        index = (index + 1) % len(allowed)
+    low = confidence_byte % _DRY_RUN_LOW_EVERY == 0
+    confidence = LabelConfidence.LOW if low else LabelConfidence.HIGH
+    return {
+        "verdict": allowed[index].value,
+        "evidence": _DRY_RUN_EVIDENCE,
+        "confidence": confidence.value,
+    }
 
 
 __all__ = ("DRY_RUN_BATCH_USD", "dry_run_clients")

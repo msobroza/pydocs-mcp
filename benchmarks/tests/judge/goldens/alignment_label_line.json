@@ -4,6 +4,7 @@
     "contradicts_reference": "false",
     "needle_identified": "true"
   },
+  "alignment_pass": "pilot",
   "astra": {
     "batch_cost_usd": 0.75,
     "batch_id": "batch_a",

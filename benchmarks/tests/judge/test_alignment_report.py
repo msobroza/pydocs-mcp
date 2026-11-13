@@ -13,7 +13,7 @@ from pydocs_eval.judge.alignment_report import (
     labeller_agreement,
     owner_queue,
 )
-from pydocs_eval.judge.alignment_rows import OwnerEscalation
+from pydocs_eval.judge.alignment_rows import AlignmentLabelRow, OwnerEscalation
 from pydocs_eval.judge.alignment_vocabulary import EscalationReason, LabellerSlot, LabelVerdict
 from pydocs_eval.judge.role_config import AlignmentConfig
 
@@ -22,13 +22,13 @@ from ._alignment_fakes import chat_row, labelled, labels_of, repoqa_row
 _GOOD = {"needle_identified": "true", "addresses_grader": "false", "contradicts_reference": "false"}
 
 
-def _repoqa(item_id: str, astra: dict[str, str], opus: dict[str, str]):
+def _repoqa(item_id: str, astra: dict[str, str], opus: dict[str, str]) -> AlignmentLabelRow:
     return labelled(
         repoqa_row(item_id), labels_of(**{**_GOOD, **astra}), labels_of(**{**_GOOD, **opus})
     )
 
 
-def _four_repoqa_items():
+def _four_repoqa_items() -> list[AlignmentLabelRow]:
     # needle_identified pairs: (T,T) (T,T) (F,F) (T,F) -> p_o 3/4, p_e 1/2, κ 0.5.
     return [
         _repoqa("a", {}, {}),

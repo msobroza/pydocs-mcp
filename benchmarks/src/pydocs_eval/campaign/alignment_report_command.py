@@ -33,21 +33,18 @@ from pathlib import Path
 import httpx
 
 from pydocs_eval.campaign.alignment_report_text import SweepTable, render_alignment_report
+from pydocs_eval.campaign.judge_openers import JevOpener, open_openrouter_jev
 from pydocs_eval.judge.alignment_label_file import (
     AlignmentLabelFileError,
     read_alignment_labels,
     write_alignment_labels,
 )
 from pydocs_eval.judge.alignment_labelling import label_with_escalation_judge
-from pydocs_eval.judge.alignment_report import QuestionKey
 from pydocs_eval.judge.alignment_request import alignment_plan
-from pydocs_eval.judge.alignment_rows import AlignmentLabelRow
+from pydocs_eval.judge.alignment_rows import AlignmentLabelRow, QuestionKey
 from pydocs_eval.judge.chat_wire import ChatCompleter
 from pydocs_eval.judge.config import JudgeConfig, load_judge_deployment
-from pydocs_eval.judge.jev_cache import JevResponseCache, jev_cache_dir
-from pydocs_eval.judge.jev_client import JevJudgeClient
 from pydocs_eval.judge.jev_scoring import calibration_answers
-from pydocs_eval.judge.jev_wire import JevJudge
 from pydocs_eval.judge.judge_errors import (
     JudgeConfigError,
     JudgeModelMismatchError,
@@ -58,8 +55,7 @@ from pydocs_eval.judge.openrouter_http import bearer_from_env
 from pydocs_eval.judge.role_config import DEPLOYMENT_YAML
 from pydocs_eval.judge.roles import escalation_role, jev_model
 from pydocs_eval.judge.threshold_sweep import (
-    BandSweepRow,
-    GateSweepRow,
+    SweepRow,
     sweep_noul_bands,
     sweep_pairs,
     sweep_score_gates,
@@ -72,8 +68,6 @@ _SPEND_ERRORS = (JudgeRequestError, JudgeModelMismatchError)
 
 #: Opens the pinned escalation judge for its agreement pass.
 EscalationOpener = Callable[[JudgeConfig], AbstractContextManager[ChatCompleter]]
-#: Opens the pinned Jev judge for the sweep.
-JevOpener = Callable[[JudgeConfig], AbstractContextManager[JevJudge]]
 
 
 def add_report_alignment_command(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -116,8 +110,9 @@ def cmd_report_alignment(
         return _EXIT_REFUSED
     try:
         if args.escalation_pass:
-            rows = _escalation_pass(args.labels, rows, judge, open_escalation or _openrouter_luna)
-        sweep = _sweep(rows, judge, open_jev or _openrouter_jev) if args.sweep else None
+            opener = open_escalation or _open_openrouter_escalation_judge
+            rows = _escalation_pass(args.labels, rows, judge, opener)
+        sweep = _sweep(rows, judge, open_jev or open_openrouter_jev) if args.sweep else None
     except _SPEND_ERRORS as exc:
         print(f"report-alignment: {exc}", file=sys.stderr)
         return _EXIT_REFUSED
@@ -172,7 +167,7 @@ def _sweep(
             for row in rows
         }
     pairs = sweep_pairs(rows, answers)
-    table: dict[QuestionKey, Sequence[BandSweepRow] | Sequence[GateSweepRow]] = {}
+    table: dict[QuestionKey, Sequence[SweepRow]] = {}
     for key, nouls in pairs.nouls.items():
         table[key] = sweep_noul_bands(nouls, band_start=judge.alignment.band_start)
     for key, scores in pairs.scores.items():
@@ -181,15 +176,10 @@ def _sweep(
 
 
 @contextmanager
-def _openrouter_luna(judge: JudgeConfig) -> Iterator[ChatCompleter]:
+def _open_openrouter_escalation_judge(judge: JudgeConfig) -> Iterator[ChatCompleter]:
+    """The pinned escalation judge on OpenRouter, for its agreement pass."""
     with httpx.Client() as http:
         yield OpenRouterChatClient(escalation_role(judge), http)
-
-
-@contextmanager
-def _openrouter_jev(judge: JudgeConfig) -> Iterator[JevJudge]:
-    with httpx.Client() as http:
-        yield JevJudgeClient(judge.jev, cache=JevResponseCache(jev_cache_dir(judge.jev)), http=http)
 
 
 __all__ = ("add_report_alignment_command", "cmd_report_alignment")

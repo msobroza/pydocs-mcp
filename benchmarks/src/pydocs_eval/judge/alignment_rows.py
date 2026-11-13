@@ -18,9 +18,11 @@ Example:
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from typing import NamedTuple
 
 from pydocs_eval.judge.alignment_vocabulary import (
+    AlignmentPass,
     AlignmentStratum,
     EscalationReason,
     LabellerSlot,
@@ -28,8 +30,30 @@ from pydocs_eval.judge.alignment_vocabulary import (
     LabelVerdict,
     QuestionLabel,
 )
+from pydocs_eval.judge.jev_questions import JevQuestionKind, kind_of
 from pydocs_eval.judge.jev_requests import JudgedDataset, JudgedSite
 from pydocs_eval.judge.reference_sources import ShownCode
+
+
+class QuestionKey(NamedTuple):
+    """One question of one dataset, as every per-question figure is keyed.
+
+    A question is a kind: ``site_0`` and ``site_1`` are both ``site``, as Jev's
+    threshold blocks are.
+    """
+
+    dataset: JudgedDataset
+    question: JevQuestionKind
+
+    @classmethod
+    def of(cls, dataset: JudgedDataset, question_id: str) -> QuestionKey:
+        """The key of ``question_id`` on ``dataset``.
+
+        Example:
+            >>> QuestionKey.of(JudgedDataset.EXAMPLE_NEEDLE_CHAT, "site_2").question
+            <JevQuestionKind.SITE: 'site'>
+        """
+        return cls(dataset, kind_of(question_id))
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +95,14 @@ class CodeCheck:
     gold_site_coverage: float
     verdicts: Mapping[str, bool]
 
+    def contradicts(self, question_id: str, says_yes: bool | None) -> bool:
+        """Whether a decided yes/no verdict on ``question_id`` disagrees with code's own.
+
+        ``says_yes`` is ``None`` for no decided verdict, which contradicts nothing.
+        """
+        cited = self.verdicts.get(question_id)
+        return cited is not None and says_yes is not None and says_yes != cited
+
 
 @dataclass(frozen=True, slots=True)
 class LabellerEntry:
@@ -111,6 +143,7 @@ class AlignmentLabelRow:
     jev_model: str
     task_id: str
     source: AnswerSource
+    alignment_pass: AlignmentPass
     stratum: AlignmentStratum
     context: AlignmentItemContext
     questions: tuple[str, ...]
@@ -125,8 +158,22 @@ class AlignmentLabelRow:
     escalation_judge: LabellerEntry | None = None
 
     def labeller(self, slot: LabellerSlot) -> LabellerEntry:
-        """The entry of the labeller in ``slot``."""
-        return self.astra if slot is LabellerSlot.ASTRA else self.opus
+        """The entry of the labeller in ``slot`` (its field is named for the slot)."""
+        entry: LabellerEntry = getattr(self, slot.value)
+        return entry
+
+    def with_labeller(self, slot: LabellerSlot, entry: LabellerEntry) -> AlignmentLabelRow:
+        """This row with ``slot``'s entry replaced by ``entry``."""
+        return replace(self, **{slot.value: entry})
+
+    @property
+    def labelled_by_both(self) -> bool:
+        """Whether both blind labellers answered the item."""
+        return self.astra.answered and self.opus.answered
+
+    def question_key(self, question_id: str) -> QuestionKey:
+        """The per-question key ``question_id`` of this item is counted under."""
+        return QuestionKey.of(self.dataset, question_id)
 
 
 __all__ = (
@@ -136,4 +183,5 @@ __all__ = (
     "CodeCheck",
     "LabellerEntry",
     "OwnerEscalation",
+    "QuestionKey",
 )

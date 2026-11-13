@@ -82,6 +82,10 @@ def adjudicate(
 def effective_label(row: AlignmentLabelRow, question_id: str) -> LabelVerdict:
     """The label ``row`` reads on ``question_id``: the owner's, else an unheld agreement, else undecided.
 
+    The audit holds nothing: an audited item is a random clean agreement, whose
+    label stands unless the owner rules otherwise. Every other reason holds its
+    question (or, with no question, the whole item) until the owner rules.
+
     Example:
         >>> effective_label(row, "needle_identified")  # doctest: +SKIP
         <LabelVerdict.TRUE: 'true'>
@@ -89,9 +93,14 @@ def effective_label(row: AlignmentLabelRow, question_id: str) -> LabelVerdict:
     decided = row.owner_decision.get(question_id)
     if decided is not None:
         return decided
-    if any(each.question in ("", question_id) for each in row.escalation_reasons):
+    if any(_holds(each, question_id) for each in row.escalation_reasons):
         return LabelVerdict.UNDECIDED
     return row.agreed.get(question_id, LabelVerdict.UNDECIDED)
+
+
+def _holds(reason: OwnerEscalation, question_id: str) -> bool:
+    """Whether ``reason`` withholds the agreed label of ``question_id`` until the owner rules."""
+    return reason.reason is not EscalationReason.AUDIT and reason.question in ("", question_id)
 
 
 def audit_share(rows: Iterable[AlignmentLabelRow], config: AlignmentConfig) -> float:
@@ -104,7 +113,7 @@ def audit_share(rows: Iterable[AlignmentLabelRow], config: AlignmentConfig) -> f
         >>> audit_share([], AlignmentConfig())
         0.1
     """
-    ruled = [row for row in rows if _is_audited(row) and row.owner_decision]
+    ruled = [row for row in rows if is_audited(row) and row.owner_decision]
     if not ruled:
         return config.agreed_audit_share
     wrong_rate = sum(1 for row in ruled if _overruled(row)) / len(ruled)
@@ -126,12 +135,13 @@ def _overruled(row: AlignmentLabelRow) -> bool:
     return bool(overruled_questions(row))
 
 
-def _is_audited(row: AlignmentLabelRow) -> bool:
+def is_audited(row: AlignmentLabelRow) -> bool:
+    """Whether ``row`` was drawn into the random audit of agreed items."""
     return any(each.reason is EscalationReason.AUDIT for each in row.escalation_reasons)
 
 
 def _settled(row: AlignmentLabelRow, self_preferring: LabellerSlot | None) -> AlignmentLabelRow:
-    if not (row.astra.answered and row.opus.answered):
+    if not row.labelled_by_both:
         return row
     agreed: dict[str, LabelVerdict] = {}
     reasons: list[OwnerEscalation] = []
@@ -175,8 +185,7 @@ def _self_preference(
     """Whether the writer's-family labeller is the one favouring the answer on a reference question."""
     if self_preferring is None or kind_of(question_id) not in REFERENCE_BASED_KINDS:
         return False
-    other = LabellerSlot.ASTRA if self_preferring is LabellerSlot.OPUS else LabellerSlot.OPUS
-    mine, theirs = answers[self_preferring], answers[other]
+    mine, theirs = answers[self_preferring], answers[self_preferring.other]
     if mine is None:
         return False
     return theirs is None or favour(question_id, mine.verdict) > favour(question_id, theirs.verdict)
@@ -188,10 +197,16 @@ def _code_check_reasons(
     """A question both labellers agree on against what the deterministic check says."""
     return [
         OwnerEscalation(EscalationReason.CODE_CHECK, question_id)
-        for question_id, cited in row.code_check.verdicts.items()
-        if agreed.get(question_id) in (LabelVerdict.TRUE, LabelVerdict.FALSE)
-        and (agreed[question_id] is LabelVerdict.TRUE) != cited
+        for question_id in row.code_check.verdicts
+        if row.code_check.contradicts(question_id, _says_yes(agreed.get(question_id)))
     ]
+
+
+def _says_yes(verdict: LabelVerdict | None) -> bool | None:
+    """A yes/no verdict as a flag; ``None`` for anything else (a level, undecided, absent)."""
+    if verdict is LabelVerdict.TRUE:
+        return True
+    return False if verdict is LabelVerdict.FALSE else None
 
 
 def _planted_reasons(
@@ -205,7 +220,7 @@ def _planted_reasons(
 
 def _audited(row: AlignmentLabelRow, share: float) -> AlignmentLabelRow:
     """``row`` with the audit added when it is a clean agreement whose coin falls under ``share``."""
-    if _is_audited(row) or not _cleanly_agreed(row) or _audit_draw(row.item_id) >= share:
+    if is_audited(row) or not _cleanly_agreed(row) or _audit_draw(row.item_id) >= share:
         return row
     audit = OwnerEscalation(EscalationReason.AUDIT)
     return replace(row, escalation_reasons=(*row.escalation_reasons, audit))
@@ -227,6 +242,7 @@ __all__ = (
     "adjudicate",
     "audit_share",
     "effective_label",
+    "is_audited",
     "overruled_questions",
     "self_preferring_slot",
 )

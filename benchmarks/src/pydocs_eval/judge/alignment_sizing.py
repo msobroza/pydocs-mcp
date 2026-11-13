@@ -3,9 +3,10 @@
 The 10-item dual pilot measures the real cost of one item labelled by both
 labellers. What is left of ``judge.alignment.sub_budget_usd`` after it buys
 ``remaining // per_item`` more items; when that is short of what both passes
-aim at (``n_items``: pass 1 of 100, the pilot's items included, and pass 2 of
-60), it is split between them in proportion to what each still needs. The
-owner is told the counts; the item count is what flexes, never the budget.
+aim at (``n_items``: 100 for pass 1 and 60 for pass 2, each beside the pilot's
+items, as the spec's budget counts them), it is split between them in
+proportion to their aims. The owner is told the counts; the item count is what
+flexes, never the budget.
 
 Example:
     >>> size_alignment_passes(LabellingCost(0.5, 10, 0), AlignmentConfig()).pass_2_items
@@ -30,8 +31,9 @@ ASSUMED_ITEM_USD = (0.09, 0.20)
 class AlignmentSizing:
     """The pilot's measured price and what the rest of the sub-budget buys, per pass.
 
-    Every count is ``None`` when the pilot has no complete price: a batch
-    OpenRouter did not price leaves the cost per item unknown.
+    ``pass_1_items`` and ``pass_2_items`` are each pass's own items, the pilot's
+    not among them. Every count is ``None`` when the pilot has no complete
+    price: a batch OpenRouter did not price leaves the cost per item unknown.
     """
 
     per_item_usd: float | None
@@ -58,14 +60,18 @@ def size_alignment_passes(cost: LabellingCost, config: AlignmentConfig) -> Align
     if per_item is None:
         return AlignmentSizing(None, cost.items, cost.total_usd, remaining, None, None, None)
     affordable = max(0, math.floor(remaining / per_item))
-    more_1 = max(0, config.n_items.pass_1 - cost.items)
-    more_2 = config.n_items.pass_2
-    if affordable < more_1 + more_2:
-        more_1 = math.floor(affordable * more_1 / (more_1 + more_2))
-        more_2 = affordable - more_1
+    pass_1, pass_2 = _split(affordable, config.n_items.pass_1, config.n_items.pass_2)
     return AlignmentSizing(
-        per_item, cost.items, cost.total_usd, remaining, affordable, cost.items + more_1, more_2
+        per_item, cost.items, cost.total_usd, remaining, affordable, pass_1, pass_2
     )
+
+
+def _split(affordable: int, pass_1_aim: int, pass_2_aim: int) -> tuple[int, int]:
+    """Both aims when they fit; else ``affordable`` shared in proportion to them."""
+    if affordable >= pass_1_aim + pass_2_aim:
+        return pass_1_aim, pass_2_aim
+    pass_1 = math.floor(affordable * pass_1_aim / (pass_1_aim + pass_2_aim))
+    return pass_1, affordable - pass_1
 
 
 __all__ = ("ASSUMED_ITEM_USD", "AlignmentSizing", "size_alignment_passes")

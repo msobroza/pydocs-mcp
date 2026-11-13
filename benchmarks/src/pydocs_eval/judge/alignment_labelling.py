@@ -57,21 +57,27 @@ class LabellerClients:
     opus: BatchChatCompleter
 
     def of(self, slot: LabellerSlot) -> BatchChatCompleter:
-        return self.astra if slot is LabellerSlot.ASTRA else self.opus
+        """The completer of the labeller in ``slot`` (its field is named for the slot)."""
+        client: BatchChatCompleter = getattr(self, slot.value)
+        return client
+
+
+@dataclass(frozen=True, slots=True)
+class EndedBatch:
+    """A labeller's batch that ended with every row stored: it may be deleted upstream."""
+
+    slot: LabellerSlot
+    batch_id: str
 
 
 @dataclass(frozen=True, slots=True)
 class LabellingResult:
-    """The rows after a run, how many asks it made and collected, and the batches that ended.
-
-    ``ended_batches`` are ``(slot, batch_id)`` pairs whose every row is stored:
-    each may be deleted upstream.
-    """
+    """The rows after a run, how many asks it made and collected, and the batches that ended."""
 
     rows: tuple[AlignmentLabelRow, ...]
     asked: int
     collected: int
-    ended_batches: tuple[tuple[str, str], ...]
+    ended_batches: tuple[EndedBatch, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,13 +124,7 @@ def label_with_escalation_judge(
     ``escalation_judge``. This pass is not an in-band escalation: it runs
     outside the in-band spend cap, on its own ledger line.
     """
-    due = [
-        row
-        for row in rows
-        if row.astra.answered
-        and row.opus.answered
-        and not (row.escalation_judge and row.escalation_judge.answered)
-    ]
+    due = [row for row in rows if row.labelled_by_both and not _judged_by_escalation(row)]
     if not due:
         return tuple(rows)
     outcomes = client.complete_all([labeller_request(row, jev=jev) for row in due])
@@ -140,15 +140,19 @@ def label_with_escalation_judge(
 
 def labelling_cost(rows: Sequence[AlignmentLabelRow]) -> LabellingCost:
     """What the labellers' batches cost, each batch counted once, over the items both answered."""
-    batches: dict[tuple[str, str], float | None] = {}
-    for row in rows:
-        for slot in LabellerSlot:
-            entry = row.labeller(slot)
-            if entry.batch_id and entry.status is not LabelStatus.SUBMITTED:
-                batches[(slot.value, entry.batch_id)] = entry.batch_cost_usd
+    batches = {
+        (slot, entry.batch_id): entry.batch_cost_usd
+        for row in rows
+        for slot, entry in ((slot, row.labeller(slot)) for slot in LabellerSlot)
+        if entry.batch_id and entry.status is not LabelStatus.SUBMITTED
+    }
     priced = [cost for cost in batches.values() if cost is not None]
-    items = sum(1 for row in rows if row.astra.answered and row.opus.answered)
+    items = sum(1 for row in rows if row.labelled_by_both)
     return LabellingCost(sum(priced), items, len(batches) - len(priced))
+
+
+def _judged_by_escalation(row: AlignmentLabelRow) -> bool:
+    return row.escalation_judge is not None and row.escalation_judge.answered
 
 
 class _LabellingRun:
@@ -159,7 +163,8 @@ class _LabellingRun:
         self.persist = persist
         self.asked = 0
         self.collected = 0
-        self.seen: dict[tuple[str, str], bool] = {}
+        # Every batch an outcome came from, and whether any of its rows still runs.
+        self.still_running_by_batch: dict[EndedBatch, bool] = {}
 
     def collect(self, slot: LabellerSlot, client: BatchChatCompleter) -> None:
         """Read every batch an earlier run left running, by its id."""
@@ -193,13 +198,14 @@ class _LabellingRun:
         self.asked += len(item_ids)
 
     def result(self) -> LabellingResult:
-        ended = tuple(key for key, running in self.seen.items() if not running)
+        batches = self.still_running_by_batch.items()
+        ended = tuple(batch for batch, running in batches if not running)
         return LabellingResult(tuple(self.rows), self.asked, self.collected, ended)
 
     def _mark_submitted(self, slot: LabellerSlot, item_ids: Sequence[str], batch_id: str) -> None:
         submitted = set(item_ids)
         self.rows = [
-            _with_entry(row, slot, _submitted(row.labeller(slot), batch_id))
+            row.with_labeller(slot, _submitted(row.labeller(slot), batch_id))
             if row.item_id in submitted
             else row
             for row in self.rows
@@ -209,14 +215,13 @@ class _LabellingRun:
         self, slot: LabellerSlot, item_ids: Sequence[str], outcomes: Sequence[ChatOutcome]
     ) -> None:
         by_id = dict(zip(item_ids, outcomes, strict=True))
-        for outcome in outcomes:
-            if outcome.batch_id:
-                key = (slot.value, outcome.batch_id)
-                still = _is_running(outcome)
-                self.seen[key] = self.seen.get(key, False) or still
+        for outcome in (each for each in outcomes if each.batch_id):
+            batch = EndedBatch(slot, outcome.batch_id)
+            running = self.still_running_by_batch.get(batch, False)
+            self.still_running_by_batch[batch] = running or _is_running(outcome)
         self.rows = [
-            _with_entry(
-                row, slot, _entry_after(row.labeller(slot), by_id[row.item_id], row.questions)
+            row.with_labeller(
+                slot, _entry_after(row.labeller(slot), by_id[row.item_id], row.questions)
             )
             if row.item_id in by_id
             else row
@@ -230,12 +235,6 @@ def _is_running(outcome: ChatOutcome) -> bool:
 
 def _submitted(entry: LabellerEntry, batch_id: str) -> LabellerEntry:
     return replace(entry, status=LabelStatus.SUBMITTED, batch_id=batch_id, reason="")
-
-
-def _with_entry(
-    row: AlignmentLabelRow, slot: LabellerSlot, entry: LabellerEntry
-) -> AlignmentLabelRow:
-    return replace(row, astra=entry) if slot is LabellerSlot.ASTRA else replace(row, opus=entry)
 
 
 def _entry_after(
@@ -270,6 +269,7 @@ def _answered_entry(
 
 
 __all__ = (
+    "EndedBatch",
     "LabellerClients",
     "LabellingCost",
     "LabellingResult",

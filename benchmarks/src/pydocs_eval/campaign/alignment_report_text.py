@@ -10,22 +10,26 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 
-from pydocs_eval.campaign.alignment_label_text import agreement_lines, figure, queue_lines
+from pydocs_eval.campaign.alignment_label_text import (
+    agreement_figure_text,
+    agreement_lines,
+    queue_lines,
+)
 from pydocs_eval.judge.alignment_adjudication import audit_share
 from pydocs_eval.judge.alignment_report import (
-    QuestionKey,
     audit_review,
     disagreement_directions,
     labeller_agreement,
     owner_queue,
 )
-from pydocs_eval.judge.alignment_rows import AlignmentLabelRow
+from pydocs_eval.judge.alignment_rows import AlignmentLabelRow, QuestionKey
 from pydocs_eval.judge.config import JudgeConfig
 from pydocs_eval.judge.escalation_trust import EscalationTrustRow, escalation_trust
-from pydocs_eval.judge.threshold_sweep import BandSweepRow, GateSweepRow
+from pydocs_eval.judge.threshold_sweep import SweepRow
+from pydocs_eval.judge.thresholds import NoulBand
 
 #: One question's sweep: its bands (yes/no) or its confidence gates (completeness).
-SweepTable = Mapping[QuestionKey, Sequence[BandSweepRow] | Sequence[GateSweepRow]]
+SweepTable = Mapping[QuestionKey, Sequence[SweepRow]]
 
 
 def render_alignment_report(
@@ -34,7 +38,11 @@ def render_alignment_report(
     """Everything the label file says, plus the threshold sweep when one was run."""
     labelled = sum(1 for row in rows if row.astra.answered and row.opus.answered)
     lines = [f"alignment labels: {len(rows)} items, {labelled} labelled by both"]
-    lines += agreement_lines(labeller_agreement(rows), disagreement_directions(rows))
+    lines += agreement_lines(
+        labeller_agreement(rows),
+        disagreement_directions(rows),
+        min_labeller_kappa=judge.alignment.min_labeller_kappa,
+    )
     lines += queue_lines(owner_queue(rows))
     lines += _audit_lines(rows, judge)
     lines += _trust_lines(rows, judge)
@@ -63,17 +71,20 @@ def _trust_lines(rows: Sequence[AlignmentLabelRow], judge: JudgeConfig) -> Itera
         f"escalation judge per question (floor min({judge.escalation.agreement_floor:.2f}, "
         f"labellers' kappa), compared on {scale}):"
     )
-    yield from (_trust_line(row) for row in escalation_trust(rows, judge.escalation))
+    yield from (_trust_line(row) for row in escalation_trust(rows, judge))
 
 
 def _trust_line(row: EscalationTrustRow) -> str:
+    text = agreement_figure_text
     verdict = "trusted" if row.trusted else "undecided (below the floor)"
+    if row.labeller_kappa_low:
+        verdict = "undecided (the labellers' kappa is low: rewrite its criteria first)"
     flag = "; KAPPA ABOVE THE LABELLERS'" if row.kappa_above_labellers else ""
     return (
-        f"  {row.dataset} {row.question}: n={row.items} agreement {figure(row.percent_agreement)} "
-        f"kappa {figure(row.kappa)} (labellers' kappa {figure(row.labeller_kappa)}, floor "
-        f"{figure(row.floor)}); with astra {figure(row.agreement_with_astra)}, with opus "
-        f"{figure(row.agreement_with_opus)}: {verdict}{flag}"
+        f"  {row.dataset} {row.question}: n={row.items} agreement {text(row.percent_agreement)} "
+        f"kappa {text(row.kappa)} (labellers' kappa {text(row.labeller_kappa)}, floor "
+        f"{text(row.floor)}); with astra {text(row.agreement_with_astra)}, with opus "
+        f"{text(row.agreement_with_opus)}: {verdict}{flag}"
     )
 
 
@@ -84,15 +95,16 @@ def _sweep_lines(sweep: SweepTable) -> Iterator[str]:
             yield f"  {dataset} {question} {_sweep_row(row)}"
 
 
-def _sweep_row(row: BandSweepRow | GateSweepRow) -> str:
+def _sweep_row(row: SweepRow) -> str:
+    threshold = row.threshold
     where = (
-        f"band {row.band.low:.2f}/{row.band.high:.2f}"
-        if isinstance(row, BandSweepRow)
-        else f"min_confidence {row.gate.min_confidence:.1f}"
+        f"band {threshold.low:.2f}/{threshold.high:.2f}"
+        if isinstance(threshold, NoulBand)
+        else f"min_confidence {threshold.min_confidence:.1f}"
     )
     return (
         f"{where}: decides {row.auto_decided}/{row.items} ({row.auto_decided_share:.0%}), "
-        f"agreement {figure(row.agreement)}"
+        f"agreement {agreement_figure_text(row.agreement)}"
     )
 
 
