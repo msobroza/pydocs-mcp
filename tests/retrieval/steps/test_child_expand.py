@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import random
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ import yaml
 
 from pydocs_mcp.db import open_index_database
 from pydocs_mcp.extraction.model.document_node import DocumentNode, NodeKind
+from pydocs_mcp.filters import FieldEq
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
     Chunk,
@@ -73,25 +75,21 @@ def _chunk(
     qname: str,
     relevance: float | None = None,
     *,
-    kind: NodeKind = NodeKind.FUNCTION,
     module: str = _MOD,
     package: str = _PKG,
     text: str | None = None,
 ) -> Chunk:
+    """A chunk row as the chunks table returns it: no ``kind`` key — the table
+    does not persist one, so only the document tree can say what a hit is."""
     return Chunk(
         text=text or f"text of {qname}",
         relevance=relevance,
-        metadata={
-            "package": package,
-            "module": module,
-            "qualified_name": qname,
-            "kind": kind.value,
-        },
+        metadata={"package": package, "module": module, "qualified_name": qname},
     )
 
 
-def _hit(qname: str, relevance: float, kind: NodeKind = NodeKind.FUNCTION) -> Chunk:
-    return _chunk(qname, relevance, kind=kind)
+def _hit(qname: str, relevance: float) -> Chunk:
+    return _chunk(qname, relevance)
 
 
 async def _step(
@@ -133,7 +131,7 @@ async def test_a_class_hit_s_members_fill_the_free_slots_below_the_original_hits
     tree = _module(_class(f"{_MOD}.Router", "add", "remove"))
     rows = [_chunk(f"{_MOD}.Router.add"), _chunk(f"{_MOD}.Router.remove")]
     step = await _step([tree], rows)
-    hits = [_hit(f"{_MOD}.Router", 0.8, NodeKind.CLASS), _hit(f"{_MOD}.helper", 0.7)]
+    hits = [_hit(f"{_MOD}.Router", 0.8), _hit(f"{_MOD}.helper", 0.7)]
 
     out = await step.run(_state(hits, cap=5))
 
@@ -154,7 +152,7 @@ def _relevance_of(state: RetrieverState, qname: str) -> float | None:
 async def _router_and_helper(helper_relevance: float) -> RetrieverState:
     tree = _module(_class(f"{_MOD}.Router", "add"))
     step = await _step([tree], [_chunk(f"{_MOD}.Router.add")])
-    hits = [_hit(f"{_MOD}.Router", 0.8, NodeKind.CLASS), _hit(f"{_MOD}.helper", helper_relevance)]
+    hits = [_hit(f"{_MOD}.Router", 0.8), _hit(f"{_MOD}.helper", helper_relevance)]
     return await step.run(_state(hits, cap=4))
 
 
@@ -165,7 +163,7 @@ async def test_a_query_without_a_cap_fills_up_to_the_limit_step_s_default_of_8()
         [_chunk(f"{_MOD}.Router.{m}") for m in methods],
         per_parent=10,
     )
-    hits = [_hit(f"{_MOD}.Router", 0.8, NodeKind.CLASS), _hit(f"{_MOD}.helper", 0.7)]
+    hits = [_hit(f"{_MOD}.Router", 0.8), _hit(f"{_MOD}.helper", 0.7)]
 
     out = await step.run(_state(hits, cap=None))
 
@@ -190,10 +188,10 @@ async def test_a_member_never_scores_above_the_lowest_original_hit() -> None:
 async def test_a_module_hit_expands_into_its_classes_and_functions_not_its_imports() -> None:
     imports = _node(f"{_MOD}.<imports>", NodeKind.IMPORT_BLOCK)
     tree = _module(imports, _class(f"{_MOD}.Router"), _node(f"{_MOD}.serve", NodeKind.FUNCTION))
-    rows = [_chunk(n.qualified_name, kind=n.kind) for n in tree.children]
+    rows = [_chunk(n.qualified_name) for n in tree.children]
     step = await _step([tree], rows)
 
-    out = await step.run(_state([_hit(_MOD, 0.9, NodeKind.MODULE)]))
+    out = await step.run(_state([_hit(_MOD, 0.9)]))
 
     assert _qnames(out) == [_MOD, f"{_MOD}.Router", f"{_MOD}.serve"]
 
@@ -202,7 +200,7 @@ async def test_members_of_several_parents_follow_parent_rank_until_the_slots_run
     tree = _module(_class(f"{_MOD}.A", "a1", "a2"), _class(f"{_MOD}.B", "b1", "b2"))
     rows = [_chunk(f"{_MOD}.{q}") for q in ("A.a1", "A.a2", "B.b1", "B.b2")]
     step = await _step([tree], rows)
-    hits = [_hit(f"{_MOD}.B", 0.9, NodeKind.CLASS), _hit(f"{_MOD}.A", 0.8, NodeKind.CLASS)]
+    hits = [_hit(f"{_MOD}.B", 0.9), _hit(f"{_MOD}.A", 0.8)]
 
     out = await step.run(_state(hits, cap=5))
 
@@ -219,7 +217,7 @@ async def test_per_parent_caps_the_members_each_parent_contributes() -> None:
     tree = _module(_class(f"{_MOD}.Router", "a", "b", "c"))
     step = await _step([tree], [_chunk(f"{_MOD}.Router.{m}") for m in "abc"], per_parent=2)
 
-    out = await step.run(_state([_hit(f"{_MOD}.Router", 0.9, NodeKind.CLASS)]))
+    out = await step.run(_state([_hit(f"{_MOD}.Router", 0.9)]))
 
     assert _qnames(out) == [f"{_MOD}.Router", f"{_MOD}.Router.a", f"{_MOD}.Router.b"]
 
@@ -227,7 +225,7 @@ async def test_per_parent_caps_the_members_each_parent_contributes() -> None:
 async def test_a_parent_ranked_below_top_s_is_not_expanded() -> None:
     tree = _module(_class(f"{_MOD}.Router", "add"))
     step = await _step([tree], [_chunk(f"{_MOD}.Router.add")], top_s=1)
-    hits = [_hit(f"{_MOD}.helper", 0.9), _hit(f"{_MOD}.Router", 0.8, NodeKind.CLASS)]
+    hits = [_hit(f"{_MOD}.helper", 0.9), _hit(f"{_MOD}.Router", 0.8)]
     state = _state(hits)
 
     assert await step.run(state) is state
@@ -237,7 +235,7 @@ async def test_a_member_already_listed_is_not_appended_again_and_the_next_one_fi
     tree = _module(_class(f"{_MOD}.Router", "add", "remove", "clear"))
     rows = [_chunk(f"{_MOD}.Router.{m}") for m in ("add", "remove", "clear")]
     step = await _step([tree], rows, per_parent=2)
-    hits = [_hit(f"{_MOD}.Router", 0.9, NodeKind.CLASS), _hit(f"{_MOD}.Router.add", 0.8)]
+    hits = [_hit(f"{_MOD}.Router", 0.9), _hit(f"{_MOD}.Router.add", 0.8)]
 
     out = await step.run(_state(hits))
 
@@ -253,7 +251,7 @@ async def test_a_member_with_no_chunk_row_is_skipped() -> None:
     tree = _module(_class(f"{_MOD}.Router", "add", "remove"))
     step = await _step([tree], [_chunk(f"{_MOD}.Router.remove")])
 
-    out = await step.run(_state([_hit(f"{_MOD}.Router", 0.9, NodeKind.CLASS)]))
+    out = await step.run(_state([_hit(f"{_MOD}.Router", 0.9)]))
 
     assert _qnames(out) == [f"{_MOD}.Router", f"{_MOD}.Router.remove"]
 
@@ -266,7 +264,7 @@ async def test_hits_from_one_module_load_its_tree_once() -> None:
     chunk_store = InMemoryChunkStore()
     await chunk_store.upsert([_chunk(f"{_MOD}.A.a1"), _chunk(f"{_MOD}.B.b1")])
     step = ChildExpandStep(uow_factory=make_fake_uow_factory(trees=tree_store, chunks=chunk_store))
-    hits = [_hit(f"{_MOD}.A", 0.9, NodeKind.CLASS), _hit(f"{_MOD}.B", 0.8, NodeKind.CLASS)]
+    hits = [_hit(f"{_MOD}.A", 0.9), _hit(f"{_MOD}.B", 0.8)]
 
     await step.run(_state(hits))
 
@@ -279,7 +277,7 @@ async def test_hits_from_one_module_load_its_tree_once() -> None:
 async def test_hits_that_already_fill_the_window_come_back_unchanged() -> None:
     tree = _module(_class(f"{_MOD}.Router", "add"))
     step = await _step([tree], [_chunk(f"{_MOD}.Router.add")])
-    state = _state([_hit(f"{_MOD}.Router", 0.9, NodeKind.CLASS), _hit(f"{_MOD}.f", 0.8)], cap=2)
+    state = _state([_hit(f"{_MOD}.Router", 0.9), _hit(f"{_MOD}.f", 0.8)], cap=2)
 
     assert await step.run(state) is state
 
@@ -291,9 +289,19 @@ async def test_no_class_or_module_among_the_top_hits_comes_back_unchanged() -> N
     assert await step.run(state) is state
 
 
+async def test_a_function_hit_is_never_a_parent_even_with_a_nested_definition() -> None:
+    inner = _node(f"{_MOD}.outer.inner", NodeKind.FUNCTION)
+    step = await _step(
+        [_module(_node(f"{_MOD}.outer", NodeKind.FUNCTION, inner))], [_chunk(inner.qualified_name)]
+    )
+    state = _state([_hit(f"{_MOD}.outer", 0.9)])
+
+    assert await step.run(state) is state
+
+
 async def test_a_parent_whose_tree_is_missing_comes_back_unchanged() -> None:
     step = await _step([], [_chunk(f"{_MOD}.Router.add")])
-    state = _state([_hit(f"{_MOD}.Router", 0.9, NodeKind.CLASS)])
+    state = _state([_hit(f"{_MOD}.Router", 0.9)])
 
     assert await step.run(state) is state
 
@@ -444,10 +452,10 @@ def _random_world(rng: random.Random) -> tuple[DocumentNode, list[Chunk], list[C
     functions = [_node(f"{_MOD}.f{i}", NodeKind.FUNCTION) for i in range(rng.randint(0, 3))]
     tree = _module(*classes, *functions)
     nodes = _all_nodes(tree)
-    rows = [_chunk(n.qualified_name, kind=n.kind) for n in nodes]
+    rows = [_chunk(n.qualified_name) for n in nodes]
     picked = rng.sample(nodes, rng.randint(0, len(nodes)))
     scores = sorted((rng.uniform(-0.2, 1.0) for _ in picked), reverse=True)
-    hits = [_chunk(n.qualified_name, s, kind=n.kind) for n, s in zip(picked, scores, strict=True)]
+    hits = [_chunk(n.qualified_name, s) for n, s in zip(picked, scores, strict=True)]
     return tree, rows, hits
 
 
@@ -492,12 +500,13 @@ async def _seed_branches(db: Path) -> dict[str, int]:
     ``Store.load``, feature/x replaced it with ``Store.checksum``."""
     open_index_database(db).close()
     rows = {
+        "Store": _project_row(f"{_CORE}.Store", "class Store:"),
         "save@main": _project_row(f"{_CORE}.Store.save", "def save(self): ..."),
         "save@feature": _project_row(f"{_CORE}.Store.save", "def save(self): ...  # v2"),
         "load": _project_row(f"{_CORE}.Store.load", "def load(self): ..."),
         "checksum": _project_row(f"{_CORE}.Store.checksum", "def checksum(self): ..."),
     }
-    held = {_MAIN: ("save@main", "load"), _FEATURE: ("save@feature", "checksum")}
+    held = {_MAIN: ("Store", "save@main", "load"), _FEATURE: ("Store", "save@feature", "checksum")}
     trees = {_MAIN: _store_tree("save", "load"), _FEATURE: _store_tree("save", "checksum")}
     async with build_sqlite_uow_factory(db)() as uow:
         ids = dict(
@@ -511,11 +520,16 @@ async def _seed_branches(db: Path) -> dict[str, int]:
     return ids
 
 
+async def _hit_read_back(db: Path, qname: str) -> Chunk:
+    """The hit exactly as the chunks table returns it (no ``kind`` key)."""
+    async with build_sqlite_uow_factory(db)() as uow:
+        (row,) = await uow.chunks.list(filter=FieldEq(field="qualified_name", value=qname))
+    return replace(row, relevance=0.9)
+
+
 async def _members_on(db: Path, branch: str) -> dict[str, int | None]:
     step = ChildExpandStep(uow_factory=build_sqlite_uow_factory(db))
-    parent = _chunk(
-        f"{_CORE}.Store", 0.9, kind=NodeKind.CLASS, module=_CORE, package=PROJECT_PACKAGE_NAME
-    )
+    parent = await _hit_read_back(db, f"{_CORE}.Store")
     query = SearchQuery(terms="q", pre_filter={"scope": "all"}, branch=branch, max_results=8)
     out = await step.run(RetrieverState(query=query, candidates=ChunkList(items=(parent,))))
     assert isinstance(out.candidates, ChunkList)

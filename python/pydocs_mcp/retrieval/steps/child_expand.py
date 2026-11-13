@@ -38,7 +38,6 @@ _MEMBER_KINDS = frozenset({NodeKind.CLASS, NodeKind.FUNCTION, NodeKind.METHOD})
 _QNAME_KEY = "qualified_name"
 _PACKAGE_KEY = "package"
 _MODULE_KEY = "module"
-_KIND_KEY = "kind"
 
 # (package, qualified_name) — what a listed row and an appended child share.
 _RowKey = tuple[str, str]
@@ -54,7 +53,7 @@ def _row_key(chunk: Chunk) -> _RowKey | None:
 
 @dataclass(frozen=True, slots=True)
 class _Parent:
-    """A top class / module hit, addressed in its module's document tree."""
+    """A top hit, addressed in its module's document tree."""
 
     hit: Chunk
     package: str
@@ -62,9 +61,8 @@ class _Parent:
     qname: str
 
 
-def _as_parent(hit: Chunk) -> _Parent | None:
-    if hit.metadata.get(_KIND_KEY) not in _PARENT_KINDS:
-        return None
+def _addressed(hit: Chunk) -> _Parent | None:
+    """The hit's tree address, or None when its row lacks one."""
     key = _row_key(hit)
     module = hit.metadata.get(_MODULE_KEY)
     if key is None or not module:
@@ -73,7 +71,12 @@ def _as_parent(hit: Chunk) -> _Parent | None:
 
 
 def _parent_node(tree: DocumentNode | None, qname: str) -> DocumentNode | None:
-    """The parent's node, kind-checked against the tree, not the chunk row."""
+    """The hit's node when the tree says it is a class or a module.
+
+    WHY the tree and never the row: the chunks table persists no ``kind``
+    (``row_to_chunk``), so a fetched hit cannot say what it is — the
+    parent-rollup step's rule.
+    """
     node = tree.find_node_by_qualified_name(qname) if tree is not None else None
     return node if node is not None and node.kind in _PARENT_KINDS else None
 
@@ -95,7 +98,7 @@ class ChildExpandStep(RetrieverStep):
         if not isinstance(candidates, ChunkList) or not candidates.items:
             return state
         free = limit_step_cap(state.query) - len(candidates.items)
-        parents = [p for p in map(_as_parent, candidates.items[: self.top_s]) if p is not None]
+        parents = [p for p in map(_addressed, candidates.items[: self.top_s]) if p is not None]
         if free <= 0 or not parents:
             return state
         listed = {key for key in map(_row_key, candidates.items) if key is not None}
