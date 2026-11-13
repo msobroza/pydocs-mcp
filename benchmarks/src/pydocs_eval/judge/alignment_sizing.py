@@ -20,10 +20,10 @@ from dataclasses import dataclass
 from pydocs_eval.judge.alignment_labelling import LabellingCost
 from pydocs_eval.judge.role_config import AlignmentConfig
 
-# What the $15 sub-budget was sized on: $0.09-0.20 per dual-labelled item (the
-# spec's estimate, 9d). The pilot is compared with it, since Astra's batch price
-# turned out 2.5x Opus's (the #381 note from implementing #377).
-_ASSUMED_ITEM_USD = (0.09, 0.20)
+#: What the $15 sub-budget was sized on: $0.09-0.20 per dual-labelled item (the
+#: spec's estimate, 9d). The pilot is compared with it, since Astra's batch price
+#: turned out 2.5x Opus's (the #381 note from implementing #377).
+ASSUMED_ITEM_USD = (0.09, 0.20)
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,7 +47,7 @@ class AlignmentSizing:
         """Whether the measured price per item is inside the $0.09-0.20 the budget assumed."""
         if self.per_item_usd is None:
             return None
-        low, high = _ASSUMED_ITEM_USD
+        low, high = ASSUMED_ITEM_USD
         return low <= self.per_item_usd <= high
 
 
@@ -68,4 +68,4 @@ def size_alignment_passes(cost: LabellingCost, config: AlignmentConfig) -> Align
     )
 
 
-__all__ = ("AlignmentSizing", "size_alignment_passes")
+__all__ = ("ASSUMED_ITEM_USD", "AlignmentSizing", "size_alignment_passes")
