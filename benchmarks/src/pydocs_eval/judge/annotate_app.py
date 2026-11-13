@@ -18,17 +18,22 @@ page runs only as a script, the way ``streamlit run`` and AppTest execute it
 from __future__ import annotations
 
 import argparse
+import json
+import logging
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from pydocs_eval.judge.alignment_annotation_text import (
+    awaits_owner_ruling,
     code_check_lines,
     escalation_reason_line,
     gold_site_line,
     item_identity_line,
+    item_option_label,
     labeller_answer_line,
+    queue_summary_line,
     shown_code_caption,
 )
 from pydocs_eval.judge.alignment_label_file import read_alignment_labels
@@ -40,8 +45,21 @@ from pydocs_eval.judge.alignment_owner_ruling import (
 from pydocs_eval.judge.alignment_rows import AlignmentLabelRow
 from pydocs_eval.judge.alignment_vocabulary import LabellerSlot, LabelVerdict
 
+# Named, not __name__: run as a page this module is __main__.
+log = logging.getLogger("pydocs_eval.judge.annotate_app")
+
 # The choice that gives a question no verdict: the owner has not ruled on it.
 _NO_RULING = "no ruling"
+
+#: The session-state key of the item picker (the item on screen).
+ITEM_PICKER_KEY = "annotation_item"
+#: The session-state key of the box that lists every item, not only the owner's queue.
+EVERY_ITEM_KEY = "annotation_every_item"
+# Where Save leaves its outcome for the run it triggers, which shows it once. Plain
+# strings: Streamlit re-executes this script in a fresh module every run, so a class
+# defined here would not be the class the next run compares against.
+_SAVED_KEY = "annotation_saved"
+_NOT_SAVED_KEY = "annotation_not_saved"
 
 
 def decision_widget_key(item_id: str, question_id: str) -> str:
@@ -81,12 +99,53 @@ def render_annotation_page(argv: Sequence[str]) -> None:
     st.set_page_config(page_title="Alignment annotation", layout="wide")
     options = annotation_page_options(argv)
     rows = read_alignment_labels(options.labels)
-    queued = [row for row in rows if row.escalation_reasons]
-    if not queued:
-        st.info("No item is in the owner's queue.")
+    _draw_notice()
+    row = _picked_row(rows, options)
+    if row is None:
         return
-    _draw_item(queued[0])
-    _draw_ruling_form(queued[0], options)
+    _draw_item(row)
+    _draw_ruling_form(row, options)
+
+
+def _draw_notice() -> None:
+    """Show, once, what the last Save did."""
+    import streamlit as st
+
+    saved = st.session_state.pop(_SAVED_KEY, None)
+    if saved is not None:
+        st.success(saved)
+    not_saved = st.session_state.pop(_NOT_SAVED_KEY, None)
+    if not_saved is not None:
+        st.error(not_saved)
+
+
+def _picked_row(
+    rows: Sequence[AlignmentLabelRow], options: AnnotationPageOptions
+) -> AlignmentLabelRow | None:
+    """The sidebar: the file, its queue, and the item the owner picked (first awaiting by default)."""
+    import streamlit as st
+
+    with st.sidebar:
+        st.caption(str(options.labels))
+        st.caption(queue_summary_line(rows))
+        every = st.checkbox("Show every item", key=EVERY_ITEM_KEY)
+        listed = {row.item_id: row for row in rows if every or row.escalation_reasons}
+        if not listed:
+            st.info("No item is in the owner's queue: tick 'Show every item' to browse the rest.")
+            return None
+        picked = st.selectbox(
+            "Item",
+            list(listed),
+            index=_first_awaiting(list(listed.values())),
+            format_func=lambda item_id: item_option_label(listed[item_id]),
+            key=ITEM_PICKER_KEY,
+        )
+    return listed[picked]
+
+
+def _first_awaiting(rows: Sequence[AlignmentLabelRow]) -> int:
+    """Where the picker starts: the first item still awaiting a ruling, else the first item."""
+    return next((index for index, row in enumerate(rows) if awaits_owner_ruling(row)), 0)
 
 
 def _draw_item(row: AlignmentLabelRow) -> None:
@@ -163,7 +222,18 @@ def _save_ruling(labels: Path, item_id: str, questions: Sequence[str]) -> None:
     chosen = {qid: st.session_state[decision_widget_key(item_id, qid)] for qid in questions}
     decision = {qid: LabelVerdict(value) for qid, value in chosen.items() if value != _NO_RULING}
     note = str(st.session_state[note_widget_key(item_id)]).strip()
-    record_owner_ruling(labels, OwnerRuling(item_id, decision, note))
+    try:
+        record_owner_ruling(labels, OwnerRuling(item_id, decision, note))
+    except (OSError, ValueError) as exc:
+        # The rewrite is atomic, so a failed save leaves every byte of the file as it was.
+        st.session_state[_NOT_SAVED_KEY] = (
+            f"Not saved: the ruling on {item_id} did not reach {labels.name} ({exc}). "
+            "The file is unchanged."
+        )
+        event = {"event": "owner_ruling_not_saved", "item": item_id, "labels": str(labels)}
+        log.warning(json.dumps({**event, "error": str(exc)}, sort_keys=True))
+        return
+    st.session_state[_SAVED_KEY] = f"Saved the ruling on {item_id} to {labels.name}."
 
 
 if __name__ == "__main__":

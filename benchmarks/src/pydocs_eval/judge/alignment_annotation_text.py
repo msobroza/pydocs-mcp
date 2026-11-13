@@ -13,6 +13,9 @@ Example:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
+from pydocs_eval.judge.alignment_report import owner_queue
 from pydocs_eval.judge.alignment_rows import AlignmentLabelRow, CodeCheck, OwnerEscalation
 from pydocs_eval.judge.alignment_vocabulary import LabellerSlot
 from pydocs_eval.judge.jev_requests import JudgedSite
@@ -78,16 +81,46 @@ def labeller_answer_line(row: AlignmentLabelRow, slot: LabellerSlot, question_id
     return f"{labeller_name(slot)}: {label.verdict.value} ({label.confidence.value}) — {label.evidence}"
 
 
+def queue_summary_line(rows: Sequence[AlignmentLabelRow]) -> str:
+    """The file at a glance: its items, those in the owner's queue, those awaiting a ruling."""
+    queue = owner_queue(rows)
+    counts = (f"{len(rows)} items", f"{queue.items} in the owner queue")
+    return _SEPARATOR.join((*counts, f"{queue.awaiting} awaiting a ruling"))
+
+
+def awaits_owner_ruling(row: AlignmentLabelRow) -> bool:
+    """Whether a question one of ``row``'s reasons holds still has no owner verdict.
+
+    Read through ``owner_queue``, so the page counts exactly what ``report-alignment`` counts.
+    """
+    return owner_queue((row,)).awaiting == 1
+
+
+def item_option_label(row: AlignmentLabelRow) -> str:
+    """How the item picker lists ``row``: its id first, its task, its reasons and its state."""
+    reasons = dict.fromkeys(each.reason.value for each in row.escalation_reasons)
+    return _SEPARATOR.join((row.item_id, row.task_id, *reasons, _queue_state(row)))
+
+
+def _queue_state(row: AlignmentLabelRow) -> str:
+    if not row.escalation_reasons:
+        return "not queued"
+    return "awaiting a ruling" if awaits_owner_ruling(row) else "ruled"
+
+
 def _yes_no(flag: bool) -> str:
     return "yes" if flag else "no"
 
 
 __all__ = (
+    "awaits_owner_ruling",
     "code_check_lines",
     "escalation_reason_line",
     "gold_site_line",
     "item_identity_line",
+    "item_option_label",
     "labeller_answer_line",
     "labeller_name",
+    "queue_summary_line",
     "shown_code_caption",
 )

@@ -8,7 +8,9 @@ after ``--`` — over a label file written by fake-client-backed labellers
 
 from __future__ import annotations
 
+import errno
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -20,10 +22,22 @@ from streamlit.testing.v1 import AppTest
 
 from pydocs_eval.judge.alignment_label_file import read_alignment_labels
 from pydocs_eval.judge.alignment_vocabulary import LabellerSlot, LabelVerdict
-from pydocs_eval.judge.annotate_app import decision_widget_key, note_widget_key, save_button_key
+from pydocs_eval.judge.annotate_app import (
+    EVERY_ITEM_KEY,
+    ITEM_PICKER_KEY,
+    decision_widget_key,
+    note_widget_key,
+    save_button_key,
+)
 
 from ._alignment_fakes import REPOQA_ANSWER, REPOQA_REFERENCE
-from ._annotation_fakes import DISAGREED_ITEM, evidence_line, write_labelled_file
+from ._annotation_fakes import (
+    CLEAN_ITEM,
+    DISAGREED_ITEM,
+    LOW_CONFIDENCE_ITEM,
+    evidence_line,
+    write_labelled_file,
+)
 
 # The page is LOCATED, never imported here: AppTest executes the file itself, as __main__.
 _PAGE_SPEC = importlib.util.find_spec("pydocs_eval.judge.annotate_app")
@@ -88,6 +102,40 @@ def test_the_page_shows_the_owner_the_item_both_labellers_and_the_code_check(
     assert "disagreement on needle_identified" in shown
 
 
+def _listed_items(at: AppTest) -> list[str]:
+    """The item ids the picker offers, in order (each option starts with its item id)."""
+    return [option.split(" · ")[0] for option in at.selectbox(key=ITEM_PICKER_KEY).options]
+
+
+def test_the_picker_lists_the_owners_queue_and_opens_any_item_of_it(
+    monkeypatch: pytest.MonkeyPatch, labels: Path
+) -> None:
+    at = _opened(monkeypatch, labels)
+
+    assert _listed_items(at) == [DISAGREED_ITEM, LOW_CONFIDENCE_ITEM]
+    assert "3 items · 2 in the owner queue · 2 awaiting a ruling" in _shown_texts(at)
+    at.selectbox(key=ITEM_PICKER_KEY).set_value(LOW_CONFIDENCE_ITEM).run()
+    assert not at.exception, at.exception
+    shown = _shown_texts(at)
+    assert "How are documents scored?" in shown
+    assert "low_confidence on completeness" in shown
+    assert (
+        "src/needle/scoring/strategies.py · MaxSimStrategy · src/needle/scoring/strategies.py:42-43"
+        in shown
+    )
+
+
+def test_every_item_can_be_listed_the_agreed_ones_too(
+    monkeypatch: pytest.MonkeyPatch, labels: Path
+) -> None:
+    at = _opened(monkeypatch, labels)
+
+    at.checkbox(key=EVERY_ITEM_KEY).check().run()
+
+    assert not at.exception, at.exception
+    assert _listed_items(at) == [DISAGREED_ITEM, LOW_CONFIDENCE_ITEM, CLEAN_ITEM]
+
+
 _NOTE = "It names get_params but never says it lives on BaseEstimator."
 
 
@@ -132,3 +180,37 @@ def test_a_decision_and_a_note_round_trip_and_nothing_else_in_the_file_moves(
     (row,) = [row for row in read_alignment_labels(labels) if row.item_id == DISAGREED_ITEM]
     assert row.owner_decision == {"needle_identified": LabelVerdict.FALSE}
     assert row.owner_note == _NOTE
+
+
+def test_a_saved_ruling_is_confirmed_and_leaves_the_awaiting_count(
+    monkeypatch: pytest.MonkeyPatch, labels: Path
+) -> None:
+    at = _rule(_opened(monkeypatch, labels), DISAGREED_ITEM, {"needle_identified": "false"}, _NOTE)
+
+    assert [success.value for success in at.success] == [
+        f"Saved the ruling on {DISAGREED_ITEM} to {labels.name}."
+    ]
+    assert "3 items · 2 in the owner queue · 1 awaiting a ruling" in _shown_texts(at)
+    assert at.selectbox(key=ITEM_PICKER_KEY).value == DISAGREED_ITEM
+
+
+def _fail_every_replace(source: object, target: object) -> None:
+    """``os.replace`` on a disk that fails: the swap an atomic rewrite ends with never happens."""
+    raise OSError(errno.EIO, "Input/output error")
+
+
+def test_a_failing_write_leaves_the_label_file_intact_and_says_it_did_not_save(
+    monkeypatch: pytest.MonkeyPatch, labels: Path
+) -> None:
+    before = labels.read_bytes()
+    at = _opened(monkeypatch, labels)
+    monkeypatch.setattr(os, "replace", _fail_every_replace)
+
+    _rule(at, DISAGREED_ITEM, {"needle_identified": "false"}, _NOTE)
+
+    assert labels.read_bytes() == before
+    assert [path.name for path in labels.parent.iterdir()] == [labels.name]
+    (error,) = [error.value for error in at.error]
+    assert error.startswith(f"Not saved: the ruling on {DISAGREED_ITEM} did not reach ")
+    assert "Input/output error" in error
+    assert not at.success
