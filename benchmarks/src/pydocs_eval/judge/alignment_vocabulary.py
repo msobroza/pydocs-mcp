@@ -53,6 +53,17 @@ REFERENCE_BASED_KINDS = frozenset(
 )
 
 
+# The yes/no verdict that speaks for the answer, per question: it names the gold,
+# addresses no grader, contradicts no reference.
+_FAVOURABLE_NOUL = {
+    JevQuestionKind.NEEDLE_IDENTIFIED: LabelVerdict.TRUE,
+    JevQuestionKind.SITE: LabelVerdict.TRUE,
+    JevQuestionKind.GOLD_FILE: LabelVerdict.TRUE,
+    JevQuestionKind.ADDRESSES_GRADER: LabelVerdict.FALSE,
+    JevQuestionKind.CONTRADICTS_REFERENCE: LabelVerdict.FALSE,
+}
+
+
 def verdicts_for(question_id: str) -> tuple[LabelVerdict, ...]:
     """The verdicts question ``question_id`` may be answered with.
 
@@ -61,6 +72,21 @@ def verdicts_for(question_id: str) -> tuple[LabelVerdict, ...]:
         ['true', 'false']
     """
     return LEVEL_VERDICTS if kind_of(question_id) in SCORE_KINDS else NOUL_VERDICTS
+
+
+def favour(question_id: str, verdict: LabelVerdict) -> int:
+    """How strongly ``verdict`` speaks for the answer on ``question_id``: a level's rank, else 0 or 1.
+
+    Which of two disagreeing judges "favoured the answer" is the one with the
+    higher value — the direction the self-preference check reads.
+
+    Example:
+        >>> favour("contradicts_reference", LabelVerdict.FALSE), favour("completeness", LabelVerdict.L2)
+        (1, 2)
+    """
+    if verdict in LEVEL_VERDICTS:
+        return LEVEL_VERDICTS.index(verdict)
+    return int(verdict is _FAVOURABLE_NOUL.get(kind_of(question_id)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,5 +169,6 @@ __all__ = (
     "LabelVerdict",
     "LabellerSlot",
     "QuestionLabel",
+    "favour",
     "verdicts_for",
 )

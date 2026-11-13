@@ -31,13 +31,13 @@ from dataclasses import replace
 
 from pydocs_eval.judge.alignment_rows import AlignmentLabelRow, OwnerEscalation
 from pydocs_eval.judge.alignment_vocabulary import (
-    LEVEL_VERDICTS,
     REFERENCE_BASED_KINDS,
     EscalationReason,
     LabelConfidence,
     LabellerSlot,
     LabelVerdict,
     QuestionLabel,
+    favour,
 )
 from pydocs_eval.judge.jev_questions import JevQuestionKind, kind_of
 from pydocs_eval.judge.model_ids import model_family
@@ -48,9 +48,6 @@ from pydocs_eval.judge.role_config import AlignmentConfig
 _AUDIT_SALT = "alignment-audit"
 _DRAW_BYTES = 8
 _ADDRESSES_GRADER = JevQuestionKind.ADDRESSES_GRADER.value
-# The verdict that speaks for the answer on a reference-based yes/no question:
-# no contradiction of the reference.
-_FAVOURABLE_NOUL = {JevQuestionKind.CONTRADICTS_REFERENCE: LabelVerdict.FALSE}
 
 
 def self_preferring_slot(labeller_models: Sequence[str], writer_model: str) -> LabellerSlot | None:
@@ -176,21 +173,13 @@ def _self_preference(
     self_preferring: LabellerSlot | None,
 ) -> bool:
     """Whether the writer's-family labeller is the one favouring the answer on a reference question."""
-    kind = kind_of(question_id)
-    if self_preferring is None or kind not in REFERENCE_BASED_KINDS:
+    if self_preferring is None or kind_of(question_id) not in REFERENCE_BASED_KINDS:
         return False
     other = LabellerSlot.ASTRA if self_preferring is LabellerSlot.OPUS else LabellerSlot.OPUS
     mine, theirs = answers[self_preferring], answers[other]
     if mine is None:
         return False
-    return theirs is None or _favour(kind, mine.verdict) > _favour(kind, theirs.verdict)
-
-
-def _favour(kind: JevQuestionKind, verdict: LabelVerdict) -> int:
-    """How strongly ``verdict`` speaks for the answer: a level's rank, or 1 for the favourable yes/no."""
-    if verdict in LEVEL_VERDICTS:
-        return LEVEL_VERDICTS.index(verdict)
-    return int(verdict is _FAVOURABLE_NOUL.get(kind))
+    return theirs is None or favour(question_id, mine.verdict) > favour(question_id, theirs.verdict)
 
 
 def _code_check_reasons(
