@@ -207,7 +207,7 @@ def _draw_context(row: AlignmentLabelRow) -> None:
         with st.expander(shown_code_caption(code)):
             st.code("\n".join(code.lines), language=None)
     st.subheader("Reference answer")
-    st.code(context.reference_answer or "(none)", language=None, wrap_lines=True)
+    st.code(context.reference_answer or "(no reference answer)", language=None, wrap_lines=True)
     st.subheader("Agent answer")
     st.code(context.agent_answer, language=None, wrap_lines=True)
 

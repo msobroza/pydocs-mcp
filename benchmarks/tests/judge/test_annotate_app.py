@@ -21,7 +21,8 @@ pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest
 
 from pydocs_eval.judge.alignment_label_file import read_alignment_labels, write_alignment_labels
-from pydocs_eval.judge.alignment_vocabulary import LabellerSlot, LabelVerdict
+from pydocs_eval.judge.alignment_rows import OwnerEscalation
+from pydocs_eval.judge.alignment_vocabulary import EscalationReason, LabellerSlot, LabelVerdict
 from pydocs_eval.judge.annotate_app import (
     EVERY_ITEM_KEY,
     ITEM_PICKER_KEY,
@@ -30,7 +31,7 @@ from pydocs_eval.judge.annotate_app import (
     save_button_key,
 )
 
-from ._alignment_fakes import REPOQA_ANSWER, REPOQA_REFERENCE, repoqa_row
+from ._alignment_fakes import REPOQA_ANSWER, REPOQA_REFERENCE, repoqa_context, repoqa_row
 from ._annotation_fakes import (
     CLEAN_ITEM,
     DISAGREED_ITEM,
@@ -105,6 +106,38 @@ def test_the_page_shows_the_owner_the_item_both_labellers_and_the_code_check(
     assert f"Opus: false (high) — {opus_says}" in shown
     assert {"needle cited: yes", "gold-site coverage: 100%", "needle_identified: yes"} <= set(shown)
     assert "disagreement on needle_identified" in shown
+
+
+def test_the_code_at_the_gold_is_shown_as_the_labellers_saw_it(
+    monkeypatch: pytest.MonkeyPatch, labels: Path
+) -> None:
+    at = _opened(monkeypatch, labels)
+
+    (expander,) = at.expander
+    assert (
+        expander.label
+        == "sklearn/base.py · BaseEstimator.get_params · gold lines 10–12 · shown 8–12"
+    )
+    (code,) = expander.code
+    assert code.value.splitlines()[2] == "    def get_params(self, deep=True):"
+
+
+def test_an_item_without_a_reference_answer_says_so(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    labels = tmp_path / "repoqa-qa__jev-1.13.jsonl"
+    no_reference = repoqa_row(
+        "item_no_reference",
+        context=repoqa_context(reference=None),
+        questions=("needle_identified", "addresses_grader"),
+        escalation_reasons=(OwnerEscalation(EscalationReason.AUDIT),),
+    )
+    write_alignment_labels(labels, (no_reference,))
+
+    at = _opened(monkeypatch, labels)
+
+    assert "(no reference answer)" in [code.value for code in at.code]
+    assert "audit (whole item)" in _shown_texts(at)
 
 
 def _listed_items(at: AppTest) -> list[str]:
@@ -185,6 +218,18 @@ def test_a_decision_and_a_note_round_trip_and_nothing_else_in_the_file_moves(
     (row,) = [row for row in read_alignment_labels(labels) if row.item_id == DISAGREED_ITEM]
     assert row.owner_decision == {"needle_identified": LabelVerdict.FALSE}
     assert row.owner_note == _NOTE
+
+
+def test_clearing_a_ruling_restores_the_file_byte_for_byte(
+    monkeypatch: pytest.MonkeyPatch, labels: Path
+) -> None:
+    before = labels.read_bytes()
+    at = _rule(_opened(monkeypatch, labels), DISAGREED_ITEM, {"needle_identified": "false"}, _NOTE)
+    assert labels.read_bytes() != before
+
+    _rule(at, DISAGREED_ITEM, {"needle_identified": "no ruling"}, "")
+
+    assert labels.read_bytes() == before
 
 
 def test_a_saved_ruling_is_confirmed_and_leaves_the_awaiting_count(
