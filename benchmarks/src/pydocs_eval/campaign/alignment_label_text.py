@@ -10,9 +10,10 @@ Example:
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 
 from pydocs_eval.campaign.alignment_label_run import AlignmentLabelPlan, AlignmentLabelReport
+from pydocs_eval.judge.alignment_report import DisagreementDirection, OwnerQueue, QuestionAgreement
 from pydocs_eval.judge.alignment_sizing import ASSUMED_ITEM_USD, AlignmentSizing
 from pydocs_eval.judge.alignment_vocabulary import AlignmentStratum, LabellerSlot, LabelStatus
 from pydocs_eval.judge.config import JudgeConfig
@@ -58,8 +59,8 @@ def render_report(report: AlignmentLabelReport, *, dry_run: bool) -> str:
     """What the run did and what the labels say: cost, κ, directions, the owner's queue, sizing."""
     lines = [_DRY_RUN_BANNER] if dry_run else []
     lines += list(_status_lines(report))
-    lines += list(_agreement_lines(report))
-    lines += list(_queue_lines(report))
+    lines += list(agreement_lines(report.agreement, report.directions))
+    lines += list(queue_lines(report.queue))
     if report.sizing is not None:
         lines += list(_sizing_lines(report.sizing))
     return "\n".join(lines)
@@ -91,23 +92,26 @@ def _status_lines(report: AlignmentLabelReport) -> Iterator[str]:
     yield from (f"  - not deleted {batch_id}: {why}" for batch_id, why in report.not_deleted)
 
 
-def _agreement_lines(report: AlignmentLabelReport) -> Iterator[str]:
+def agreement_lines(
+    agreement: Sequence[QuestionAgreement], directions: Sequence[DisagreementDirection]
+) -> Iterator[str]:
+    """The labellers' κ per question, then which way each question's disagreements went."""
     yield "labellers' agreement per question (n, raw agreement, Cohen's kappa):"
-    for row in report.agreement:
+    for row in agreement:
         yield (
-            f"  {row.dataset} {row.question}: n={row.items} agreement {_figure(row.percent_agreement)} "
-            f"kappa {_figure(row.kappa)}"
+            f"  {row.dataset} {row.question}: n={row.items} agreement {figure(row.percent_agreement)} "
+            f"kappa {figure(row.kappa)}"
         )
     yield "disagreement directions (which labeller favoured the answer):"
-    for row in report.directions:
+    for row in directions:
         yield (
             f"  {row.dataset} {row.question}: {row.disagreements} disagreements, astra favours "
             f"{row.astra_favours_answer}, opus favours {row.opus_favours_answer}"
         )
 
 
-def _queue_lines(report: AlignmentLabelReport) -> Iterator[str]:
-    queue = report.queue
+def queue_lines(queue: OwnerQueue) -> Iterator[str]:
+    """The items the owner sees, by reason, and how many still await a ruling."""
     reasons = ", ".join(f"{reason.value} {count}" for reason, count in sorted(queue.by_reason.items()))
     yield f"owner queue: {queue.items} items ({reasons or 'none'}); {queue.awaiting} awaiting a ruling"
 
@@ -128,8 +132,9 @@ def _sizing_lines(sizing: AlignmentSizing) -> Iterator[str]:
     )
 
 
-def _figure(value: float | None) -> str:
+def figure(value: float | None) -> str:
+    """A rate or a κ to three places; ``n/a`` when undefined."""
     return "n/a" if value is None else f"{value:.3f}"
 
 
-__all__ = ("render_plan", "render_report")
+__all__ = ("agreement_lines", "figure", "queue_lines", "render_plan", "render_report")

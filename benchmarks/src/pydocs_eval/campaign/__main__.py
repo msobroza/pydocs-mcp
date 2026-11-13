@@ -12,6 +12,8 @@ Subcommands::
     python -m pydocs_eval.campaign write-references --split repoqa-qa/small_dev [--confirm-spend]
     python -m pydocs_eval.campaign label-alignment --split repoqa-qa/small_dev --arm A1 --arm A2 \
         [--pass pilot|pass_1|pass_2] [--dry-run | --confirm-spend]
+    python -m pydocs_eval.campaign report-alignment --labels FILE [--escalation-pass] [--sweep] \
+        [--confirm-spend]
 
 ``prebuild-index`` builds the canonical-checkout index cache over an instance
 manifest (host-side; hits git + the index CLI). ``aggregate`` is pure and
@@ -27,7 +29,10 @@ prints a plan and spends nothing unless ``--confirm-spend`` is given
 answers from ground truth, a plan unless ``--confirm-spend``
 (``reference_writer_command.py``). ``label-alignment`` draws alignment items
 from stored arms and has the two blind labellers label them, a plan unless
-``--dry-run`` (offline, $0) or ``--confirm-spend`` (``alignment_label_command.py``).
+``--dry-run`` (offline, $0) or ``--confirm-spend`` (``alignment_label_command.py``);
+``report-alignment`` reports a label file, and runs the escalation judge's
+agreement pass or the threshold sweep on ``--confirm-spend``
+(``alignment_report_command.py``).
 """
 
 from __future__ import annotations
@@ -42,6 +47,7 @@ from pydocs_eval.campaign.aggregator import (
     load_cell_aggregate,
 )
 from pydocs_eval.campaign.alignment_label_command import add_label_alignment_command
+from pydocs_eval.campaign.alignment_report_command import add_report_alignment_command
 from pydocs_eval.campaign.before_after_command import add_before_after_commands
 from pydocs_eval.campaign.before_after_compare_command import add_before_after_compare_command
 from pydocs_eval.campaign.prebuild import load_instance_manifest, prebuild_index
@@ -167,6 +173,7 @@ def _build_parser() -> argparse.ArgumentParser:
     add_before_after_compare_command(sub)
     add_write_references_command(sub)
     add_label_alignment_command(sub)
+    add_report_alignment_command(sub)
     return parser
 
 
