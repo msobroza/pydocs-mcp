@@ -146,7 +146,25 @@ class ChildExpandStep(RetrieverStep):
                 "Production wiring in __main__.py / server.py sets this; "
                 "tests must pass it explicitly.",
             )
-        return cls(uow_factory=context.uow_factory, **yaml_kwargs(data, cls, cls._YAML_KEYS))
+        kwargs = yaml_kwargs(data, cls, cls._YAML_KEYS)
+        _check_knobs(kwargs)
+        return cls(uow_factory=context.uow_factory, **kwargs)
+
+
+def _check_knobs(kwargs: dict) -> None:
+    """Refuse a knob that would silently disable the arm or invert its ranking.
+
+    A ``top_s`` / ``per_parent`` below 1 appends nothing, and a ``decay``
+    outside (0, 1] would score a member above its own parent — a tuning typo
+    either way, so the overlay fails at load rather than measuring an A/A.
+    """
+    for key in ("top_s", "per_parent"):
+        value = kwargs[key]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"ChildExpandStep.{key} must be an integer >= 1; got {value!r}.")
+    decay = kwargs["decay"]
+    if isinstance(decay, bool) or not isinstance(decay, int | float) or not 0.0 < decay <= 1.0:
+        raise ValueError(f"ChildExpandStep.decay must be a number in (0, 1]; got {decay!r}.")
 
 
 def _appended(
