@@ -11,13 +11,22 @@ from pathlib import Path
 import pytest
 import yaml
 
+from pydocs_mcp.db import open_index_database
 from pydocs_mcp.extraction.model.document_node import DocumentNode, NodeKind
-from pydocs_mcp.models import Chunk, ChunkList, ModuleMemberList, SearchQuery
+from pydocs_mcp.models import (
+    PROJECT_PACKAGE_NAME,
+    Chunk,
+    ChunkList,
+    ModuleMemberList,
+    SearchQuery,
+)
 from pydocs_mcp.retrieval.config import AppConfig, _resolve_pipeline_path
 from pydocs_mcp.retrieval.pipeline import RetrieverState
 from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 from pydocs_mcp.retrieval.steps.child_expand import ChildExpandStep
 from pydocs_mcp.retrieval.steps.limit import LimitStep, rows_dropped_by_limit
+from pydocs_mcp.storage.branch_records import ChunkMembership
+from pydocs_mcp.storage.factories import build_sqlite_uow_factory
 from tests._fakes import (
     InMemoryChunkStore,
     InMemoryDocumentTreeStore,
@@ -462,3 +471,66 @@ async def test_no_original_hit_the_limit_keeps_is_ever_displaced() -> None:
         expanded_cases += len(expanded.candidates.items) > len(hits)
     # Not vacuous: the sweep must actually append members in many worlds.
     assert expanded_cases >= 30
+
+
+# ── real SQLite: a pinned search reads its branch's tree and member rows ──
+
+_MAIN, _FEATURE = "main", "feature/x"
+_CORE = "app.core"
+
+
+def _store_tree(*method_names: str) -> DocumentNode:
+    return _module(_class(f"{_CORE}.Store", *method_names), qname=_CORE)
+
+
+def _project_row(qname: str, text: str) -> Chunk:
+    return _chunk(qname, module=_CORE, package=PROJECT_PACKAGE_NAME, text=text)
+
+
+async def _seed_branches(db: Path) -> dict[str, int]:
+    """``Store.save`` differs per branch (two rows, one qname); main has
+    ``Store.load``, feature/x replaced it with ``Store.checksum``."""
+    open_index_database(db).close()
+    rows = {
+        "save@main": _project_row(f"{_CORE}.Store.save", "def save(self): ..."),
+        "save@feature": _project_row(f"{_CORE}.Store.save", "def save(self): ...  # v2"),
+        "load": _project_row(f"{_CORE}.Store.load", "def load(self): ..."),
+        "checksum": _project_row(f"{_CORE}.Store.checksum", "def checksum(self): ..."),
+    }
+    held = {_MAIN: ("save@main", "load"), _FEATURE: ("save@feature", "checksum")}
+    trees = {_MAIN: _store_tree("save", "load"), _FEATURE: _store_tree("save", "checksum")}
+    async with build_sqlite_uow_factory(db)() as uow:
+        ids = dict(
+            zip(rows, await uow.chunks.insert_returning_ids(tuple(rows.values())), strict=True)
+        )
+        for branch, names in held.items():
+            members = [ChunkMembership(branch, ids[n], "app/core.py") for n in names]
+            await uow.branch_chunks.replace_membership(branch, members)
+            await uow.trees.save_many([trees[branch]], package=PROJECT_PACKAGE_NAME, branch=branch)
+        await uow.commit()
+    return ids
+
+
+async def _members_on(db: Path, branch: str) -> dict[str, int | None]:
+    step = ChildExpandStep(uow_factory=build_sqlite_uow_factory(db))
+    parent = _chunk(
+        f"{_CORE}.Store", 0.9, kind=NodeKind.CLASS, module=_CORE, package=PROJECT_PACKAGE_NAME
+    )
+    query = SearchQuery(terms="q", pre_filter={"scope": "all"}, branch=branch, max_results=8)
+    out = await step.run(RetrieverState(query=query, candidates=ChunkList(items=(parent,))))
+    assert isinstance(out.candidates, ChunkList)
+    return {c.metadata["qualified_name"]: c.id for c in out.candidates.items[1:]}
+
+
+async def test_a_pinned_search_appends_the_members_its_branch_holds(tmp_path: Path) -> None:
+    db = tmp_path / "children.db"
+    ids = await _seed_branches(db)
+
+    assert await _members_on(db, _FEATURE) == {
+        f"{_CORE}.Store.save": ids["save@feature"],
+        f"{_CORE}.Store.checksum": ids["checksum"],
+    }
+    assert await _members_on(db, _MAIN) == {
+        f"{_CORE}.Store.save": ids["save@main"],
+        f"{_CORE}.Store.load": ids["load"],
+    }
