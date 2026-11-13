@@ -25,6 +25,18 @@ from pydocs_mcp.retrieval.steps._constants import LIMIT_DROPPED_SCRATCH_KEY
 _DEFAULT_MAX_RESULTS = 8
 
 
+def limit_step_cap(query: SearchQuery, max_results: int = _DEFAULT_MAX_RESULTS) -> int:
+    """The item cap a limit step configured with ``max_results`` applies to ``query``.
+
+    The caller's own cap wins when the query carries one; a step that must
+    stay inside the limit's window (``child_expand``'s displacement guard,
+    #393) reads it here so the two can never disagree.
+
+    Example: ``limit_step_cap(SearchQuery(terms="q"))`` is ``8``.
+    """
+    return max_results if query.max_results is None else query.max_results
+
+
 def rows_dropped_by_limit(state: RetrieverState) -> int:
     """How many ranked rows this pipeline's limit step cut (0 when none).
 
@@ -59,7 +71,7 @@ class LimitStep(RetrieverStep):
 
     def _cap(self, query: SearchQuery) -> int:
         """The caller's cap when it has one, else this step's configured default."""
-        return self.max_results if query.max_results is None else query.max_results
+        return limit_step_cap(query, self.max_results)
 
     def to_dict(self) -> dict:
         d: dict = {"type": "limit"}
@@ -89,4 +101,4 @@ def _scratch_with_drop(scratch: dict[str, object], dropped: int) -> dict[str, ob
     return {**scratch, LIMIT_DROPPED_SCRATCH_KEY: dropped}
 
 
-__all__ = ("LimitStep", "rows_dropped_by_limit")
+__all__ = ("LimitStep", "limit_step_cap", "rows_dropped_by_limit")
