@@ -1,7 +1,36 @@
 """ChildExpandStep — fill a search's free result slots with its top hits' members.
 
 Experiment step for #393, available through a YAML overlay only: no shipped
-pipeline references it.
+pipeline references it. When a top hit is a class or a module the agent
+cannot see what it contains without a follow-up call; this step appends the
+members themselves (classes, functions, methods) as extra hits, modelled on
+:class:`~pydocs_mcp.retrieval.steps.graph_expand.GraphExpandStep`.
+
+Flow (runs AFTER the final ranking — ``top_k_filter`` — and BEFORE ``limit``):
+
+1. The window: the cap the limit step will apply (:func:`limit_step_cap` —
+   the query's own cap, else the limit's default ``max_results`` of 8). The
+   free slots are the window minus the original hits; none ⇒ unchanged.
+2. Parents: among the top ``top_s`` hits, those the document tree says are a
+   class or a module (one tree load per distinct (package, module)).
+3. Members: each parent's first ``per_parent`` member nodes not already
+   listed, in document order, hydrated in one branch-pinned chunk read.
+4. The displacement guard: members are appended BELOW the last original hit
+   and only into the free slots, so every original the limit keeps stays at
+   its rank and the limit drops no extra row. A member scores its parent's
+   relevance times ``decay``, capped at the lowest original's relevance, so
+   a later stable relevance sort cannot lift it above an original either.
+
+Consequence worth knowing before measuring it: a free slot exists only when a
+search returns fewer candidates than its limit. A dense fetch returns its
+whole candidate budget (50) whenever the filtered corpus holds that many
+chunks, so on a broad dense search the step adds nothing — by construction.
+
+Members are not re-filtered, as graph expansion's neighbours are not: they
+share their parent's package and module, so package / scope / module filters
+hold, but a title or origin filter does not. Across a multi-project union the
+guard holds per project, not across projects. Safety contract: anything
+missing (no free slot, no tree, no row) returns the input state unchanged.
 """
 
 from __future__ import annotations
@@ -44,6 +73,7 @@ _RowKey = tuple[str, str]
 
 
 def _row_key(chunk: Chunk) -> _RowKey | None:
+    """The row's (package, qualified_name), or None when either is missing."""
     package = chunk.metadata.get(_PACKAGE_KEY)
     qname = chunk.metadata.get(_QNAME_KEY)
     if not package or not qname:
@@ -84,7 +114,14 @@ def _parent_node(tree: DocumentNode | None, qname: str) -> DocumentNode | None:
 @step_registry.register("child_expand")
 @dataclass(frozen=True, slots=True)
 class ChildExpandStep(RetrieverStep):
-    """Append the members of the top class / module hits into free result slots."""
+    """Append the members of the top class / module hits into free result slots.
+
+    ``top_s`` — how many top hits may act as parents; ``per_parent`` — how
+    many members each parent may contribute; ``decay`` — a member's score as
+    a fraction of its parent's. Strict-gate ``from_dict`` like graph
+    expansion: a missing ``BuildContext.uow_factory`` is a wiring bug, and an
+    out-of-range knob a tuning typo, so both fail at pipeline load.
+    """
 
     uow_factory: Callable[[], UnitOfWork] = field(kw_only=True)
     top_s: int = field(default=_DEFAULT_TOP_S, kw_only=True)
@@ -131,6 +168,8 @@ class ChildExpandStep(RetrieverStep):
     def _member_qnames(
         self, node: DocumentNode, package: str, listed: set[_RowKey]
     ) -> tuple[str, ...]:
+        # Members only: an import block or a docstring example is context the
+        # parent hit already shows, not something an agent would pick.
         fresh = (
             child.qualified_name
             for child in node.children

@@ -124,6 +124,19 @@ def _ctx() -> BuildContext:
     return BuildContext(uow_factory=make_fake_uow_factory())
 
 
+def _relevance_of(state: RetrieverState, qname: str) -> float | None:
+    assert isinstance(state.candidates, ChunkList)
+    (chunk,) = [c for c in state.candidates.items if c.metadata["qualified_name"] == qname]
+    return chunk.relevance
+
+
+async def _router_and_helper(helper_relevance: float) -> RetrieverState:
+    tree = _module(_class(f"{_MOD}.Router", "add"))
+    step = await _step([tree], [_chunk(f"{_MOD}.Router.add")])
+    hits = [_hit(f"{_MOD}.Router", 0.8), _hit(f"{_MOD}.helper", helper_relevance)]
+    return await step.run(_state(hits, cap=4))
+
+
 # ── expansion ─────────────────────────────────────────────────────────────
 
 
@@ -141,19 +154,6 @@ async def test_a_class_hit_s_members_fill_the_free_slots_below_the_original_hits
         f"{_MOD}.Router.add",
         f"{_MOD}.Router.remove",
     ]
-
-
-def _relevance_of(state: RetrieverState, qname: str) -> float | None:
-    assert isinstance(state.candidates, ChunkList)
-    (chunk,) = [c for c in state.candidates.items if c.metadata["qualified_name"] == qname]
-    return chunk.relevance
-
-
-async def _router_and_helper(helper_relevance: float) -> RetrieverState:
-    tree = _module(_class(f"{_MOD}.Router", "add"))
-    step = await _step([tree], [_chunk(f"{_MOD}.Router.add")])
-    hits = [_hit(f"{_MOD}.Router", 0.8), _hit(f"{_MOD}.helper", helper_relevance)]
-    return await step.run(_state(hits, cap=4))
 
 
 async def test_a_query_without_a_cap_fills_up_to_the_limit_step_s_default_of_8() -> None:
@@ -311,9 +311,11 @@ async def test_a_parent_whose_tree_is_missing_comes_back_unchanged() -> None:
     [None, ChunkList(items=()), ModuleMemberList(items=())],
     ids=["none", "empty", "members"],
 )
-async def test_no_chunk_hits_come_back_unchanged(candidates: object) -> None:
+async def test_no_chunk_hits_come_back_unchanged(
+    candidates: ChunkList | ModuleMemberList | None,
+) -> None:
     step = await _step()
-    state = RetrieverState(query=SearchQuery(terms="q", max_results=8), candidates=candidates)  # type: ignore[arg-type]
+    state = RetrieverState(query=SearchQuery(terms="q", max_results=8), candidates=candidates)
 
     assert await step.run(state) is state
 
