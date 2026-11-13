@@ -5,9 +5,9 @@ forbidden internal jargon. Resilient to whitespace + minor wording
 changes — future tightening of the prose is unblocked as long as the
 required signals survive.
 
-The server-instruction rules that restate the chat prompt are the exception:
-they are pinned sentence for sentence against ``system_v3`` (issues #379,
-#395), because their job is to agree with it word for word.
+The server-instruction lines that restate the chat prompt are the exception:
+they carry exact phrases (issue #379) or whole sentences checked against
+``system_v3`` itself (issue #395), because their job is to agree with it.
 """
 
 from __future__ import annotations
