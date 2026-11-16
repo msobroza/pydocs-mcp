@@ -503,6 +503,14 @@ _GLOB_CORPUS = (
         ("./src/*.py", {"src/core.py"}),
         ("src/", {"src/core.py", "src/a/b.py", "src/notes.md", "src/needle/scoring/strategies.py"}),
         ("**/*.md", {"notes.md", "src/notes.md"}),
+        ("src/*.{py,md}", {"src/core.py", "src/notes.md"}),
+        ("{main,tests/test_x}.py", {"main.py", "tests/test_x.py"}),
+        ("src/{a,needle/**}/*.py", {"src/a/b.py", "src/needle/scoring/strategies.py"}),
+        ("test_[xy].py", {"tests/test_x.py"}),
+        ("test_[!x].py", set()),
+        ("src/[a-c]*.py", {"src/core.py"}),
+        ("src[/]core.py", set()),
+        ("{main.py", set()),
     ],
 )
 def test_grep_glob_regex_table(glob: str, expected: set[str]) -> None:
@@ -687,6 +695,13 @@ async def test_glob_double_star_recurses(service: FileToolsService) -> None:
     assert [i["path"] for i in items] == ["src/notes.md"]
     _, items, _ = await service.glob(GlobPayload(pattern="**/*_test.py"))
     assert [i["path"] for i in items] == ["src/util_test.py"]
+
+
+async def test_glob_braces_and_classes(service: FileToolsService) -> None:
+    _, items, _ = await service.glob(GlobPayload(pattern="src/*.{py,md}"))
+    assert {str(i["path"]) for i in items} == {"src/core.py", "src/notes.md", "src/util_test.py"}
+    _, items, _ = await service.glob(GlobPayload(pattern="**/[m]ain.py"))
+    assert [i["path"] for i in items] == ["main.py"]
 
 
 async def test_glob_orders_by_mtime_descending(

@@ -124,24 +124,76 @@ def _glob_to_regex(pattern: str) -> re.Pattern[str]:
     ``pathlib.PurePath.full_match`` would do this but is 3.13-only; this
     helper keeps the 3.11 floor. ``*`` / ``?`` never cross ``/``; ``**/``
     matches zero or more whole directories; a bare ``**`` matches anything.
+    ``[abc]`` / ``[!abc]`` match one character of a set (never ``/``) and
+    ``{a,b}`` matches any of its comma-separated alternatives, like ``rg --glob``.
+    An unclosed ``[`` or ``{`` is a literal character.
     """
+    return re.compile(rf"^{_glob_body(pattern)}$")
+
+
+def _glob_body(pattern: str) -> str:
     out: list[str] = []
     i = 0
     while i < len(pattern):
-        ch = pattern[i]
-        if ch != "*":
-            out.append("[^/]" if ch == "?" else re.escape(ch))
-            i += 1
-        elif pattern[i : i + 3] == "**/":
-            out.append("(?:[^/]+/)*")
-            i += 3
-        elif pattern[i : i + 2] == "**":
-            out.append(".*")
-            i += 2
-        else:
-            out.append("[^/]*")
-            i += 1
-    return re.compile(rf"^{''.join(out)}$")
+        piece, i = _glob_piece(pattern, i)
+        out.append(piece)
+    return "".join(out)
+
+
+def _glob_piece(pattern: str, i: int) -> tuple[str, int]:
+    """Regex for the glob token starting at ``pattern[i]``, and the index after it."""
+    if pattern.startswith("**/", i):
+        return "(?:[^/]+/)*", i + 3
+    if pattern.startswith("**", i):
+        return ".*", i + 2
+    ch = pattern[i]
+    if ch == "*":
+        return "[^/]*", i + 1
+    if ch == "?":
+        return "[^/]", i + 1
+    if ch == "[" and (end := pattern.find("]", i + 2)) != -1:
+        return _glob_class(pattern[i + 1 : end]), end + 1
+    if ch == "{" and (end := _closing_brace(pattern, i)) != -1:
+        alternatives = _split_alternatives(pattern[i + 1 : end])
+        return "(?:" + "|".join(_glob_body(alt) for alt in alternatives) + ")", end + 1
+    return re.escape(ch), i + 1
+
+
+def _glob_class(body: str) -> str:
+    """``[...]`` body to a regex class: ``!`` (or ``^``) negates, ``/`` never matches."""
+    negated = body[0] in "!^"
+    members = body[1:] if negated else body
+    escaped = members.replace("\\", "\\\\").replace("[", "\\[")
+    return f"[^/{escaped}]" if negated else f"(?!/)[{escaped}]"
+
+
+def _closing_brace(pattern: str, start: int) -> int:
+    """Index of the ``}`` closing the ``{`` at ``start`` (braces nest); -1 if unclosed."""
+    depth = 0
+    for j in range(start, len(pattern)):
+        if pattern[j] == "{":
+            depth += 1
+        elif pattern[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return j
+    return -1
+
+
+def _split_alternatives(body: str) -> list[str]:
+    """Split a brace body on its top-level commas (``a,{b,c}`` → ``a``, ``{b,c}``)."""
+    parts: list[str] = []
+    depth = start = 0
+    for j, ch in enumerate(body):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            parts.append(body[start:j])
+            start = j + 1
+    parts.append(body[start:])
+    return parts
 
 
 def _grep_glob_regex(glob: str) -> re.Pattern[str]:
