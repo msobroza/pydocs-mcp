@@ -37,10 +37,12 @@ class KindInvocation:
 
     The typed inputs come from the run spec, the commits from the run record
     (frozen at the first launch), and the directories are the container's
-    fixed paths.
+    fixed paths on a bench VM. The local reference run (``local_reference``)
+    fills it with local directories and ``run_id=None``: an uninterrupted run
+    of the plain runner, outside the resume path its comparison checks.
     """
 
-    run_id: str
+    run_id: str | None
     dataset: str | None
     split: str | None
     configs: tuple[str, ...]
@@ -64,7 +66,7 @@ def _required(name: str, value: str | float | None) -> str:
 
 
 def retrieval_flags(invocation: KindInvocation) -> tuple[str, ...]:
-    """``pydocs_eval.runner``: resumable under the run id, its run files in the state directory."""
+    """``pydocs_eval.runner``: resumable under the run id (when one is set), its run files in the state directory."""
     state = invocation.state_dir
     return (
         # The runner takes one comma-separated --configs, one column per path.
@@ -73,8 +75,9 @@ def retrieval_flags(invocation: KindInvocation) -> tuple[str, ...]:
         *_optional("--dataset", invocation.dataset),
         *_optional("--split", invocation.split),
         *_optional("--corpus-dir", invocation.corpus_dir),
-        "--run-id",
-        invocation.run_id,
+        # Always set on a VM (kind_command.kind_invocation passes the record's run
+        # id); only the local reference leaves it out.
+        *_optional("--run-id", invocation.run_id),
         "--results-dir",
         str(state / RESULTS_DIR_NAME),
         "--report",

@@ -1,5 +1,5 @@
 .PHONY: install test test-rust lint lint-rust format typecheck gate build clean docs-serve docs-build \
-	bench-vm bench-vm-status bench-vm-stop bench-vm-pull bench-vm-check
+	bench-vm bench-vm-status bench-vm-stop bench-vm-pull bench-vm-check bench-vm-compare
 
 install:
 	pip install -e .
@@ -72,6 +72,16 @@ bench-vm-stop:
 bench-vm-pull:
 	@test -n "$(RUN)" || { echo "usage: make bench-vm-pull RUN=runs/<name>.yaml" >&2; exit 2; }
 	PYTHONPATH=benchmarks/src python -m pydocs_eval.bench_vm pull infra/bench-vm/$(RUN)
+
+# Compare a pulled retrieval run's final aggregates with a local, uninterrupted
+# run of the same spec (the command `python -m pydocs_eval.bench_vm
+# local-command` prints), both named by the spec; exit 0 only when every
+# deterministic aggregate is bit-identical. Reads the local disk only, never
+# the cloud.
+#   make bench-vm-compare RUN=runs/cpu-resume-smoke.yaml
+bench-vm-compare:
+	@test -n "$(RUN)" || { echo "usage: make bench-vm-compare RUN=runs/<name>.yaml" >&2; exit 2; }
+	PYTHONPATH=benchmarks/src python -m pydocs_eval.bench_vm compare infra/bench-vm/$(RUN)
 
 # Check the bench VM tree with no credentials and no Terraform backend: every
 # committed run spec, shellcheck on its scripts, hadolint on its Dockerfiles,

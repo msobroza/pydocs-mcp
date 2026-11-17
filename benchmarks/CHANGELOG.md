@@ -627,6 +627,39 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     fixture git repository with a bare origin, real child processes that signal
     their supervisor and resume from a ledger, and short injected deadlines. No test
     reaches a cloud.
+- **A longer resume smoke, and `compare` to check a stopped and relaunched run against
+  an uninterrupted local one** (`infra/bench-vm/runs/cpu-resume-smoke.yaml`,
+  `pydocs_eval.bench_vm.local_reference`, `pydocs_eval.bench_vm.leg_comparison`, #434).
+  The stop-and-resume acceptance needs a run long enough to stop by hand, and a way to
+  show that its relaunch ends with the aggregates of an uninterrupted run of the same
+  spec. The runbook's "Stop and resume acceptance" section gives the command sequence.
+  - **`cpu-resume-smoke.yaml`** runs BM25-only retrieval (`bm25.yaml`) over RepoQA's
+    `test` split of the pinned release (80 tasks, eight per repository) on a spot
+    `n2-standard-8`, with a 2-hour cap and a 2-minute sync. It needs no provider key,
+    and no embedder or model scores a query, so its aggregates can match bit for bit
+    across machines. It is not timed on the VM yet: the recorded RepoQA baseline puts
+    it at about 16 minutes, so the spec estimates 15 to 50.
+  - **`local-command SPEC`** prints the runner command the supervisor runs for a
+    retrieval spec, built by the same code (`kind_command.kind_argv`). Its state
+    directory moves to `benchmarks/results/bench-vm-local/<run-id>/` and it carries
+    no `--run-id`, so the uninterrupted reference never takes the resume path it
+    checks. A spec of another kind is refused.
+  - **`compare SPEC`** (`make bench-vm-compare RUN=runs/<name>.yaml`) pairs the legs of
+    a pulled run (`benchmarks/results/bench-vm/<run-id>/state/results/`) with the local
+    reference's by their `run_start` header. It exits 0 only when every deterministic
+    aggregate of each leg's final block is bit-identical and some leg of the run was
+    resumed mid-way (a `run_resume` after 1 to N-1 of its N task records), so a stop
+    that came too late, or a relaunch that started over, never passes. Each difference
+    is a `got <run>, expected <local>` line on stderr, and the wall-clock latencies are
+    listed with both values but never compared. A missing, unfinished, duplicated or
+    headerless leg file is named, and nothing to compare never passes. Every leg file
+    is listed with the run's task records, so a pull taken mid-run shows progress.
+    Each leg shows both sides' run tags, with a note when the commits differ. It reads
+    the local disk only.
+  - **One definition of "bit-identical".** The resume smoke's aggregate-block helpers
+    moved into `pydocs_eval.reporting.aggregate_blocks`, which
+    `benchmarks/scripts/runner_resume_smoke.py` and `compare` share, with the leg
+    file's event names as one `LegFileEvent` enum.
 - **Reference answers written from ground truth, and the `write-references` verb that
   writes them** (`pydocs_eval.judge.reference_*`,
   `python -m pydocs_eval.campaign write-references --split repoqa-qa/<slice>`). Each
@@ -976,6 +1009,10 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Changed
 
+- **The resume smoke's aggregate failures read `got …, expected …`**
+  (`benchmarks/scripts/runner_resume_smoke.py`, #434): `got` is the resumed leg's value
+  or metric list and `expected` the uninterrupted control's, where they read
+  "resumed …, control …" before. What passes and fails is unchanged.
 - **The `suggestions_off` campaign overlay also turns off the product's
   `kind="api"` zero-hit fallback** (`output.suggestions.api_zero_hit_fallback_any:
   false`), so its arm stays "every deterministic suggestion rule off". The

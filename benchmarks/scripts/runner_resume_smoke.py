@@ -47,24 +47,26 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pydocs_eval.reporting.aggregate_blocks import (
+    LegFileEvent,
+    compare_aggregate_blocks,
+    final_aggregate_block,
+    is_latency_name,
+)
 from pydocs_eval.sweep import LATENCY_KEYS
 
 # WHY: this script runs from its file path, not as an installed module, and the
 # unit tests load it the same way; its pass/fail helpers live beside it.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runner_resume_smoke_checks import (
-    EVENT_RESUME,
     LegFile,
     SmokeFailure,
     check_kill,
     check_resume,
-    compare_aggregate_blocks,
     count_fixture_tasks,
     count_task_records,
     derive_fixture,
     events_of,
-    final_aggregate_block,
-    is_latency_name,
     kill_landed_in_window,
     parse_leg_file,
     records_after_last_resume,
@@ -317,7 +319,9 @@ def _evidence(
         kill_returncode=returncode,
         killed_ids=tuple(task_ids(killed.records)),
         truncated_lines=killed.corrupt_lines,
-        resume_recorded=events_of(resumed.records, EVENT_RESUME)[0].get("recorded_tasks"),
+        resume_recorded=events_of(resumed.records, LegFileEvent.RUN_RESUME)[0].get(
+            "recorded_tasks"
+        ),
         second_ids=tuple(task_ids(records_after_last_resume(list(resumed.records)))),
         final_task_records=len(task_ids(resumed.records)),
         compared=len(control_block) - latency,

@@ -11,6 +11,10 @@ with the supervisor (``bench_cloud.BenchCloud``, over ``gcloud`` in
 ``gcloud_bench_cloud``). ``launch --dry-run`` needs no credentials either. The same session runs the
 run-control verbs (``run_control``): ``status`` (``make bench-vm-status``),
 ``stop`` (``make bench-vm-stop``) and ``pull`` (``make bench-vm-pull``).
+Without any credentials again, ``local-command`` prints a retrieval spec's
+runner command for an uninterrupted local reference run (``local_reference``)
+and ``compare`` (``make bench-vm-compare``) checks a pulled run against it
+(``leg_comparison``).
 
 On the VM, the ``supervise`` verb (``supervisor``) is the run container's
 entrypoint, started by the host startup script
