@@ -1151,6 +1151,21 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Fixed
 
+- **A CPU run on the default `n2-standard-8` is no longer refused at launch for
+  reporting no architecture** (`bench_vm/machine_check.py`). The Compute API reports
+  no `architecture` for the classic x86 families (`n2-standard-8` and
+  `e2-standard-8`, asked in `europe-west4-a`) and reports one for the newer
+  families: `X86_64` for `g2-standard-8`, `ARM64` for `t2a-standard-8` and
+  `c4a-standard-8`. The machine check refused every type that did not report
+  `X86_64`, so `make bench-vm RUN=runs/cpu-smoke.yaml` was refused before anything
+  was written. A type that reports no architecture now counts as x86_64; a type that
+  reports another architecture is still refused, and the refusal names it. When a
+  type that reports none is refused for its size, the refusal says
+  `no architecture reported, read as X86_64`. The gcloud adapter also reads the
+  API's unset value, `ARCHITECTURE_UNSPECIFIED`, or an empty value as none reported,
+  like an absent field. The N2 and E2 test fakes now report no architecture, as the
+  live API does for `n2-standard-8` and `e2-standard-8`, so every launcher test on
+  the default CPU type runs without one. (#434)
 - **A bench VM boots from a `pd-balanced` disk, so a GPU run is no longer refused
   when its VM is created** (`bench_vm/launch_plan.py`,
   `bench_vm/gcloud_instance_create.py`). The launcher named no boot disk type, so
