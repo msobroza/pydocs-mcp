@@ -1201,6 +1201,14 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   exactly as before, and the campaign index cache's in-process seam
   (`index_project_in_process`: project-only, static, stock capture) builds
   byte-identical bundles.
+- **The bench VM launcher refuses a local branch out of step with its remote-tracking
+  branch** (`bench_vm/run_commits.py`, #416, #434). The launch never fetches, so
+  `git_ref: main` in a checkout whose `main` sat behind `origin/main` froze an old commit
+  into the run record for every attempt. A first launch, and the dry run, now refuse a
+  `git_ref`, `baseline_ref` or `candidate_ref` naming a local branch whose upstream (else
+  every remote's branch of that name) is at another commit, behind, ahead or diverged,
+  naming both commits and the fix. A SHA, a tag or `origin/main` is taken as written, and
+  a relaunch still runs its recorded commits.
 
 ## [0.2.0] — 2026-09-10
 
