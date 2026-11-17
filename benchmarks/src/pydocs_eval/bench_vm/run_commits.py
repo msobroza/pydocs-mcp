@@ -246,20 +246,26 @@ def _optional_product_commit(
 
 
 def _commit_to_freeze(git: GitCheckout, field: str, ref: str) -> str:
-    """``ref``'s commit; a ref naming a local branch must sit where its remote-tracking branch does."""
+    """``ref``'s commit; a ref naming a local branch must be in step with its remote-tracking one."""
     commit = git.resolve(ref)
     if commit is None:
         raise LaunchRefused(
             f"{field}: got {ref!r}, expected a commit SHA, tag or branch that resolves in {git.root}"
         )
-    _require_branch_level_with_its_remote(git, field, ref, commit)
+    _require_branch_in_step(git, field, ref, commit)
     return commit
 
 
-def _require_branch_level_with_its_remote(
-    git: GitCheckout, field: str, ref: str, commit: str
-) -> None:
-    """Refuse a local branch whose remote-tracking counterpart is at another commit.
+@dataclass(frozen=True, slots=True)
+class _LocalBranch:
+    """A local branch (``main``) and the commit it is at."""
+
+    name: str
+    commit: str
+
+
+def _require_branch_in_step(git: GitCheckout, field: str, ref: str, commit: str) -> None:
+    """Refuse a ref naming a local branch whose remote-tracking counterpart is elsewhere (#434).
 
     The launch never fetches, so a local ``main`` left behind ``origin/main``
     would freeze an old commit into the run record, for every attempt.
@@ -267,40 +273,59 @@ def _require_branch_level_with_its_remote(
     branch = git.local_branch_named_by(ref)
     if branch is None:
         return
-    for counterpart in git.remote_tracking_counterparts(branch):
-        if counterpart.commit != commit:
-            raise _unlevel_branch_refusal(git, f"{field}: got {ref!r}", branch, commit, counterpart)
+    counterparts = git.remote_tracking_counterparts(branch)
+    out_of_step = [counterpart for counterpart in counterparts if counterpart.commit != commit]
+    if out_of_step:
+        local = _LocalBranch(name=branch, commit=commit)
+        got = f"{field}: got {ref!r}"
+        raise _out_of_step_refusal(git, got, local, out_of_step[0], several=len(counterparts) > 1)
 
 
-def _unlevel_branch_refusal(
-    git: GitCheckout, got: str, branch: str, commit: str, counterpart: RemoteTrackingBranch
+def _out_of_step_refusal(
+    git: GitCheckout,
+    got: str,
+    local: _LocalBranch,
+    counterpart: RemoteTrackingBranch,
+    *,
+    several: bool,
 ) -> LaunchRefused:
-    ahead, behind = git.commits_ahead_behind(commit, counterpart.commit)
-    relation, remedy = _branch_drift(branch, ahead, behind)
+    """The refusal: both commits, how they stand, the fix; how to pick one of ``several``."""
+    ahead, behind = git.commits_ahead_behind(local.commit, counterpart.commit)
     short = counterpart.short_name
+    relation, fix = _out_of_step_wording(local.name, short, ahead, behind)
+    pick = _pick_an_upstream_hint(local.name) if several else ""
     return LaunchRefused(
-        f"{got}, local branch {branch} at commit {commit}, {relation} its remote-tracking "
-        f"branch {short} at commit {counterpart.commit}; expected the two at one commit: "
-        f"{remedy}, or write {short} or a commit SHA instead"
+        f"{got}, local branch {local.name} at commit {local.commit}, {relation} its "
+        f"remote-tracking branch {short} at commit {counterpart.commit}; expected the two at "
+        f"one commit: {fix}, or write {short} or a commit SHA instead{pick}"
     )
 
 
-def _branch_drift(branch: str, ahead: int, behind: int) -> tuple[str, str]:
-    """How local ``branch`` stands against its remote-tracking branch, and how to level it."""
+def _out_of_step_wording(branch: str, counterpart: str, ahead: int, behind: int) -> tuple[str, str]:
+    """How local ``branch`` stands against ``counterpart``, and how to bring it in step."""
     if not ahead:
         return (
-            f"{_commits(behind)} behind",
-            f"fast-forward {branch} (`git pull --ff-only` with it checked out)",
+            f"{_commit_count_text(behind)} behind",
+            f"fast-forward {branch} to {counterpart} (`git pull --ff-only` with it checked out)",
         )
     if not behind:
-        return f"{_commits(ahead)} ahead of", f"push {branch}"
+        return f"{_commit_count_text(ahead)} ahead of", f"push {branch} to {counterpart}"
+    # No pull-then-push advice: after a squash merge it would push a merge commit.
     return (
-        f"diverged ({_commits(ahead)} ahead, {behind} behind) from",
-        f"reconcile {branch} with it (pull, then push)",
+        f"diverged ({_commit_count_text(ahead)} ahead, {behind} behind) from",
+        f"bring {branch} in step with {counterpart}",
     )
 
 
-def _commits(count: int) -> str:
+def _pick_an_upstream_hint(branch: str) -> str:
+    """Several remotes hold a ``branch`` and none is its upstream: say how to name one."""
+    return (
+        f"; {branch} has no upstream, so every remote's {branch} must agree: "
+        f"`git branch --set-upstream-to=<remote>/{branch} {branch}` names the one it follows"
+    )
+
+
+def _commit_count_text(count: int) -> str:
     return f"{count} commit" if count == 1 else f"{count} commits"
 
 

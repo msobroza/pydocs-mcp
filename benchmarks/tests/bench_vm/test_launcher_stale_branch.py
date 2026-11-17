@@ -77,6 +77,9 @@ def test_a_local_branch_behind_its_remote_tracking_branch_is_refused_naming_both
     assert refusal.startswith("git_ref: got 'main'")
     assert local in refusal and remote in refusal
     assert "1 commit behind its remote-tracking branch origin/main" in refusal
+    assert "fast-forward main to origin/main (`git pull --ff-only`" in refusal
+    assert "or write origin/main or a commit SHA" in refusal
+    assert "--set-upstream-to" not in refusal, "one counterpart: nothing to choose between"
 
 
 def test_a_local_branch_ahead_of_its_remote_tracking_branch_is_refused_naming_both_commits(
@@ -89,6 +92,7 @@ def test_a_local_branch_ahead_of_its_remote_tracking_branch_is_refused_naming_bo
     refusal = _refusal(harness, result)
     assert local in refusal and remote in refusal
     assert "1 commit ahead of its remote-tracking branch origin/main" in refusal
+    assert "push main to origin/main" in refusal
 
 
 def test_a_local_branch_diverged_from_its_remote_tracking_branch_is_refused_naming_both_commits(
@@ -103,6 +107,8 @@ def test_a_local_branch_diverged_from_its_remote_tracking_branch_is_refused_nami
     assert "diverged (1 commit ahead, 1 behind) from its remote-tracking branch origin/main" in (
         refusal
     )
+    # No pull-then-push: after a squash merge that would push a merge commit onto main.
+    assert "bring main in step with origin/main" in refusal
 
 
 @pytest.mark.parametrize("ref", ["heads/main", "refs/heads/main", "HEAD"])
@@ -251,6 +257,8 @@ def test_without_an_upstream_every_remotes_same_named_branch_must_agree(
 
     refusal = _refusal(harness, result)
     assert f"its remote-tracking branch fork/main at commit {fork_main}" in refusal
+    assert "main has no upstream, so every remote's main must agree" in refusal
+    assert "`git branch --set-upstream-to=<remote>/main main`" in refusal
 
 
 # --- before/after's refs ---------------------------------------------------------
