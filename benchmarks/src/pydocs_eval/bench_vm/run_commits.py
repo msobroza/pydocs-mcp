@@ -38,6 +38,21 @@ _GIT_TIMEOUT_S = 60.0
 _GIT_ARCHIVE_TIMEOUT_S = 300.0
 _BLOB = "blob"
 _TREE = "tree"
+_LOCAL_BRANCH_PREFIX = "refs/heads/"
+_REMOTE_TRACKING_PREFIX = "refs/remotes/"
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteTrackingBranch:
+    """A remote-tracking branch, by full name (``refs/remotes/origin/main``), and its commit."""
+
+    name: str
+    commit: str
+
+    @property
+    def short_name(self) -> str:
+        """``origin/main``: the name a run spec can write as a ref."""
+        return self.name.removeprefix(_REMOTE_TRACKING_PREFIX)
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +69,60 @@ class GitCheckout:
         if completed.returncode != 0:
             return None
         return completed.stdout.strip() or None
+
+    def local_branch_named_by(self, ref: str) -> str | None:
+        """The local branch ``ref`` resolves through, ``None`` when it names no local branch.
+
+        ``main``, ``heads/main`` and a ``HEAD`` attached to ``main`` all name
+        ``main``. A SHA, a tag, a remote-tracking branch (``origin/main``), an
+        expression (``main~1``) and an ambiguous name name none.
+        """
+        if ref.startswith("-"):
+            return None
+        completed = self._git("rev-parse", "--symbolic-full-name", ref)
+        name = completed.stdout.strip()
+        if completed.returncode != 0 or not name.startswith(_LOCAL_BRANCH_PREFIX):
+            return None
+        return name.removeprefix(_LOCAL_BRANCH_PREFIX)
+
+    def remote_tracking_counterparts(self, branch: str) -> tuple[RemoteTrackingBranch, ...]:
+        """The remote-tracking branches local ``branch`` pairs with, those that exist.
+
+        Its configured upstream when that is a remote-tracking branch; without
+        one, ``refs/remotes/<remote>/<branch>`` of every remote. Never contacts
+        a remote: these are the refs the last ``git fetch`` left.
+        """
+        names = self._counterpart_names(branch)
+        if not names:
+            return ()
+        listed = self._git("for-each-ref", "--format=%(refname) %(objectname)", *names)
+        found = (line.partition(" ") for line in listed.stdout.splitlines())
+        # A pattern also matches refs below it (`origin/main/x`): keep exact names only.
+        return tuple(
+            RemoteTrackingBranch(name=name, commit=commit)
+            for name, _, commit in found
+            if name in names
+        )
+
+    def _counterpart_names(self, branch: str) -> tuple[str, ...]:
+        upstream = self._git(
+            "for-each-ref", "--format=%(upstream)", f"{_LOCAL_BRANCH_PREFIX}{branch}"
+        ).stdout.strip()
+        if upstream.startswith(_REMOTE_TRACKING_PREFIX):
+            return (upstream,)
+        remotes = self._git("remote").stdout.split()
+        return tuple(f"{_REMOTE_TRACKING_PREFIX}{remote}/{branch}" for remote in remotes)
+
+    def commits_ahead_behind(self, local: str, remote: str) -> tuple[int, int]:
+        """Commits ``local`` has that ``remote`` lacks, and commits ``remote`` has that ``local`` lacks."""
+        completed = self._git("rev-list", "--left-right", "--count", f"{local}...{remote}")
+        counts = completed.stdout.split()
+        if completed.returncode != 0 or len(counts) != 2:
+            raise RuntimeError(
+                f"git rev-list --left-right --count {local}...{remote}: got exit "
+                f"{completed.returncode} ({completed.stderr.strip()}), expected two counts"
+            )
+        return int(counts[0]), int(counts[1])
 
     def remote_tracking_refs_containing(self, commit: str) -> tuple[str, ...]:
         """Full names (``refs/remotes/<remote>/<branch>``) of the remote-tracking branches holding ``commit``."""
@@ -151,22 +220,72 @@ def _optional_product_commit(
         return None
     if remote_urls is None:
         return _pushed_commit(git, field, ref)
-    commit = _resolved_commit(git, field, ref)
+    commit = _commit_to_freeze(git, field, ref)
     _require_on_product_remote(git, remote_urls, f"{field}: got {ref!r} at commit {commit}", commit)
     return commit
 
 
-def _resolved_commit(git: GitCheckout, field: str, ref: str) -> str:
+def _commit_to_freeze(git: GitCheckout, field: str, ref: str) -> str:
+    """``ref``'s commit; a ref naming a local branch must sit where its remote-tracking branch does."""
     commit = git.resolve(ref)
     if commit is None:
         raise LaunchRefused(
             f"{field}: got {ref!r}, expected a commit SHA, tag or branch that resolves in {git.root}"
         )
+    _require_branch_level_with_its_remote(git, field, ref, commit)
     return commit
 
 
+def _require_branch_level_with_its_remote(
+    git: GitCheckout, field: str, ref: str, commit: str
+) -> None:
+    """Refuse a local branch whose remote-tracking counterpart is at another commit.
+
+    The launch never fetches, so a local ``main`` left behind ``origin/main``
+    would freeze an old commit into the run record, for every attempt.
+    """
+    branch = git.local_branch_named_by(ref)
+    if branch is None:
+        return
+    for counterpart in git.remote_tracking_counterparts(branch):
+        if counterpart.commit != commit:
+            raise _unlevel_branch_refusal(git, f"{field}: got {ref!r}", branch, commit, counterpart)
+
+
+def _unlevel_branch_refusal(
+    git: GitCheckout, got: str, branch: str, commit: str, counterpart: RemoteTrackingBranch
+) -> LaunchRefused:
+    ahead, behind = git.commits_ahead_behind(commit, counterpart.commit)
+    relation, remedy = _branch_drift(branch, ahead, behind)
+    short = counterpart.short_name
+    return LaunchRefused(
+        f"{got}, local branch {branch} at commit {commit}, {relation} its remote-tracking "
+        f"branch {short} at commit {counterpart.commit}; expected the two at one commit: "
+        f"{remedy}, or write {short} or a commit SHA instead"
+    )
+
+
+def _branch_drift(branch: str, ahead: int, behind: int) -> tuple[str, str]:
+    """How local ``branch`` stands against its remote-tracking branch, and how to level it."""
+    if not ahead:
+        return (
+            f"{_commits(behind)} behind",
+            f"fast-forward {branch} (`git pull --ff-only` with it checked out)",
+        )
+    if not behind:
+        return f"{_commits(ahead)} ahead of", f"push {branch}"
+    return (
+        f"diverged ({_commits(ahead)} ahead, {behind} behind) from",
+        f"reconcile {branch} with it (pull, then push)",
+    )
+
+
+def _commits(count: int) -> str:
+    return f"{count} commit" if count == 1 else f"{count} commits"
+
+
 def _pushed_commit(git: GitCheckout, field: str, ref: str) -> str:
-    commit = _resolved_commit(git, field, ref)
+    commit = _commit_to_freeze(git, field, ref)
     if not git.remote_tracking_refs_containing(commit):
         raise LaunchRefused(
             f"{field}: got {ref!r} at commit {commit}, expected a commit reachable from a "
