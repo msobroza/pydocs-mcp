@@ -79,6 +79,33 @@ def test_a_dry_run_marks_deployment_names_as_placeholders_and_lists_unchecked_cl
         assert fact in not_checked
 
 
+def test_a_dry_run_names_the_branch_check_among_the_passed_checks(
+    tmp_path: Path, capsys: Capsys
+) -> None:
+    repo = make_fixture_repo(tmp_path / "git")
+    spec_path = write_spec(tmp_path / "runs", "cpu-smoke", _spec())
+
+    exit_code, out, err = _dry_run(capsys, spec_path, repo.path)
+
+    assert exit_code == 0, err
+    passed = out.split("  passed: ", 1)[1].splitlines()[0]
+    assert "local branches level with their remote-tracking branches" in passed
+
+
+def test_a_dry_run_refuses_a_local_branch_behind_its_remote_tracking_branch_printing_no_plan(
+    tmp_path: Path, capsys: Capsys
+) -> None:
+    repo = make_fixture_repo(tmp_path / "git")
+    local, remote = repo.fall_behind_origin()
+    spec_path = write_spec(tmp_path / "runs", "cpu-smoke", _spec())
+
+    exit_code, out, err = _dry_run(capsys, spec_path, repo.path)
+
+    assert (exit_code, out) == (1, "")
+    assert f"launch refused: git_ref: got 'main', local branch main at commit {local}" in err
+    assert f"its remote-tracking branch origin/main at commit {remote}" in err
+
+
 def test_a_dry_run_still_refuses_what_the_laptop_can_check(tmp_path: Path, capsys: Capsys) -> None:
     repo = make_fixture_repo(tmp_path / "git")
     unpushed = repo.commit_unpushed("local only")

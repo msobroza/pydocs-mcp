@@ -1,10 +1,11 @@
 """``launch --dry-run``: run every check the laptop can make alone, then print the launch plan.
 
 A dry run never invokes ``gcloud``, ``terraform`` or the network, and writes
-nothing. It loads the spec, derives the run id, resolves the refs and checks
-they are on a remote-tracking branch, and checks the recipe, the configs,
-``corpus_dir`` and the host scripts at the commit — the same code a real launch
-runs. What only the cloud knows (the deployment's names, the image digest, the
+nothing. It loads the spec, derives the run id, resolves the refs, checks that
+a ref naming a local branch sits where its remote-tracking branch does and
+that each commit is on a remote-tracking branch, and checks the recipe, the
+configs, ``corpus_dir`` and the host scripts at the commit — the same code a
+real launch runs. What only the cloud knows (the deployment's names, the image digest, the
 machine-type facts, whether the image tag exists, an existing record, a live
 VM) is shown as a marked placeholder or listed as not checked. So the plan shows
 the build a missing tag would submit without saying whether it will run, and
@@ -50,6 +51,7 @@ _PASSED_CHECKS = (
     "run spec",
     "run id",
     "ref resolution",
+    "local branches level with their remote-tracking branches",
     "remote-tracking reachability",
     "recipe at the commit",
     "configs and corpus_dir at the commit",
