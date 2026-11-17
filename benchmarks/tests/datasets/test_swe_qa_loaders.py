@@ -4,11 +4,12 @@ field (no network, no real git checkouts)."""
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pydocs_eval.datasets.base_dataset import Dataset
+from pydocs_eval.datasets.base_dataset import Dataset, ReferenceAnswer, reference_answer_of
 from pydocs_eval.registries import dataset_registry
 from pydocs_eval.datasets.swe_qa import SweQaDataset
 from pydocs_eval.datasets.swe_qa_pro import SweQaProDataset
@@ -75,7 +76,10 @@ async def test_swe_qa_infers_repo_from_split_and_resolves_bare_names() -> None:
     )
     tasks = [t async for t in ds.tasks()]
     assert tasks[0].gold.file_set == ("lib/matplotlib/backends/backend_pgf.py",)
-    assert tasks[0].metadata["repo"] == "matplotlib"
+    # The split key stays in the task id; ``repo`` names the pinned clone as
+    # ``owner/name``, the spelling a per-corpus workspace keys on (#387).
+    assert tasks[0].task_id.startswith("swe_qa/matplotlib/")
+    assert tasks[0].metadata["repo"] == "matplotlib/matplotlib"
 
 
 async def test_swe_qa_unpinned_repo_row_is_skipped_and_logged(caplog) -> None:
@@ -117,3 +121,23 @@ def test_both_registered() -> None:
     )
     assert isinstance(pro, SweQaProDataset)
     assert isinstance(swe, SweQaDataset)
+
+
+async def test_swe_qa_carries_the_answer_text_as_its_reference_answer() -> None:
+    ds = SweQaDataset(fixture_path=_SWEQA_FIXTURE, split="matplotlib", repo_cache=_FakeRepoCache())
+    rows = [json.loads(line) for line in _SWEQA_FIXTURE.read_text().splitlines() if line]
+
+    tasks = [t async for t in ds.tasks()]
+
+    assert reference_answer_of(tasks[0].gold) == ReferenceAnswer(
+        text=rows[0]["answer"], model_id="swe-qa", prompt_hash=""
+    )
+
+
+async def test_the_reference_leaves_the_file_set_gold_unchanged() -> None:
+    ds = SweQaDataset(fixture_path=_SWEQA_FIXTURE, split="matplotlib", repo_cache=_FakeRepoCache())
+
+    tasks = [t async for t in ds.tasks()]
+
+    assert {t.gold.file_set for t in tasks} == {("lib/matplotlib/backends/backend_pgf.py",)}
+    assert all(set(t.gold.extra) == {"reference_answer"} for t in tasks)

@@ -28,14 +28,16 @@ inject a shared audit list at construction time.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
+import httpx
 import numpy as np
 
 from pydocs_mcp.application.protocols import MemberExtractor
@@ -70,6 +72,10 @@ from pydocs_mcp.storage.null_vector_store import NullVectorStore
 from pydocs_mcp.retrieval.config import LlmConfig
 from pydocs_mcp.retrieval.protocols import ChatMessage
 from pydocs_mcp.application.target_resolution import ResolutionEntry, TargetResolution
+
+if TYPE_CHECKING:
+    # Imported at call time in FakeOpenAIWire, so importing the fakes stays cheap.
+    from openai import AsyncOpenAI, OpenAI
 
 
 class _NotEnteredProxy:
@@ -1799,6 +1805,174 @@ class RecordingLlmClientBuilder:
     def chat_calls(self) -> int:
         """Chat calls across every client this builder handed out."""
         return sum(len(client._calls) for _cfg, client in self.built)
+
+
+# ── FakeOpenAIWire (the OpenAI HTTP wire under the core adapters) ─────────
+_WIRE_API_KEY = "sk-test-wire"
+_WIRE_SUCCESS_STATUS = 200
+_WIRE_RATE_LIMIT_STATUS = 429
+
+
+def _wire_error_body(status: int) -> dict[str, Any]:
+    """An OpenAI-shaped error body for a status :class:`FakeOpenAIWire` was scripted to answer."""
+    code = "rate_limit_exceeded" if status == _WIRE_RATE_LIMIT_STATUS else None
+    return {
+        "error": {
+            "message": f"FakeOpenAIWire: scripted HTTP {status}",
+            "type": "synthetic",
+            "code": code,
+        }
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class WireRequest:
+    """One request :class:`FakeOpenAIWire` received: its URL path and JSON body."""
+
+    path: str
+    body: dict[str, Any]
+
+
+@dataclass(slots=True)
+class FakeOpenAIWire:
+    """An OpenAI-compatible endpoint served on ``httpx.MockTransport``.
+
+    Lets core tests drive ``OpenAiLlmClient`` and ``OpenAIEmbedder`` through the
+    REAL openai SDK and assert the bytes it puts on the wire, instead of mocking
+    SDK objects that stay green whatever the SDK sends. Put a client from
+    :meth:`async_openai` / :meth:`sync_openai` into the adapter's existing client
+    field — no production seam, no socket.
+
+    - ``POST …/chat/completions`` answers a ``chat.completion`` whose message
+      content is ``chat_content`` (``None`` goes out as JSON ``null``).
+      ``chat_statuses`` scripts the status of successive chat requests, e.g.
+      ``[429, 200]``; once it runs out every request gets 200. A scripted
+      error status answers an OpenAI-shaped error body naming that status.
+    - ``POST …/embeddings`` answers one ``embedding_dim``-wide vector per input,
+      in input order (see :meth:`vector_for`): base64 of little-endian float32
+      when the body's ``encoding_format`` is ``"base64"``, float lists otherwise.
+    - Any other path answers 404 naming it.
+
+    Every request is recorded in ``requests``, in arrival order (a body that is
+    not JSON is recorded as ``{}``).
+
+    Example::
+
+        wire = FakeOpenAIWire(chat_statuses=[429, 200])
+        client = OpenAiLlmClient(model_name="gpt-4o-mini", api_key="sk-test")
+        client._async = wire.async_openai()
+        await client.chat([{"role": "user", "content": "hi"}])
+        assert len(wire.requests) == 2
+    """
+
+    chat_content: str | None = "wire-reply"
+    chat_statuses: list[int] = field(default_factory=list)
+    embedding_dim: int = 4
+    base_url: str = "http://openai-wire.test/v1"
+    requests: list[WireRequest] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        # Own copy: the script is consumed as requests arrive, and a caller's
+        # list (say, a module-level constant) must not be emptied by one test.
+        self.chat_statuses = list(self.chat_statuses)
+
+    def vector_for(self, text: str) -> np.ndarray:
+        """The float32 vector the wire serves for ``text``."""
+        return MockEmbedder(dim=self.embedding_dim)._derive(text)
+
+    def transport(self) -> httpx.MockTransport:
+        return httpx.MockTransport(self._answer)
+
+    def async_openai(self) -> AsyncOpenAI:
+        """A real ``AsyncOpenAI`` on this wire; ``max_retries=0`` so every retry
+        the test sees is the adapter's own."""
+        from openai import AsyncOpenAI
+
+        http_client = httpx.AsyncClient(transport=self.transport())
+        return AsyncOpenAI(
+            api_key=_WIRE_API_KEY, base_url=self.base_url, max_retries=0, http_client=http_client
+        )
+
+    def sync_openai(self) -> OpenAI:
+        """The sync twin of :meth:`async_openai`."""
+        from openai import OpenAI
+
+        http_client = httpx.Client(transport=self.transport())
+        return OpenAI(
+            api_key=_WIRE_API_KEY, base_url=self.base_url, max_retries=0, http_client=http_client
+        )
+
+    def _answer(self, request: httpx.Request) -> httpx.Response:
+        is_json = request.headers.get("content-type", "").startswith("application/json")
+        body = json.loads(request.content) if is_json and request.content else {}
+        self.requests.append(WireRequest(path=request.url.path, body=body))
+        if request.method == "POST" and request.url.path.endswith("/chat/completions"):
+            return self._chat_completion(body)
+        if request.method == "POST" and request.url.path.endswith("/embeddings"):
+            return self._embeddings(body)
+        return httpx.Response(
+            404, json={"error": {"message": f"FakeOpenAIWire: no route for {request.url.path!r}"}}
+        )
+
+    def _chat_completion(self, body: dict[str, Any]) -> httpx.Response:
+        status = self.chat_statuses.pop(0) if self.chat_statuses else _WIRE_SUCCESS_STATUS
+        if status != _WIRE_SUCCESS_STATUS:
+            return httpx.Response(status, json=_wire_error_body(status))
+        message = {"role": "assistant", "content": self.chat_content}
+        return httpx.Response(
+            _WIRE_SUCCESS_STATUS,
+            json={
+                "id": "chatcmpl-wire",
+                "object": "chat.completion",
+                "created": 1_700_000_000,
+                "model": body.get("model", ""),
+                "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    def _embeddings(self, body: dict[str, Any]) -> httpx.Response:
+        raw_input = body.get("input", [])
+        texts = [raw_input] if isinstance(raw_input, str) else list(raw_input)
+        as_base64 = body.get("encoding_format") == "base64"
+        data = [
+            {
+                "object": "embedding",
+                "index": i,
+                "embedding": self._encode(self.vector_for(t), as_base64),
+            }
+            for i, t in enumerate(texts)
+        ]
+        usage = {"prompt_tokens": len(texts), "total_tokens": len(texts)}
+        return httpx.Response(
+            _WIRE_SUCCESS_STATUS,
+            json={"object": "list", "data": data, "model": body.get("model", ""), "usage": usage},
+        )
+
+    @staticmethod
+    def _encode(vector: np.ndarray, as_base64: bool) -> str | list[float]:
+        if as_base64:
+            return base64.b64encode(vector.astype("<f4").tobytes()).decode("ascii")
+        return [float(x) for x in vector]
+
+
+class SleepRecorder:
+    """A sleep stand-in that records each requested delay and never waits.
+
+    Call the instance where ``time.sleep`` is expected; ``async_sleep`` stands in
+    for an async sleep (``asyncio.sleep`` / ``anyio.sleep``). One shared fake for
+    every retry test: the core LLM client's own ``RateLimitError`` backoff and the
+    harness's pins of the openai SDK's retry policy.
+    """
+
+    def __init__(self) -> None:
+        self.delays: list[float] = []
+
+    def __call__(self, seconds: float) -> None:
+        self.delays.append(seconds)
+
+    async def async_sleep(self, seconds: float) -> None:
+        self.delays.append(seconds)
 
 
 @dataclass

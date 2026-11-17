@@ -26,7 +26,7 @@ from pydocs_mcp.application.overview_service import (
     OverviewCard,
 )
 from pydocs_mcp.application.target_resolution import NullTargetResolver, TargetRewrite
-from pydocs_mcp.models import ChunkList, ModuleMemberList, SearchResponse
+from pydocs_mcp.models import ChunkList, ModuleMemberList, SearchQuery, SearchResponse
 from pydocs_mcp.multirepo import LoadedProject
 from pydocs_mcp.storage.index_metadata import IndexMetadata
 
@@ -110,6 +110,78 @@ class FakeApi:
 
     async def ranked(self, query):
         return ModuleMemberList(items=())
+
+
+class RecordingDocsSearch:
+    """A docs search serving fixed chunk ``rows`` on both entry points and
+    recording every query it receives, in call order — how the zero-hit
+    fallback tests (ADR 0027) prove which ``kind="any"`` queries ran."""
+
+    def __init__(self, rows: tuple[Any, ...] = ()) -> None:
+        self.rows = rows
+        self.queries: list[SearchQuery] = []
+
+    async def search(self, query: SearchQuery) -> SearchResponse:
+        self.queries.append(query)
+        return SearchResponse(result=ChunkList(items=self.rows), query=query, duration_ms=0.0)
+
+    async def ranked(self, query: SearchQuery) -> ChunkList:
+        self.queries.append(query)
+        return ChunkList(items=self.rows)
+
+
+class RecordingApiSearch:
+    """The member-search twin of :class:`RecordingDocsSearch`."""
+
+    def __init__(self, rows: tuple[Any, ...] = ()) -> None:
+        self.rows = rows
+        self.queries: list[SearchQuery] = []
+
+    async def search(self, query: SearchQuery) -> SearchResponse:
+        self.queries.append(query)
+        return SearchResponse(
+            result=ModuleMemberList(items=self.rows), query=query, duration_ms=0.0
+        )
+
+    async def ranked(self, query: SearchQuery) -> ModuleMemberList:
+        self.queries.append(query)
+        return ModuleMemberList(items=self.rows)
+
+
+class MembersAfterFirstQueryApiSearch(RecordingApiSearch):
+    """A member search that answers its FIRST query with no row and every later
+    one with ``rows`` — the index gaining members between a ``kind="api"``
+    request's API pass and its fallback pass (ADR 0027), the one way the
+    fallback's member half can carry rows, so its ``limit`` cap is observable."""
+
+    def _rows_for_next_query(self, query: SearchQuery) -> tuple[Any, ...]:
+        rows = self.rows if self.queries else ()
+        self.queries.append(query)
+        return rows
+
+    async def search(self, query: SearchQuery) -> SearchResponse:
+        rows = self._rows_for_next_query(query)
+        return SearchResponse(result=ModuleMemberList(items=rows), query=query, duration_ms=0.0)
+
+    async def ranked(self, query: SearchQuery) -> ModuleMemberList:
+        return ModuleMemberList(items=self._rows_for_next_query(query))
+
+
+class RaisingDocsSearch:
+    """A docs search whose every query raises ``error`` after recording it —
+    an embedder or dense step failing under the ``kind="any"`` fallback."""
+
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+        self.queries: list[SearchQuery] = []
+
+    async def search(self, query: SearchQuery) -> SearchResponse:
+        self.queries.append(query)
+        raise self.error
+
+    async def ranked(self, query: SearchQuery) -> ChunkList:
+        self.queries.append(query)
+        raise self.error
 
 
 class FakeLookup:

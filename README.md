@@ -109,9 +109,11 @@ dead end. Three conventions travel with every result:
 - **Routing suggestions.** Dead ends carry a fixed `[suggestion: …]` line with
   the escape hatch: a zero-hit `grep` points conceptual queries at
   `search_codebase`, a truncated `grep` shows how to narrow (`path=` / `glob=` /
-  `head_limit=`), and zero-hit searches point back to `get_overview`. The prefix
-  is deterministic, so transcripts always distinguish a server nudge from the
-  agent's own routing.
+  `head_limit=`), and zero-hit searches point back to `get_overview`. A
+  `kind="api"` search that matches no symbol answers with the ordinary
+  `kind="any"` results for the same query, under a `[suggestion: …]` line that
+  says so. The prefix is deterministic, so transcripts always distinguish a
+  server nudge from the agent's own routing.
 
 All four are on by default and tunable under `output.envelope`,
 `output.next_pointers`, and `output.suggestions.*` in your `pydocs-mcp.yaml`.

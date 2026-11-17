@@ -2,6 +2,12 @@
 
 **Status:** Accepted · **Date:** 2026-07-18 · **Phase:** 1
 
+**Amended by ADR 0027:** on a `search_codebase(kind="api")` zero hit the server
+serves the same request's `kind="any"` results under a fixed label, behind
+`output.suggestions.api_zero_hit_fallback_any` (default on); while that flag is
+on, the `api_zero_hit_retry_any` hint does not fire. The grep rejection of a
+server-executed substitution stands.
+
 - **Decision area:** D3 of the Phase 1 owner spec ("externalized optimizable surface &
   deterministic harness behavior")
 - **Siblings:** the other Phase 1 ADRs in this directory (description source;
