@@ -199,6 +199,22 @@ def test_a_classic_x86_type_the_compute_api_reports_no_architecture_for_is_launc
     assert [request.machine_type for request in harness.cloud.created] == [machine_type]
 
 
+def test_a_refusal_never_blames_an_architecture_the_compute_api_did_not_report(
+    harness: LaunchHarness, capsys: Capsys
+) -> None:
+    harness.cloud.machine_types["n2-standard-4"] = MachineTypeFacts(
+        name="n2-standard-4", architecture=None, guest_cpus=4, memory_mb=16384
+    )
+
+    result = harness.launch(capsys, "cpu-smoke", _spec(machine_type="n2-standard-4"))
+
+    _assert_refused_before_any_write(harness, result)
+    assert (
+        "got 'n2-standard-4' (4 vCPU, 16384 MB, no architecture reported, read as X86_64)"
+        in result.err
+    )
+
+
 def test_a_machine_type_above_the_floor_is_accepted(harness: LaunchHarness, capsys: Capsys) -> None:
     result = harness.launch(capsys, "cpu-smoke", _spec(machine_type="n2-highmem-8"))
 

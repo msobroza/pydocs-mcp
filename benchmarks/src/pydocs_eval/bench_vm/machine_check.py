@@ -45,17 +45,23 @@ def _check_floor(facts: MachineTypeFacts) -> None:
     )
     if not under_floor:
         return
-    architecture = facts.architecture or "no architecture reported"
     raise LaunchRefused(
         f"machine_type: got {facts.name!r} ({facts.guest_cpus} vCPU, {facts.memory_mb} MB, "
-        f"{architecture}), expected {REQUIRED_ARCHITECTURE} with at least {MIN_GUEST_CPUS} vCPU "
-        f"and {MIN_MEMORY_MB} MB (ADR 0014's floor)"
+        f"{_architecture_as_read(facts)}), expected {REQUIRED_ARCHITECTURE} with at least "
+        f"{MIN_GUEST_CPUS} vCPU and {MIN_MEMORY_MB} MB (ADR 0014's floor)"
     )
 
 
 def _reports_another_architecture(facts: MachineTypeFacts) -> bool:
     # None is the classic x86 families' answer, never an Arm type's (#434).
     return facts.architecture is not None and facts.architecture != REQUIRED_ARCHITECTURE
+
+
+def _architecture_as_read(facts: MachineTypeFacts) -> str:
+    """What the API reported; for none, how it was read, so a size refusal never blames it."""
+    if facts.architecture is None:
+        return f"no architecture reported, read as {REQUIRED_ARCHITECTURE}"
+    return facts.architecture
 
 
 def _gpu_attachment(facts: MachineTypeFacts, gpu: GpuRequest | None) -> GpuAttachment | None:
