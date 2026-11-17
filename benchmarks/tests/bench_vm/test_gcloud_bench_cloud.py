@@ -196,6 +196,15 @@ def test_the_create_argv_carries_the_bench_vm_shape() -> None:
     }
 
 
+def test_the_create_argv_names_the_boot_disk_type_rather_than_take_gclouds_default() -> None:
+    cloud, runner = _cloud(ok())
+
+    cloud.create_instance(_request(boot_disk_type=BootDiskType.PD_BALANCED))
+
+    # Unnamed, gcloud creates pd-standard, which G2 machine types refuse.
+    assert "--boot-disk-type=pd-balanced" in runner.calls[0].argv
+
+
 def test_a_gpu_the_machine_type_does_not_carry_is_attached_explicitly() -> None:
     cloud, runner = _cloud(ok(), ok())
 
