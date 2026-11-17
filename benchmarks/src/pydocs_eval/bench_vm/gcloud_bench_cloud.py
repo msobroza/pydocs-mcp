@@ -83,7 +83,9 @@ _DOWNLOAD_TIMEOUT_S = 1800.0
 # call's, so curl reports the timeout rather than being killed.
 _METADATA_TIMEOUT_S = 15.0
 _METADATA_CURL_MAX_TIME_S = 10
-_METADATA_SERVER_URL = "http://metadata.google.internal/computeMetadata/v1/"
+# The metadata server's fixed link-local address, as for the container's gcloud
+# (host/startup.sh): a lookup of metadata.google.internal can fail at boot (#434).
+_METADATA_SERVER_URL = "http://169.254.169.254/computeMetadata/v1/"
 # `curl -f` exits 22 on an HTTP error status; 404 means the key is unset.
 _CURL_HTTP_404 = re.compile(r"returned error: 404\b")
 
@@ -303,14 +305,15 @@ class GcloudBenchCloud(GcloudCacheTransfers, GcloudImageBuilds):
             "Metadata-Flavor: Google",
             _METADATA_SERVER_URL + path,
         )
+        what = f"reading instance metadata {path}"
+        answer = self._curl(argv, _METADATA_TIMEOUT_S, what)
         try:
-            completed = self._bounded(argv, _METADATA_TIMEOUT_S, program="curl")
-        except BenchCloudError as exc:
-            raise BenchCloudError(f"reading instance metadata {path}: {exc}") from None
-        if completed.returncode != 0 and _CURL_HTTP_404.search(completed.stderr_text):
-            return None
-        self._raise_unless_ok(completed, f"reading instance metadata {path}")
-        return completed.stdout.decode("utf-8")
+            return None if answer is None else answer.decode("utf-8")
+        except UnicodeDecodeError:
+            # The decode error would quote the bytes, a token among them.
+            raise BenchCloudError(
+                f"{what}: got bytes that are not UTF-8, expected UTF-8 text"
+            ) from None
 
     def delete_instance(self, project: str, zone: str, name: str) -> None:
         argv = ("compute", "instances", "delete", name, f"--zone={zone}", f"--project={project}")
@@ -327,13 +330,8 @@ class GcloudBenchCloud(GcloudCacheTransfers, GcloudImageBuilds):
         token_answer = self.read_instance_metadata(VM_ACCESS_TOKEN_METADATA_PATH)
         header = bearer_header_from(token_answer, what)
         argv = compute_delete_argv(project, zone, name)
-        try:
-            completed = self._bounded(argv, COMPUTE_DELETE_TIMEOUT_S, program="curl", stdin=header)
-        except BenchCloudError as exc:
-            raise BenchCloudError(f"{what}: {exc}") from None
-        if completed.returncode != 0 and _CURL_HTTP_404.search(completed.stderr_text):
-            return  # gone already: an earlier delete landed
-        self._raise_unless_ok(completed, what)
+        # An answer of None is a 404: the VM is gone already, an earlier delete landed.
+        self._curl(argv, COMPUTE_DELETE_TIMEOUT_S, what, stdin=header)
 
     def access_secret(self, project: str, secret_id: str) -> str:
         argv = (
@@ -392,6 +390,19 @@ class GcloudBenchCloud(GcloudCacheTransfers, GcloudImageBuilds):
     ) -> CompletedCommand:
         argv = ("gcloud", *args, "--quiet")
         return self._bounded(argv, timeout_s, program="gcloud", stdin=stdin, runner=runner)
+
+    def _curl(
+        self, argv: Sequence[str], timeout_s: float, what: str, *, stdin: bytes | None = None
+    ) -> bytes | None:
+        """curl's stdout, ``None`` on an HTTP 404; ``BenchCloudError`` naming ``what`` otherwise."""
+        try:
+            completed = self._bounded(argv, timeout_s, program="curl", stdin=stdin)
+        except BenchCloudError as exc:
+            raise BenchCloudError(f"{what}: {exc}") from None
+        if completed.returncode != 0 and _CURL_HTTP_404.search(completed.stderr_text):
+            return None
+        self._raise_unless_ok(completed, what)
+        return completed.stdout
 
     def _bounded(
         self,

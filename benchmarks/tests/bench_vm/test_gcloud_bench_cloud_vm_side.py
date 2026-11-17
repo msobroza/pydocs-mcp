@@ -69,7 +69,7 @@ def test_a_sync_retries_a_transient_error(tmp_path: Path) -> None:
 # --- instance metadata ----------------------------------------------------------
 
 
-def test_a_metadata_read_asks_the_metadata_server_with_its_flavor_header() -> None:
+def test_a_metadata_read_asks_the_metadata_server_by_its_address_with_its_flavor_header() -> None:
     cloud, runner = _cloud(ok("cpu-smoke-0123abcd"))
 
     value = cloud.read_instance_metadata("instance/attributes/bench-run-id")
@@ -78,15 +78,21 @@ def test_a_metadata_read_asks_the_metadata_server_with_its_flavor_header() -> No
     argv = runner.calls[0].argv
     assert argv[0] == "curl"
     assert "Metadata-Flavor: Google" in argv
-    assert argv[-1] == (
-        "http://metadata.google.internal/computeMetadata/v1/instance/attributes/bench-run-id"
-    )
+    # The address, never the name: a lookup of the name can fail at boot (#434).
+    assert argv[-1] == "http://169.254.169.254/computeMetadata/v1/instance/attributes/bench-run-id"
 
 
 def test_a_metadata_key_the_server_does_not_have_reads_as_none() -> None:
     cloud, _ = _cloud(failed(_CURL_404, returncode=22))
 
     assert cloud.read_instance_metadata("instance/attributes/absent") is None
+
+
+def test_a_metadata_answer_that_is_not_utf8_is_a_cloud_error_naming_the_key() -> None:
+    cloud, _ = _cloud(CompletedCommand(returncode=0, stdout=b"\xff\xfe", stderr=b""))
+
+    with pytest.raises(BenchCloudError, match="instance/name: got bytes that are not UTF-8"):
+        cloud.read_instance_metadata("instance/name")
 
 
 def test_an_unreachable_metadata_server_is_retried_then_a_cloud_error() -> None:
@@ -159,7 +165,7 @@ def test_a_token_delete_asks_the_metadata_server_then_the_compute_api() -> None:
 
     token_read, delete = runner.calls
     assert token_read.argv[-1] == (
-        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
+        "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token"
     )
     assert "Metadata-Flavor: Google" in token_read.argv
     assert delete.argv[0] == "curl"
@@ -182,9 +188,7 @@ def test_the_token_reaches_neither_an_argv_nor_an_error() -> None:
 
 
 def test_a_token_delete_of_a_vm_already_gone_succeeds() -> None:
-    cloud, runner = _cloud(
-        ok(_TOKEN_ANSWER), failed("curl: (22) The requested URL returned error: 404", 22)
-    )
+    cloud, runner = _cloud(ok(_TOKEN_ANSWER), failed(_CURL_404, returncode=22))
 
     cloud.delete_instance_with_metadata_token(*_VM)
 
