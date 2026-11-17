@@ -813,6 +813,20 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Fixed
 
+- **A bench VM boots from a `pd-balanced` disk, so a GPU run is no longer refused
+  when its VM is created** (`bench_vm/launch_plan.py`,
+  `bench_vm/gcloud_instance_create.py`). The launcher named no boot disk type, so
+  gcloud and the Compute API created `pd-standard`, which G2 machine types refuse.
+  `gpu-smoke.yaml` (`g2-standard-8` with one L4) would have failed at
+  `instances create`, after its CUDA image build, and every N2 booted from a hard
+  disk. `VmCreateRequest` now carries `boot_disk_type` (`BootDiskType`). The
+  launcher sets `pd-balanced`, which N2 and G2 both take, for every VM, and the
+  create command passes `--boot-disk-type`. The dry-run plan prints
+  `boot disk: 250 GB pd-balanced, deleted with the VM`. No run-spec key was added,
+  so every run id stays the same. At `europe-west4` list prices, 250 GB costs about
+  two US cents an hour more than `pd-standard`, only while the VM exists. The
+  runbook's GPU quota section now says how the Deep Learning VM boot image may
+  fail on G2 and what the fallback is. (#434)
 - **A seed-on arm seeds the task's question, not the scaffolded prompt.**
   `sample_row_for_task` now carries the task's bare query in an optional
   `question` field beside `rendered_prompt` (the required keys are unchanged),

@@ -161,6 +161,33 @@ CPU runs draw on the region's N2 CPU quota (`n2-standard-8` is 8 vCPUs). If a
 launch fails on a CPU quota, check and request it the same way
 (`quotas.metric~N2_CPUS`).
 
+**The GPU boot image is unconfirmed on G2.** GPU VMs boot the Deep Learning VM
+image family that `gpu_boot_image` pins in `terraform/variables.tf`, with the
+NVIDIA driver and container toolkit preinstalled. Google's documentation
+disagrees on whether such images can boot G2 machine types, which
+`gpu-smoke.yaml` uses: Google Cloud's page on creating a G2 instance says they
+cannot, while the Deep Learning VM pages list L4 GPUs as supported. The
+first GPU run settles it, and if the image does not qualify, it fails in one of
+two ways:
+
+- Compute Engine refuses the image when it creates the VM. The launch records
+  `failed`, with Compute Engine's error in `make bench-vm-status`, and no VM
+  bills.
+- The VM boots, but its host cannot start the GPU container (no working driver
+  or container toolkit). The supervisor never starts, so the record stays
+  `launching`, no log appears, and the VM bills until `max_runtime` (2 hours for
+  the GPU smoke). If `make bench-vm-status` still shows that 15 minutes after the
+  launch, look for `bench_vm_host_failed` in the VM's serial console
+  (`gcloud compute instances get-serial-port-output bench-RUN_ID-1 --zone=ZONE --project=PROJECT_ID`).
+  If it is there, run `make bench-vm-stop RUN=runs/gpu-smoke.yaml`.
+
+Either way, the fallback is the one ADR 0026 names. Bake a custom image once from
+a base that boots on G2, with the NVIDIA driver and the container toolkit
+installed. Set `gpu_boot_image` to its project and family, run
+`terraform apply`, and amend the ADR. Then launch the same spec again. It
+relaunches as the run's next attempt (a run left `launching` is first recorded
+`lost`), and its CUDA image is already built.
+
 ### 5. First launch
 
 A run spec's `git_ref` must resolve to a commit that is reachable from a
@@ -301,6 +328,18 @@ image is missing, Cloud NAT egress and bucket storage. Model-provider spend
 **Spot by default.** `spot: true` is the default and the cheapest capacity; a
 preemption costs only the work since the last completed sync, which re-runs on
 relaunch. `spot: false` runs on standard capacity, which is not preempted.
+
+**The boot disk.** Every bench VM boots from a `pd-balanced` (SSD-backed)
+persistent disk of `disk_gb` (default 250 GB), which exists only while the VM
+does. The launcher always names the type. Left unnamed, gcloud creates
+`pd-standard`, which the G2 machine types of GPU runs refuse, and which would
+put a CPU run's index builds on a hard disk. At `europe-west4` list prices when
+this was written ($0.110 per GB-month for `pd-balanced`, $0.044 for
+`pd-standard`), 250 GB costs about $0.038 an hour instead of $0.015. That is
+about two US cents an hour more, or $0.14 for a run that uses all of a 6-hour
+`max_runtime`. A machine series that takes only Hyperdisk, such as N4 or C4,
+cannot boot from `pd-balanced`, so a run spec that names one fails when the VM
+is created.
 
 **Paid kinds.** `agent_track` and `before_after` spend provider money, so their
 specs must set `confirm_spend: true` and `max_usd`, which reaches the kind's
