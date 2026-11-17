@@ -268,8 +268,8 @@ run's state directory, and without `--run-id`, so the reference never takes the
 resume path under test. It needs a dev install of the repository with the eval
 suite's base dependencies, the run's commit checked out (`make bench-vm-status`
 shows it once launched), and network for the release (about 12 MB) and the
-FastEmbed model. It takes about as long as the run, so start it while the run
-goes:
+FastEmbed model. It takes about as long as the run, so start it in a second
+terminal right after step 1 below:
 
 ```bash
 PYTHONPATH=benchmarks/src python -m pydocs_eval.bench_vm local-command infra/bench-vm/runs/cpu-resume-smoke.yaml
@@ -288,7 +288,7 @@ make bench-vm-compare RUN=runs/cpu-resume-smoke.yaml   #    lists "N task record
 make bench-vm-stop RUN=runs/cpu-resume-smoke.yaml      # 3. stop once N is at least 1 and well short of 30
 make bench-vm-status RUN=runs/cpu-resume-smoke.yaml    # 4. shows stopped once the supervisor has pushed the state
 make bench-vm-pull RUN=runs/cpu-resume-smoke.yaml      # 5. the partial results
-make bench-vm-compare RUN=runs/cpu-resume-smoke.yaml   #    exit 1: "got no final aggregate block in the run's ... (N task records)"
+make bench-vm-compare RUN=runs/cpu-resume-smoke.yaml   #    the partial leg: "N task records, no final aggregate block yet"
 make bench-vm RUN=runs/cpu-resume-smoke.yaml           # 6. relaunch: attempt 2 resumes from the synced state
 make bench-vm-status RUN=runs/cpu-resume-smoke.yaml    #    until it shows succeeded
 make bench-vm-pull RUN=runs/cpu-resume-smoke.yaml      # 7. the finished run
@@ -309,8 +309,9 @@ line on stderr. Wall-clock latencies (`indexing_seconds_*`,
 `search_seconds_*`) are listed with both values and never compared. A missing
 or unfinished leg on either side is named, and a side with nothing to compare
 never passes. The local reference's index cache entries stay under
-`~/.pydocs-mcp/bench/` (a few MB per needle); `python -m
-pydocs_eval.bench_cache_cli evict` removes every entry there.
+`~/.pydocs-mcp/bench/` (a few MB per needle, more for the largest
+repositories); `python -m pydocs_eval.bench_cache_cli evict` removes every
+entry there.
 
 If the aggregates differ, first read the run tags `compare` prints for each
 side. A note says when the two sides ran different commits: check out the
