@@ -47,6 +47,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pydocs_eval.reporting.aggregate_blocks import (
+    compare_aggregate_blocks,
+    final_aggregate_block,
+    is_latency_name,
+)
 from pydocs_eval.sweep import LATENCY_KEYS
 
 # WHY: this script runs from its file path, not as an installed module, and the
@@ -58,13 +63,10 @@ from runner_resume_smoke_checks import (
     SmokeFailure,
     check_kill,
     check_resume,
-    compare_aggregate_blocks,
     count_fixture_tasks,
     count_task_records,
     derive_fixture,
     events_of,
-    final_aggregate_block,
-    is_latency_name,
     kill_landed_in_window,
     parse_leg_file,
     records_after_last_resume,
