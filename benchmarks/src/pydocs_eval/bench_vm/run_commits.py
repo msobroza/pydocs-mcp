@@ -92,32 +92,43 @@ class GitCheckout:
         return name.removeprefix(_LOCAL_BRANCH_PREFIX)
 
     def remote_tracking_counterparts(self, branch: str) -> tuple[RemoteTrackingBranch, ...]:
-        """The remote-tracking branches local ``branch`` pairs with, those that exist.
+        """The remote-tracking branches local ``branch`` pairs with.
 
-        Its configured upstream when that is a remote-tracking branch; without
-        one, ``refs/remotes/<remote>/<branch>`` of every remote. Never contacts
-        a remote: these are the refs the last ``git fetch`` left.
+        Its configured upstream while that remote-tracking branch exists;
+        otherwise (no upstream, a local one, or one pruned since, as after the
+        remote renamed the branch) ``refs/remotes/<remote>/<branch>`` of every
+        remote that has one. Never contacts a remote: these are the refs the
+        last ``git fetch`` left.
         """
-        names = self._counterpart_names(branch)
-        if not names:
+        upstream = self._existing_remote_tracking((self._upstream_of(branch),))
+        if upstream:
+            return upstream
+        names = (f"{_REMOTE_TRACKING_PREFIX}{remote}/{branch}" for remote in self._remote_names())
+        return self._existing_remote_tracking(tuple(names))
+
+    def _upstream_of(self, branch: str) -> str:
+        """``branch``'s configured upstream, by full name; empty when it has none."""
+        listed = self._git(
+            "for-each-ref", "--format=%(upstream)", f"{_LOCAL_BRANCH_PREFIX}{branch}"
+        )
+        return listed.stdout.strip()
+
+    def _existing_remote_tracking(self, names: tuple[str, ...]) -> tuple[RemoteTrackingBranch, ...]:
+        """Those of ``names`` that are remote-tracking branches this repository holds."""
+        wanted = tuple(name for name in names if name.startswith(_REMOTE_TRACKING_PREFIX))
+        if not wanted:
             return ()
-        listed = self._git("for-each-ref", "--format=%(refname) %(objectname)", *names)
+        listed = self._git("for-each-ref", "--format=%(refname) %(objectname)", *wanted)
         found = (line.partition(" ") for line in listed.stdout.splitlines())
         # A pattern also matches refs below it (`origin/main/x`): keep exact names only.
         return tuple(
             RemoteTrackingBranch(name=name, commit=commit)
             for name, _, commit in found
-            if name in names
+            if name in wanted
         )
 
-    def _counterpart_names(self, branch: str) -> tuple[str, ...]:
-        upstream = self._git(
-            "for-each-ref", "--format=%(upstream)", f"{_LOCAL_BRANCH_PREFIX}{branch}"
-        ).stdout.strip()
-        if upstream.startswith(_REMOTE_TRACKING_PREFIX):
-            return (upstream,)
-        remotes = self._git("remote").stdout.split()
-        return tuple(f"{_REMOTE_TRACKING_PREFIX}{remote}/{branch}" for remote in remotes)
+    def _remote_names(self) -> list[str]:
+        return self._git("remote").stdout.split()
 
     def commits_ahead_behind(self, local: str, remote: str) -> tuple[int, int]:
         """Commits ``local`` has that ``remote`` lacks, and commits ``remote`` has that ``local`` lacks."""
@@ -133,7 +144,7 @@ class GitCheckout:
     def remote_tracking_refs_containing(self, commit: str) -> tuple[str, ...]:
         """Full names (``refs/remotes/<remote>/<branch>``) of the remote-tracking branches holding ``commit``."""
         completed = self._git(
-            "for-each-ref", "--contains", commit, "--format=%(refname)", "refs/remotes/"
+            "for-each-ref", "--contains", commit, "--format=%(refname)", _REMOTE_TRACKING_PREFIX
         )
         return tuple(line for line in completed.stdout.splitlines() if line.strip())
 
@@ -144,8 +155,10 @@ class GitCheckout:
         rewrite (``git ls-remote --get-url`` never contacts the remote): the
         repository its remote-tracking branches are fetched from.
         """
-        names = self._git("remote").stdout.split()
-        return {name: self._git("ls-remote", "--get-url", name).stdout.strip() for name in names}
+        return {
+            name: self._git("ls-remote", "--get-url", name).stdout.strip()
+            for name in self._remote_names()
+        }
 
     def object_type_at(self, commit: str, path: str) -> str | None:
         """``blob`` or ``tree`` for ``path`` at ``commit``; ``None`` when it is absent."""

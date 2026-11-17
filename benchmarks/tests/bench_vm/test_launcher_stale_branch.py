@@ -207,6 +207,22 @@ def test_a_configured_upstream_wins_over_a_same_named_remote_tracking_branch(
     assert _frozen_commit(harness, result) == local
 
 
+def test_a_configured_upstream_since_pruned_falls_back_to_the_same_named_branch(
+    harness: LaunchHarness, capsys: Capsys
+) -> None:
+    """As after a remote renamed the branch: ``main`` still tracks the gone ``origin/old``."""
+    run_git(harness.repo.path, "push", "-q", "origin", "main:old")
+    run_git(harness.repo.path, "branch", "-q", "--set-upstream-to=origin/old", "main")
+    run_git(harness.repo.path, "push", "-q", "origin", "--delete", "old")
+    local, remote = harness.repo.fall_behind_origin()
+
+    result = harness.launch(capsys, "cpu-smoke", _spec())
+
+    refusal = _refusal(harness, result)
+    assert f"local branch main at commit {local}" in refusal
+    assert f"its remote-tracking branch origin/main at commit {remote}" in refusal
+
+
 def test_a_remote_tracking_branch_below_the_name_is_not_its_counterpart(
     harness: LaunchHarness, capsys: Capsys
 ) -> None:
