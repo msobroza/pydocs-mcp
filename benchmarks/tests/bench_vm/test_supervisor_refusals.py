@@ -4,8 +4,9 @@ A refused or unreadable run is refused before any child starts and before any
 record write. Once the host facts are read the VM knows which instance it is,
 so it deletes itself, unless the spec copy it can read says
 ``self_delete: false``; otherwise it would idle until ``max_runtime``, the
-platform's backstop. With no host facts it cannot tell which VM it is, and
-deletes nothing.
+platform's backstop. That holds when gcloud has no credentials too: the
+delete then goes with the metadata server's token. With no host facts it
+cannot tell which VM it is, and deletes nothing.
 """
 
 from __future__ import annotations
@@ -153,6 +154,71 @@ def test_a_stale_running_write_is_refused_before_the_child_starts(
     assert supervise_harness.record(run_id).status is RunStatus.LAUNCHING
     # Another writer owns the run now: this VM has nothing left to do.
     assert supervise_harness.launch.cloud.deleted == [_own_vm(supervise_harness)]
+
+
+# --- gcloud without credentials: the VM still deletes itself ---------------------------
+
+
+def _gcloud_has_no_credentials(harness: SuperviseHarness, run_id: str) -> None:
+    """Every gcloud call fails as attempt 1 of the #434 CPU smoke did; the metadata server works."""
+    cloud, vm = harness.launch.cloud, harness.vm
+    no_account = "You do not currently have an active account selected."
+    record_uri = harness.launch.record_uri(run_id)
+    for uri in (record_uri, record_uri.rsplit("/", 1)[0] + "/" + SPEC_COPY_OBJECT_NAME):
+        cloud.read_errors[uri] = BenchCloudError(
+            f"describing {uri} failed (exit 1): ERROR: (gcloud.storage.objects.describe) "
+            + no_account
+        )
+    cloud.delete_errors[vm.name] = BenchCloudError(
+        f"deleting {vm.name} in {vm.zone} failed (exit 1): "
+        f"ERROR: (gcloud.compute.instances.delete) {no_account}"
+    )
+
+
+def test_a_supervisor_whose_gcloud_has_no_credentials_deletes_its_vm_with_the_metadata_token(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_id = supervise_harness.launch_run(capsys, "cpu-smoke", retrieval_spec())
+    _gcloud_has_no_credentials(supervise_harness, run_id)
+    before = _record_bytes(supervise_harness, run_id)
+
+    result = supervise_harness.supervise(capsys, run_id)
+
+    _assert_nothing_ran(result)
+    cloud = supervise_harness.launch.cloud
+    assert cloud.deleted == [_own_vm(supervise_harness)]
+    assert cloud.operations()[-2:] == ["delete_instance", "delete_instance_with_metadata_token"]
+    events = [json.loads(line) for line in result.err.strip().splitlines()]
+    retried = [
+        e for e in events if e["event"] == "bench_vm_self_delete_retried_with_metadata_token"
+    ]
+    assert len(retried) == 1
+    # gcloud's own words, verbatim: the log is the only record of why it failed.
+    assert "You do not currently have an active account selected." in retried[0]["detail"]
+    # Nothing could be written: the launcher records the attempt lost on the next launch.
+    assert _record_bytes(supervise_harness, run_id) == before
+
+
+def test_a_vm_whose_two_deletes_both_fail_logs_both_errors_and_still_ends(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_id = supervise_harness.launch_run(capsys, "cpu-smoke", retrieval_spec())
+    _gcloud_has_no_credentials(supervise_harness, run_id)
+    vm = supervise_harness.vm
+    supervise_harness.launch.cloud.token_delete_errors[vm.name] = BenchCloudError(
+        f"deleting {vm.name} in {vm.zone} with the metadata server's token failed (exit 22): "
+        "curl: (22) The requested URL returned error: 403"
+    )
+
+    result = supervise_harness.supervise(capsys, run_id)
+
+    _assert_nothing_ran(result)
+    assert supervise_harness.launch.cloud.deleted == []
+    events = [json.loads(line) for line in result.err.strip().splitlines()]
+    (failed,) = [e for e in events if e["event"] == "bench_vm_self_delete_failed"]
+    assert "You do not currently have an active account selected." in failed["detail"]
+    assert "returned error: 403" in failed["detail"]
+    assert events[-1]["event"] == "bench_vm_supervisor_failed"
 
 
 # --- no host facts: the VM cannot tell which instance it is ----------------------------

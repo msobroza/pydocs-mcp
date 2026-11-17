@@ -108,7 +108,8 @@ class FakeBenchCloud:
     ``lost_answer_uris`` makes the next write of a URI land but raise, the way a
     write whose follow-up describe failed does, and ``lost_answer_when`` does so
     for the next write of a URI whose bytes match; ``delete_errors`` makes deleting
-    a named VM raise. ``secrets`` is Secret Manager, keyed by secret id; a read
+    a named VM raise, and ``token_delete_errors`` does so for the delete with the
+    metadata server's token. ``secrets`` is Secret Manager, keyed by secret id; a read
     records the secret id, never the value. On the cache bucket,
     ``list_errors`` makes listing that prefix raise,
     ``upload_errors`` makes an archive upload to that URI raise, and
@@ -152,6 +153,7 @@ class FakeBenchCloud:
     deleted: list[tuple[str, str, str]] = field(default_factory=list)
     # A delete of each named VM raises this instead (the VM stays listed).
     delete_errors: dict[str, Exception] = field(default_factory=dict)
+    token_delete_errors: dict[str, Exception] = field(default_factory=dict)
     secrets: dict[str, str] = field(default_factory=dict)
     upload_errors: dict[str, Exception] = field(default_factory=dict)
     list_errors: dict[str, Exception] = field(default_factory=dict)
@@ -352,8 +354,15 @@ class FakeBenchCloud:
 
     def delete_instance(self, project: str, zone: str, name: str) -> None:
         self._record("delete_instance", project=project, zone=zone, name=name)
-        if name in self.delete_errors:
-            raise self.delete_errors[name]
+        self._delete(self.delete_errors, project, zone, name)
+
+    def delete_instance_with_metadata_token(self, project: str, zone: str, name: str) -> None:
+        self._record("delete_instance_with_metadata_token", project=project, zone=zone, name=name)
+        self._delete(self.token_delete_errors, project, zone, name)
+
+    def _delete(self, errors: dict[str, Exception], project: str, zone: str, name: str) -> None:
+        if name in errors:
+            raise errors[name]
         self.deleted.append((project, zone, name))
         # A deleted VM no longer lists, as after any other way a VM goes.
         self.vanished.add(name)

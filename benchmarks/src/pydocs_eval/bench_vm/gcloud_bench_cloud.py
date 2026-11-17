@@ -6,7 +6,9 @@ the laptop, or as the VM's service account (from the metadata server) on a
 bench VM — the environment it passes drops every credential-file override,
 and no key file is read, written or referenced. Instance-metadata reads are
 plain ``curl`` requests to the metadata server, under the same timeout and
-bounded retry. Every call has a timeout and a bounded
+bounded retry. So is the self-delete's fallback for a gcloud that cannot
+authenticate: a Compute API delete with the metadata server's token
+(``compute_api_delete``). Every call has a timeout and a bounded
 retry on transient errors (``bounded_command.run_bounded``).
 
 gcloud reports "not found", "precondition failed" and "no capacity" only in
@@ -44,6 +46,12 @@ from pydocs_eval.bench_vm.bounded_command import (
     CompletedCommand,
     run_bounded,
     run_subprocess,
+)
+from pydocs_eval.bench_vm.compute_api_delete import (
+    COMPUTE_DELETE_TIMEOUT_S,
+    VM_ACCESS_TOKEN_METADATA_PATH,
+    bearer_header_from,
+    compute_delete_argv,
 )
 from pydocs_eval.bench_vm.gcloud_cache_transfers import GcloudCacheTransfers
 from pydocs_eval.bench_vm.gcloud_calls import GCLOUD_READ_TIMEOUT_S
@@ -313,6 +321,19 @@ class GcloudBenchCloud(GcloudCacheTransfers, GcloudImageBuilds):
         if completed.returncode == 0 or retried_and_gone:
             return
         self._raise_unless_ok(completed, f"deleting {name} in {zone}")
+
+    def delete_instance_with_metadata_token(self, project: str, zone: str, name: str) -> None:
+        what = f"deleting {name} in {zone} with the metadata server's token"
+        token_answer = self.read_instance_metadata(VM_ACCESS_TOKEN_METADATA_PATH)
+        header = bearer_header_from(token_answer, what)
+        argv = compute_delete_argv(project, zone, name)
+        try:
+            completed = self._bounded(argv, COMPUTE_DELETE_TIMEOUT_S, program="curl", stdin=header)
+        except BenchCloudError as exc:
+            raise BenchCloudError(f"{what}: {exc}") from None
+        if completed.returncode != 0 and _CURL_HTTP_404.search(completed.stderr_text):
+            return  # gone already: an earlier delete landed
+        self._raise_unless_ok(completed, what)
 
     def access_secret(self, project: str, secret_id: str) -> str:
         argv = (
