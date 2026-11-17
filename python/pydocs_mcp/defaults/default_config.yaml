@@ -215,8 +215,15 @@ output:
     # the kind="any" retry inline (preserved query + non-default selectors,
     # safely escaped) saves one turn of back-and-forth without changing
     # engine semantics. Independently flaggable from search_zero_hit so each
-    # hint's contribution is measurable (ADR 0007).
+    # hint's contribution is measurable (ADR 0007). Superseded while
+    # api_zero_hit_fallback_any is on.
     api_zero_hit_retry_any: true
+    # Hypothesis: a descriptive query sent to kind="api" is answered in the
+    # same turn by the results a default-kind search returns, instead of
+    # waiting for the agent to follow a retry hint. On a kind="api" zero hit
+    # the server runs the same request at kind="any" and serves its rows
+    # under a fixed label (ADR 0027); false restores the hint-only response.
+    api_zero_hit_fallback_any: true
     # Hypothesis: after a checkout the index still serves the previous
     # branch; naming the one command that indexes the checked-out branch
     # (meta.suggestion on search_codebase / get_why / grep, never the text)

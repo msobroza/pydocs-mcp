@@ -91,13 +91,30 @@ def _cli(monkeypatch: pytest.MonkeyPatch, *argv: str) -> int:
 
 
 @pytest.fixture
-def router(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+def indexed_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = _two_branch_project(tmp_path)
     flags = ("--no-inspect", "--skip-deps")
     assert _cli(monkeypatch, "index", str(root), *flags) == 0
     assert _cli(monkeypatch, "index", str(root), *flags, "--branch", FEATURE) == 0
-    db = cache_path_for_project(root.resolve())
-    built, _services = build_routers(AppConfig.load(), db_path=db, surface="mcp")
+    return cache_path_for_project(root.resolve())
+
+
+@pytest.fixture
+def router(indexed_db: Path) -> Any:
+    built, _services = build_routers(AppConfig.load(), db_path=indexed_db, surface="mcp")
+    return built
+
+
+@pytest.fixture
+def router_fallback_off(indexed_db: Path) -> Any:
+    """``router`` over the same bundle with the ADR 0027 ``kind="api"`` zero-hit
+    fallback OFF — the pre-ADR-0027 zero-hit behaviour."""
+    config = AppConfig.load()
+    flags = config.output.suggestions.model_copy(update={"api_zero_hit_fallback_any": False})
+    output = config.output.model_copy(update={"suggestions": flags})
+    built, _services = build_routers(
+        config.model_copy(update={"output": output}), db_path=indexed_db, surface="mcp"
+    )
     return built
 
 
@@ -185,11 +202,31 @@ def test_the_overview_names_the_branch_it_describes(router: Any) -> None:
     assert "· 3 symbols ·" in on_main.text and "· 4 symbols ·" in on_feature.text
 
 
-def test_a_request_naming_no_branch_never_lists_the_other_branch_members(router: Any) -> None:
+def test_a_request_naming_no_branch_never_lists_the_other_branch_members(
+    router_fallback_off: Any,
+) -> None:
+    # Pinned with the ADR 0027 zero-hit fallback OFF; the twin below runs it ON.
+    router = router_fallback_off
     package_card = _call(router, "get_symbol", SymbolInput(target="__project__")).text
     assert "gamma" not in package_card and "alpha" in package_card
     by_name = SearchInput(query="gamma", kind="api")
     assert _call(router, "search_codebase", by_name).items == ()
+    assert _names(_call(router, "search_codebase", by_name, FEATURE).items) == {"app.core.gamma"}
+
+
+def test_a_request_naming_no_branch_never_falls_back_to_the_other_branch(router: Any) -> None:
+    """ADR 0027 (shipped config, fallback ON): main's kind="api" zero hit is
+    answered by main's kind="any" rows only — no gamma member, no chunk of the
+    feature-only text — while feature/x's member hit is unchanged."""
+    by_name = SearchInput(query="gamma", kind="api")
+    on_main = _call(router, "search_codebase", by_name)
+    assert on_main.items and on_main.meta["suggestion"].startswith(
+        '[suggestion: kind="api" matched nothing — showing kind="any" results'
+    )
+    assert "app.core.gamma" not in _names(on_main.items)
+    assert "Gamma exists only on the feature branch" not in on_main.text
+    assert "Beta triples a row" not in on_main.text
+    assert on_main.meta["branch"] == MAIN
     assert _names(_call(router, "search_codebase", by_name, FEATURE).items) == {"app.core.gamma"}
 
 
