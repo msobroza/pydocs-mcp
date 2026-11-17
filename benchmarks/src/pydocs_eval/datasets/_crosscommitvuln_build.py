@@ -16,6 +16,7 @@ import re
 from collections.abc import Iterable, Sequence
 
 from .base_dataset import GoldAnswer
+from .repo_coordinates import owner_name_of_repo_url
 
 log = logging.getLogger(__name__)
 
@@ -122,11 +123,7 @@ def is_included(annotation: dict) -> bool:
 
 def repo_slug(annotation: dict) -> str:
     """``org/name`` slug from the annotation's GitHub URL."""
-    url = str(annotation.get("repo", "")).rstrip("/")
-    parts = url.removesuffix(".git").split("/")
-    if len(parts) < 2 or not parts[-1] or not parts[-2]:
-        raise ValueError(f"invalid repo url: got {url!r}, expected …github.com/<org>/<name>")
-    return f"{parts[-2]}/{parts[-1]}"
+    return owner_name_of_repo_url(str(annotation.get("repo", "")))
 
 
 def mine_banned_tokens(annotation: dict) -> tuple[str, ...]:

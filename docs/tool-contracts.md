@@ -176,6 +176,24 @@ one additional meta field, following the §2.2 additive-extension precedent (ADR
   `search_zero_hit` on the same response — wins the single-string `meta.suggestion` field
   (both rules' lines appear in the body; the structured suggestion-fired log records both
   fires). See ADR 0007 for the precedence rule.
+  *(amended per ADR 0027)* `api_zero_hit_fallback_any` (default on; "every flag off"
+  above includes it) fires on `search_codebase(kind="api")` responses whose member
+  lookup returned no rows. The response then carries the `kind="any"` results of the same
+  request (same `query`, `scope`, `package`, `project`, `limit` and branch), with
+  `[suggestion: kind="api" matched nothing — showing kind="any" results for the same query and filters]`
+  as the first body line (after the freshness header, when one renders) and in
+  `meta.suggestion`. When those results are empty too, the `kind="api"` zero-hit body ends
+  with
+  `[suggestion: kind="api" matched nothing, and kind="any" found nothing for the same query and filters either]`,
+  which `meta.suggestion` carries. On the responses this rule answers,
+  `api_zero_hit_retry_any` does not fire, and `search_zero_hit` fires only when the
+  `kind="any"` results are empty too. A response whose member lookup returned rows —
+  including one whose token budget rendered none of them — keeps the rules above
+  unchanged. This flag is the one exception to the invariance stated next: with it on,
+  the `items` rows of a `kind="api"` zero hit are the `kind="any"` rows of the same
+  request; tool names, parameters and schemas, and every other response, stay invariant,
+  and with it off the invariance holds as stated. See ADR 0027 for the precedence and
+  failure rules.
   Purely additive: names, parameters, items rows, and the rest of the envelope are
   invariant under any flag combination.
 
@@ -266,6 +284,17 @@ exact string/regex → `grep`.*
 | `limit` | `int \| None` | YAML-wired: `search.output.default_limit` = 10 | Max results, honoured by the retrieval pipeline itself (`SearchQuery.max_results`); `ge=1`. A request above `search.output.max_limit` = 1000 is clamped to it, not rejected (`clamp_search_limit`, `mcp_inputs.py`). Any row a cap drops — the clamp included — sets `meta.truncated` and is named in the truncation footer. Omit to get the deployment default. |
 | `project` | `str` | `""` | Corpus selector. |
 
+- **`kind="api"` zero hit:** *(amended per ADR 0027)* with
+  `output.suggestions.api_zero_hit_fallback_any` on (the shipped default), a `kind="api"`
+  request whose member lookup returns no rows is answered with the rows a `kind="any"`
+  request carrying the same `query`, `scope`, `package`, `project`, `limit` and branch
+  returns, under the fixed `[suggestion:` label of §2.3. `items[]` keeps each row's own
+  `kind` (`chunk`, or `member`), so a fallback row is never reported as a symbol row. A
+  client that reads an empty `items[]` on `kind="api"` as "no such symbol" must read
+  `meta.suggestion` (the label) or each row's `kind` instead. A request whose lookup
+  returns rows is unaffected. With the flag off, a zero hit returns no rows, as before.
+  The `kind` parameter's name, type, `Literal` set and default are unchanged: only what a
+  zero-hit `kind="api"` response contains.
 - **Backend:** dense retrieval + graph expansion by default
   (`python/pydocs_mcp/pipelines/chunk_search_graph.yaml`); YAML predicate routing sends
   `kind=decision` and `scope=deps` slices to BM25∥dense fusion presets

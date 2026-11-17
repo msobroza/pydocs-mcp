@@ -7,6 +7,7 @@ import asyncio
 import dataclasses
 import inspect
 import logging
+import re
 
 import pytest
 
@@ -14,8 +15,13 @@ pytest.importorskip("langchain_openai")
 
 import httpx
 import langchain_openai
+import openai
 import openai._base_client as sdk_base
 
+from pydocs_mcp.harness.ask_your_docs.activity_labels import (
+    failure_reason,
+    labelled_failure_class_name,
+)
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     BearerRejectedError,
     EnvironmentKeyBearer,
@@ -37,6 +43,11 @@ from pydocs_mcp.harness.ask_your_docs.llm_connection import (
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AuthMode, LlmConnectionConfig
 
 from ._connection_fakes import FakeClock, FakeTokenService, RecordingTransport, RotatingBearer
+from ._reasoning_fakes import (
+    STREAM_CHUNK_TIMEOUT_ENV,
+    FakeStallingStreamEndpoint,
+    needs_the_stream_chunk_timer,
+)
 
 _URL = "http://llm.test/v1"
 _TOKEN_URL = "http://localhost:8899/access-token"
@@ -331,7 +342,21 @@ def test_run_connection_test_passes_and_fails_redacted() -> None:
     assert "tok-" not in result and "rejected Bearer" not in result
     down = RecordingTransport([httpx.ConnectError("refused")])
     result = asyncio.run(run_connection_test(connection, bearer, transport=down.transport))
-    assert result.startswith("test failed: APIConnectionError:")
+    # The caption names the class actually raised: the SDK's APIConnectionError, or from
+    # langchain-openai 1.6 its OpenAIConnectionError wrapper, a subclass.
+    raised = re.fullmatch(r"test failed: (\w+): .*", result)
+    assert raised is not None, result
+    assert raised[1] in _connection_error_class_names(), result
+
+
+def _connection_error_class_names() -> set[str]:
+    """``openai.APIConnectionError`` and every subclass loaded so far, by name."""
+    pending, names = [openai.APIConnectionError], set()
+    while pending:
+        error_class = pending.pop()
+        names.add(error_class.__name__)
+        pending.extend(error_class.__subclasses__())
+    return names
 
 
 def test_sync_invoke_renews_on_401_through_the_sync_client() -> None:
@@ -444,3 +469,29 @@ def test_never_the_responses_route(monkeypatch) -> None:
         NoBearer(),
     )
     assert recorder.requests[-1].url.path.endswith("/chat/completions")
+
+
+@needs_the_stream_chunk_timer
+def test_a_real_stalled_stream_is_labelled_did_not_answer_in_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No block, so upstream's timer runs at the env var's small limit and raises its real
+    StreamChunkTimeoutError, which the panel labels through its TimeoutError base."""
+    monkeypatch.setenv(STREAM_CHUNK_TIMEOUT_ENV, "0.3")
+    endpoint = FakeStallingStreamEndpoint(stall_seconds=2.0)
+    connection = _connection({"base_url": _URL, "model": "m"})
+    llm = build_chat_model(connection, NoBearer(), transport=endpoint.transport)
+
+    async def stream_reply() -> None:
+        async for _chunk in llm.astream("hi"):
+            pass
+
+    with pytest.raises(langchain_openai.StreamChunkTimeoutError) as excinfo:
+        asyncio.run(stream_reply())
+
+    assert type(excinfo.value).__name__ == "StreamChunkTimeoutError"
+    assert excinfo.value.timeout_s == 0.3  # the env var's limit fired, not the stall's end
+    assert excinfo.value.chunks_received == 1
+    assert failure_reason(labelled_failure_class_name(excinfo.value)) == (
+        "the model endpoint did not answer in time"
+    )

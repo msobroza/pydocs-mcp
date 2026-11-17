@@ -31,7 +31,8 @@ def serve_connection(
     :func:`~pydocs_mcp.harness.core.serve_child_env.serve_child_env`, with
     ``subprocess_env`` (the ADR 0009 trace overlay) on top;
     ``seal_config_tier`` (the eval binding) withholds the shell's ``PYDOCS_*``
-    configuration and ``OPENAI_BASE_URL`` / ``LLM_MODEL``.
+    configuration and ``OPENAI_BASE_URL`` / ``LLM_MODEL`` /
+    ``OPENAI_CUSTOM_HEADERS``.
 
     Example:
         >>> serve_connection("/ws", "/cfg.yaml")["args"][-5:]
