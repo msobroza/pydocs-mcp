@@ -164,6 +164,20 @@ def test_the_registry_login_takes_the_metadata_token_on_stdin_and_never_logs_it(
     assert all(_TOKEN not in json.dumps(c["argv"]) for c in boot.calls)
 
 
+def test_the_supervisor_reaches_the_metadata_server_by_its_address_not_its_name(
+    tmp_path: Path,
+) -> None:
+    # Cloud SDK 592 does not retry a failed lookup of metadata.google.internal: gcloud
+    # then reads itself as off GCE, with no account, for ten minutes (#434).
+    boot = _boot(tmp_path, _image("cpu"))
+
+    (run,) = boot.docker("run")
+    options = run[: run.index(_image("cpu"))]
+    env = [options[i + 1] for i, arg in enumerate(options) if arg == "--env"]
+    assert "GCE_METADATA_HOST=169.254.169.254" in env
+    assert "GCE_METADATA_ROOT=169.254.169.254" in env
+
+
 def test_a_cuda_boot_exposes_the_gpus(tmp_path: Path) -> None:
     boot = _boot(tmp_path, _image("cuda"))
 

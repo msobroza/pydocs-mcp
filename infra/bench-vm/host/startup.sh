@@ -9,9 +9,10 @@
 # account's token from the metadata server, pulls the run's image by digest,
 # and starts ONE detached container whose entrypoint is the supervisor
 # (`python -m pydocs_eval.bench_vm supervise`), with the GPUs exposed on the
-# CUDA flavour and the run's state and cache directories mounted at fixed
-# absolute paths. Everything else (the run record, the child, the syncs, the
-# self-delete) is the supervisor's.
+# CUDA flavour, the run's state and cache directories mounted at fixed
+# absolute paths, and its gcloud pointed at the metadata server's address.
+# Everything else (the run record, the child, the syncs, the self-delete) is
+# the supervisor's.
 #
 # Fixed paths are a correctness requirement: the index caches key on absolute
 # paths, so a cache restored on another VM is valid only at the same path.
@@ -20,6 +21,12 @@
 set -euo pipefail
 
 readonly METADATA_URL=http://metadata.google.internal/computeMetadata/v1
+# The metadata server's fixed link-local address, for the supervisor's gcloud
+# (GCE_METADATA_ROOT) and google-auth (GCE_METADATA_HOST). WHY not its name:
+# Cloud SDK 592 does not retry a failed lookup of metadata.google.internal. It
+# then reads itself as off GCE, with no account, for ten minutes, its own
+# self-delete included (#434).
+readonly METADATA_SERVER_ADDRESS=169.254.169.254
 # Writable on both boot images (COS keeps / read-only but /var stateful). The
 # override exists for the script's own tests.
 readonly BENCH_HOST_DIR=${BENCH_HOST_DIR:-/var/lib/bench}
@@ -110,6 +117,8 @@ main() {
   # Host networking: the supervisor reads the metadata server and calls GCS
   # and the Compute API exactly as the host would.
   docker run --detach --name "$CONTAINER_NAME" --network host "${gpu_flags[@]}" \
+    --env "GCE_METADATA_HOST=$METADATA_SERVER_ADDRESS" \
+    --env "GCE_METADATA_ROOT=$METADATA_SERVER_ADDRESS" \
     --volume "$BENCH_HOST_DIR/state:$CONTAINER_STATE_DIR" \
     --volume "$BENCH_HOST_DIR/cache:$CONTAINER_CACHE_DIR" \
     --entrypoint python "$image" \
