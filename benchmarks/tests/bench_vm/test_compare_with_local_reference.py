@@ -57,6 +57,27 @@ def _fresh_fakes_and_a_pinned_commit(
     reset_resume_fakes()
 
 
+def _spec(tmp_path: Path) -> tuple[Path, str]:
+    path = write_spec(tmp_path / "runs", "cpu-resume-smoke", retrieval_spec())
+    return path, load_run_spec(path).run_id
+
+
+def _compare(tmp_path: Path, spec: Path, capsys: Capsys) -> CompareResult:
+    capsys.readouterr()
+    exit_code = main(
+        [
+            "compare",
+            str(spec),
+            "--pulled-results-dir",
+            str(tmp_path / "pulled"),
+            "--local-results-dir",
+            str(tmp_path / "local"),
+        ]
+    )
+    captured = capsys.readouterr()
+    return CompareResult(exit_code=exit_code, out=captured.out, err=captured.err)
+
+
 def _overlay(tmp_path: Path) -> Path:
     path = tmp_path / "configs" / "bm25.yaml"
     path.parent.mkdir(exist_ok=True)
@@ -88,51 +109,18 @@ async def _stopped_then_resumed(results_dir: Path, overlay: Path, run_id: str) -
 async def test_a_resumed_run_matches_an_uninterrupted_local_run_and_exits_zero(
     tmp_path: Path, capsys: Capsys
 ) -> None:
-    spec = write_spec(tmp_path / "runs", "cpu-resume-smoke", retrieval_spec())
-    run_id = load_run_spec(spec).run_id
-    pulled, local, overlay = tmp_path / "pulled", tmp_path / "local", _overlay(tmp_path)
-    await _stopped_then_resumed(pulled / run_id / "state" / "results", overlay, run_id)
-    await _sweep(local / run_id / "results", overlay)
-    capsys.readouterr()
+    spec, run_id = _spec(tmp_path)
+    overlay = _overlay(tmp_path)
+    await _stopped_then_resumed(tmp_path / "pulled" / run_id / "state" / "results", overlay, run_id)
+    await _sweep(tmp_path / "local" / run_id / "results", overlay)
 
-    exit_code = main(
-        [
-            "compare",
-            str(spec),
-            "--pulled-results-dir",
-            str(pulled),
-            "--local-results-dir",
-            str(local),
-        ]
-    )
+    result = _compare(tmp_path, spec, capsys)
 
-    out = capsys.readouterr()
-    assert exit_code == 0, out.err
-    assert out.out.splitlines()[-1] == (
+    assert result.exit_code == 0, result.err
+    assert result.out.splitlines()[-1] == (
         "identical: 3 aggregates bit-identical across 1 leg; "
         "6 wall-clock aggregates reported, not compared"
     )
-
-
-def _spec(tmp_path: Path) -> tuple[Path, str]:
-    path = write_spec(tmp_path / "runs", "cpu-resume-smoke", retrieval_spec())
-    return path, load_run_spec(path).run_id
-
-
-def _compare(tmp_path: Path, spec: Path, capsys: Capsys) -> CompareResult:
-    capsys.readouterr()
-    exit_code = main(
-        [
-            "compare",
-            str(spec),
-            "--pulled-results-dir",
-            str(tmp_path / "pulled"),
-            "--local-results-dir",
-            str(tmp_path / "local"),
-        ]
-    )
-    captured = capsys.readouterr()
-    return CompareResult(exit_code=exit_code, out=captured.out, err=captured.err)
 
 
 def test_a_differing_aggregate_fails_with_a_got_expected_line(
@@ -292,8 +280,9 @@ def test_a_jsonl_without_a_run_start_header_is_named_not_skipped(
 
     assert result.exit_code == 1
     assert result.err.splitlines() == [
-        f"{spec}: compare: got no run_start header in {empty}, expected a leg file the runner "
-        "wrote; a runner stopped before its first line leaves one empty"
+        f"{spec}: compare: got no run_start header naming system, config_name and dataset "
+        f"in {empty}, expected a leg file the runner wrote; a runner stopped before its first "
+        "line leaves one empty"
     ]
 
 
@@ -390,3 +379,38 @@ def test_it_lists_each_sides_leg_files_with_progress_even_with_nothing_to_compar
         f"local: {local_results}",
         "  (no leg files)",
     ]
+
+
+def test_a_run_start_header_missing_its_leg_fields_is_named_not_a_traceback(
+    tmp_path: Path, capsys: Capsys
+) -> None:
+    spec, run_id = _spec(tmp_path)
+    write_leg(run_leg_path(tmp_path / "pulled", run_id), {"mrr_mean": 0.5})
+    odd = run_leg_path(tmp_path / "pulled", run_id, config_name="odd")
+    odd.write_text('{"_event": "run_start", "system": "pydocs-mcp"}\n', encoding="utf-8")
+    write_leg(local_leg_path(tmp_path / "local", run_id), {"mrr_mean": 0.5})
+
+    result = _compare(tmp_path, spec, capsys)
+
+    assert result.exit_code == 1
+    assert result.err.splitlines() == [
+        f"{spec}: compare: got no run_start header naming system, config_name and dataset "
+        f"in {odd}, expected a leg file the runner wrote; a runner stopped before its first "
+        "line leaves one empty"
+    ]
+
+
+def test_a_leg_file_that_is_not_utf8_is_refused_naming_it(tmp_path: Path, capsys: Capsys) -> None:
+    spec, run_id = _spec(tmp_path)
+    garbled = run_leg_path(tmp_path / "pulled", run_id)
+    garbled.parent.mkdir(parents=True)
+    garbled.write_bytes(b"\xff\xfe not a leg file\n")
+    write_leg(local_leg_path(tmp_path / "local", run_id), {"mrr_mean": 0.5})
+
+    result = _compare(tmp_path, spec, capsys)
+
+    assert result.exit_code == 1
+    assert result.out == ""
+    (line,) = result.err.splitlines()
+    assert line.startswith(f"{spec}: compare failed: got an unreadable leg file {garbled} (")
+    assert line.endswith("), expected a UTF-8 JSONL file the runner wrote")

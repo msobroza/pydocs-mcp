@@ -35,6 +35,8 @@ from pydocs_eval.sweep import LATENCY_KEYS
 from pydocs_eval.trackers.run_file_lines import read_run_file_lines
 
 AggregateBlock = tuple[tuple[str, float], ...]
+# The ``run_start`` fields that name a leg (``JsonlExperimentTracker``'s header).
+_LEG_HEADER_FIELDS = ("system", "config_name", "dataset")
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,10 +129,21 @@ def read_leg_files(results_dir: Path) -> tuple[LegFileReading, ...]:
     return tuple(_read_leg_file(path) for path in sorted(results_dir.rglob("*.jsonl")))
 
 
+class LegFileUnreadable(ValueError):
+    """A ``*.jsonl`` under a results directory that cannot be read as UTF-8 text."""
+
+
 def _read_leg_file(path: Path) -> LegFileReading:
+    try:
+        lines = read_run_file_lines(path)
+    except (OSError, UnicodeDecodeError) as exc:
+        raise LegFileUnreadable(
+            f"got an unreadable leg file {path} ({exc}), "
+            "expected a UTF-8 JSONL file the runner wrote"
+        ) from None
     # A line that is not a JSON object (a write cut short) is skipped, as the
     # JSONL tracker skips it on resume.
-    records = [line.record for line in read_run_file_lines(path) if line.record is not None]
+    records = [line.record for line in lines if line.record is not None]
     header = next((r for r in records if r.get("_event") == "run_start"), None)
     tags = header.get("tags") if header is not None else None
     return LegFileReading(
@@ -143,9 +156,13 @@ def _read_leg_file(path: Path) -> LegFileReading:
 
 
 def _leg_key(header: Mapping[str, object] | None) -> LegKey | None:
+    """The leg a ``run_start`` header names; ``None`` when it names no complete leg."""
     if header is None:
         return None
-    return LegKey(str(header["system"]), str(header["config_name"]), str(header["dataset"]))
+    system, config_name, dataset = (header.get(name) for name in _LEG_HEADER_FIELDS)
+    if not (isinstance(system, str) and isinstance(config_name, str) and isinstance(dataset, str)):
+        return None
+    return LegKey(system, config_name, dataset)
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,7 +204,8 @@ def _side_problems(side: _Side) -> tuple[str, ...]:
             f"{side.role.when_empty}",
         )
     headerless = tuple(
-        f"got no run_start header in {reading.path}, expected a leg file the runner wrote; "
+        f"got no run_start header naming {', '.join(_LEG_HEADER_FIELDS[:-1])} and "
+        f"{_LEG_HEADER_FIELDS[-1]} in {reading.path}, expected a leg file the runner wrote; "
         "a runner stopped before its first line leaves one empty"
         for reading in side.readings
         if reading.key is None

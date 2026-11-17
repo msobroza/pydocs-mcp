@@ -17,7 +17,7 @@ from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
 
-from pydocs_eval.bench_vm.leg_comparison import compare_with_local_reference
+from pydocs_eval.bench_vm.leg_comparison import LegFileUnreadable, compare_with_local_reference
 from pydocs_eval.bench_vm.leg_comparison_view import render_run_comparison
 from pydocs_eval.bench_vm.local_reference import (
     LOCAL_REFERENCE_RESULTS_DIR,
@@ -84,6 +84,9 @@ def local_reference_verb(args: argparse.Namespace) -> int:
         return _EXIT_REFUSED
     except LocalReferenceRefused as exc:
         print(f"{args.spec}: {args.verb} refused: {exc}", file=sys.stderr)
+        return _EXIT_REFUSED
+    except LegFileUnreadable as exc:
+        print(f"{args.spec}: {args.verb} failed: {exc}", file=sys.stderr)
         return _EXIT_REFUSED
 
 
