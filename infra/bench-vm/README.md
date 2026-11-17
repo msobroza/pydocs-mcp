@@ -277,7 +277,7 @@ below:
 ```bash
 PYTHONPATH=benchmarks/src python -m pydocs_eval.bench_vm local-command infra/bench-vm/runs/cpu-resume-smoke.yaml
 # prints, for the run id of the committed spec:
-#   python -m pydocs_eval.runner --configs benchmarks/configs/bm25.yaml --dataset repoqa --split small_test --results-dir benchmarks/results/bench-vm-local/<run-id>/results --report benchmarks/results/bench-vm-local/<run-id>/report.md --bench-cache on
+#   python -m pydocs_eval.runner --configs benchmarks/configs/bm25.yaml --dataset repoqa --split test --results-dir benchmarks/results/bench-vm-local/<run-id>/results --report benchmarks/results/bench-vm-local/<run-id>/report.md --bench-cache on
 # run the printed line from the repository root, prefixed with PYTHONPATH=benchmarks/src
 ```
 
