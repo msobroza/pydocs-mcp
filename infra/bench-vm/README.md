@@ -254,12 +254,13 @@ one.
 
 This check proves that a run stopped mid-way and relaunched ends with exactly
 the aggregates an uninterrupted run of its spec produces. It uses
-`runs/cpu-resume-smoke.yaml`: BM25-only retrieval over RepoQA's `small_test`
-split (30 needles from the pinned 2024-06-23 release, three per repository), on
-a spot CPU VM with no provider key. Each needle re-indexes its whole repository,
-so the run lasts an estimated 10 to 25 minutes, long enough to stop by hand.
-BM25 scores every query without an embedder or a model, so the comparison is
-bit for bit.
+`runs/cpu-resume-smoke.yaml`: BM25-only retrieval over RepoQA's `test` split
+(80 tasks from the pinned 2024-06-23 release, eight per repository), on a spot
+CPU VM with no provider key. Each task re-indexes its whole repository, so the
+run lasts an estimated 15 to 50 minutes: about 16 at the speeds of the recorded
+baseline (`benchmarks/baselines/repoqa_snf.json`), with room for a slower
+product or machine. It has not been timed on `n2-standard-8` yet. BM25 scores
+every query without an embedder or a model, so the comparison is bit for bit.
 
 The reference is the same runner command run uninterrupted on your machine.
 `local-command` prints it: the VM's command, writing under
@@ -268,8 +269,10 @@ run's state directory, and without `--run-id`, so the reference never takes the
 resume path under test. It needs a dev install of the repository with the eval
 suite's base dependencies, the run's commit checked out (`make bench-vm-status`
 shows it once launched), and network for the release (about 12 MB) and the
-FastEmbed model. It takes about as long as the run, so start it in a second
-terminal right after step 1 below:
+FastEmbed model. Run it in a shell with no `PYDOCS_*` variable set: they
+override the product's configuration, which the VM's run never sees. It takes
+about as long as the run, so start it in a second terminal right after step 1
+below:
 
 ```bash
 PYTHONPATH=benchmarks/src python -m pydocs_eval.bench_vm local-command infra/bench-vm/runs/cpu-resume-smoke.yaml
@@ -278,14 +281,15 @@ PYTHONPATH=benchmarks/src python -m pydocs_eval.bench_vm local-command infra/ben
 # run the printed line from the repository root, prefixed with PYTHONPATH=benchmarks/src
 ```
 
-Then, in order:
+Then, in order, with your local `main` up to date first (`git_ref: main`
+resolves in your checkout):
 
 ```bash
 make bench-vm RUN=runs/cpu-resume-smoke.yaml           # 1. launch
 make bench-vm-status RUN=runs/cpu-resume-smoke.yaml    #    until it shows running
 make bench-vm-pull RUN=runs/cpu-resume-smoke.yaml      # 2. a few minutes later: progress
 make bench-vm-compare RUN=runs/cpu-resume-smoke.yaml   #    lists "N task records, no final aggregate block yet"
-make bench-vm-stop RUN=runs/cpu-resume-smoke.yaml      # 3. stop once N is at least 1 and well short of 30
+make bench-vm-stop RUN=runs/cpu-resume-smoke.yaml      # 3. stop once N is at least 1 and well short of 80
 make bench-vm-status RUN=runs/cpu-resume-smoke.yaml    # 4. shows stopped once the supervisor has pushed the state
 make bench-vm-pull RUN=runs/cpu-resume-smoke.yaml      # 5. the partial results
 make bench-vm-compare RUN=runs/cpu-resume-smoke.yaml   #    the partial leg: "N task records, no final aggregate block yet"
@@ -298,18 +302,22 @@ make bench-vm-compare RUN=runs/cpu-resume-smoke.yaml   #    exit 0 once the loca
 The runner prints nothing per task, so the pull in step 2 is how you see
 progress: `compare` lists every leg file it finds, with the run's task records
 and whether the leg has its final aggregate block, even before the local
-reference exists. The spec syncs every 2 minutes, so the count trails the run
-by at most that. After a stop, the supervisor pushes everything the run wrote
-before it records `stopped`, so the partial pull in step 5 holds every task
-finished before the stop.
+reference exists. Until the run has finished it also exits 1, so `make` ends
+those steps with an `Error 1` line; the listing above it is the answer. The spec
+syncs every 2 minutes, so the count trails the run by at most that. After a
+stop, the supervisor pushes everything the run wrote before it records
+`stopped`, so the partial pull in step 5 holds every task finished before the
+stop.
 
 `compare` exits 0 only when every leg's deterministic aggregates are
-bit-identical on both sides. Each difference is a `got <run>, expected <local>`
+bit-identical on both sides, and some leg of the run was resumed mid-way (its
+file holds a `run_resume` after some, but not all, of its tasks; the listing
+says "resumed after N"). Each difference is a `got <run>, expected <local>`
 line on stderr. Wall-clock latencies (`indexing_seconds_*`,
 `search_seconds_*`) are listed with both values and never compared. A missing
 or unfinished leg on either side is named, and a side with nothing to compare
 never passes. The local reference's index cache entries stay under
-`~/.pydocs-mcp/bench/` (a few MB per needle, more for the largest
+`~/.pydocs-mcp/bench/` (a few MB per task, more for the largest
 repositories); `python -m pydocs_eval.bench_cache_cli evict` removes every
 entry there.
 

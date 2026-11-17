@@ -59,7 +59,7 @@ def test_the_resume_smoke_is_a_long_deterministic_cpu_retrieval_run_on_spot() ->
     # BM25-only search: no embedder or LLM scores a query, so the aggregates of a
     # resumed run and of an uninterrupted local run can agree bit for bit.
     assert spec.configs == ("benchmarks/configs/bm25.yaml",)
-    # The pinned RepoQA release's 30-needle stratified split, not the 5-needle fixture:
-    # long enough to stop by hand mid-leg.
-    assert (spec.dataset, spec.split, spec.args) == ("repoqa", "small_test", ())
+    # The pinned RepoQA release's 80-task test split, not the 5-task fixture: long
+    # enough to stop by hand mid-leg.
+    assert (spec.dataset, spec.split, spec.args) == ("repoqa", "test", ())
     assert spec.row.provider_keys == ()

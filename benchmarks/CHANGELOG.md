@@ -360,10 +360,11 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   show that its relaunch ends with the aggregates of an uninterrupted run of the same
   spec. The runbook's "Stop and resume acceptance" section gives the command sequence.
   - **`cpu-resume-smoke.yaml`** runs BM25-only retrieval (`bm25.yaml`) over RepoQA's
-    `small_test` split of the pinned release (30 needles, three per repository) on a
-    spot `n2-standard-8`, with a 2-hour cap and a 2-minute sync. It takes an estimated
-    10 to 25 minutes and needs no provider key, and no embedder or model scores a
-    query, so its aggregates can match bit for bit across machines.
+    `test` split of the pinned release (80 tasks, eight per repository) on a spot
+    `n2-standard-8`, with a 2-hour cap and a 2-minute sync. It needs no provider key,
+    and no embedder or model scores a query, so its aggregates can match bit for bit
+    across machines. It is not timed on the VM yet: the recorded RepoQA baseline puts
+    it at about 16 minutes, so the spec estimates 15 to 50.
   - **`local-command SPEC`** prints the runner command the supervisor runs for a
     retrieval spec, built by the same code (`kind_command.kind_argv`). Its state
     directory moves to `benchmarks/results/bench-vm-local/<run-id>/` and it carries
@@ -372,8 +373,10 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   - **`compare SPEC`** (`make bench-vm-compare RUN=runs/<name>.yaml`) pairs the legs of
     a pulled run (`benchmarks/results/bench-vm/<run-id>/state/results/`) with the local
     reference's by their `run_start` header. It exits 0 only when every deterministic
-    aggregate of each leg's final block is bit-identical. Each difference is a
-    `got <run>, expected <local>` line on stderr, and the wall-clock latencies are
+    aggregate of each leg's final block is bit-identical and some leg of the run was
+    resumed mid-way (a `run_resume` after 1 to N-1 of its N task records), so a stop
+    that came too late, or a relaunch that started over, never passes. Each difference
+    is a `got <run>, expected <local>` line on stderr, and the wall-clock latencies are
     listed with both values but never compared. A missing, unfinished, duplicated or
     headerless leg file is named, and nothing to compare never passes. Every leg file
     is listed with the run's task records, so a pull taken mid-run shows progress.
@@ -381,8 +384,8 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     the local disk only.
   - **One definition of "bit-identical".** The resume smoke's aggregate-block helpers
     moved into `pydocs_eval.reporting.aggregate_blocks`, which
-    `benchmarks/scripts/runner_resume_smoke.py` and `compare` share. Their messages
-    now read `got …, expected …`.
+    `benchmarks/scripts/runner_resume_smoke.py` and `compare` share, with the leg
+    file's event names as one `LegFileEvent` enum.
 - **Reference answers written from ground truth, and the `write-references` verb that
   writes them** (`pydocs_eval.judge.reference_*`,
   `python -m pydocs_eval.campaign write-references --split repoqa-qa/<slice>`). Each
@@ -732,6 +735,10 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Changed
 
+- **The resume smoke's aggregate failures read `got …, expected …`**
+  (`benchmarks/scripts/runner_resume_smoke.py`, #434): `got` is the resumed leg's value
+  or metric list and `expected` the uninterrupted control's, where they read
+  "resumed …, control …" before. What passes and fails is unchanged.
 - **`ci_compare` reads a resumed run file** (#420). The last `<metric>_mean` in the
   file still wins, and in a file written with `--run-id` it is the full-leg aggregate.
   A corrupt line before the file's last `run_resume` (the cut tail of an invocation
