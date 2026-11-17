@@ -146,8 +146,10 @@ include = ["pydocs_eval*"]
 "pydocs_eval.trajectory.configs" = ["*.yaml"]
 "pydocs_eval.campaign.overlays" = ["*.yaml"]
 "pydocs_eval.judge.configs" = ["*.yaml"]
-# The planted injections every Jev request design must flag (addresses_grader).
-"pydocs_eval.judge.data" = ["*.jsonl"]
+# The planted injections every Jev request design must flag (addresses_grader),
+# and the alignment label files, one per dataset and Jev model (judge 9d), which
+# the escalation judge's trust and the threshold sweep read.
+"pydocs_eval.judge.data" = ["*.jsonl", "alignment/*.jsonl"]
 # The vendored CrossCommitVuln QA corpus (records.jsonl / banned_tokens.jsonl)
 # + its CC BY 4.0 NOTICE. importlib.resources.files() must resolve these in a
 # built wheel, not only from the PYTHONPATH source tree. sdist coverage is

@@ -14,6 +14,280 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Added
 
+- **The alignment set the answer judges are fitted to, the threshold sweep, and the
+  escalation judge** (`pydocs_eval.judge.alignment_*`, `threshold_sweep`,
+  `escalation*`; `python -m pydocs_eval.campaign label-alignment` and
+  `report-alignment`). Nothing here calls a model without `--confirm-spend`; the
+  10-item dual pilot itself has not been run.
+  - **Items are drawn actively from stored arm answers** in four strata: answers a
+    first Jev pass put in `judge.alignment.borderline_window` (0.2–0.8), answers
+    where Jev's verdict outside `band_start` contradicts the code check, answers
+    carrying one of the vendored planted injections (inside the item count), and a
+    `random_share` (0.25). Planted injections are hosted outside the two active
+    strata. The draw is seeded and never redraws an item the label file holds. The
+    10 `reserved` chat questions never enter the pool. The pilot is its own draw
+    (`pilot_items` 10); pass 1 and pass 2 add `n_items` (100 and 60) beside it.
+  - **Two blind labellers** (`judge.alignment.labellers[0]` and `[1]`, Astra and Opus)
+    answer every item through the shared chat client. Each sees only the item's
+    ground truth: the gold, the needle's code (or each chat site's span), the
+    reference answer and the agent answer. The questions are Jev's own, word for
+    word. A labeller never sees the other's label, Jev's probability or why the item
+    was drawn, and a request golden pins this. Each question is answered
+    `{verdict, evidence, confidence}`, with `LabelConfidence` LOW / MEDIUM / HIGH.
+  - **Agreement is the label.** An item goes to the owner on a disagreement, and an
+    agreed item goes too when both labellers contradict the code check, either says
+    `low`, it is a planted injection neither flagged, or it falls in the random audit
+    (`agreed_audit_share` 0.10). The audit share grows in proportion once more than
+    `audit_growth_threshold` (5%) of the audited items prove wrong, and an audited
+    item stays audited. An audited agreement keeps its label unless the owner rules
+    otherwise; every other reason holds its question until the owner rules. On
+    `contradicts_reference` and `completeness`, a disagreement in which the reference
+    writer's family (Opus) favoured the answer is booked `self_preference`, so an
+    Opus-only agreement never makes the label.
+  - **One versioned label file per dataset and Jev model**
+    (`judge/data/alignment/<dataset>__<jev-model>.jsonl`, revision `1.0`, or
+    `judge.alignment.label_file`). It holds one canonical JSON line per item: its
+    pass and stratum, the context, both labellers' answers, the code check, `agreed`,
+    `escalation_reasons`, `owner_decision`, `owner_note` and the escalation judge's
+    answers. A line of another revision, or with an unknown field, is refused by line.
+    Rewriting a file that was read moves no byte. The file is also the batch journal:
+    a batch id is written the moment the batch is submitted, so a re-run collects a
+    slow batch by id instead of buying it twice.
+  - **Reports.** `report-alignment` prints, per question, the labellers' Cohen's κ
+    (`metrics.agreement`), which labeller favoured the answer in each disagreement, the
+    owner's queue and the audit. A question whose κ is below
+    `judge.alignment.min_labeller_kappa` (0.40) is flagged: its criteria are rewritten
+    before any judge is trusted on it. The threshold sweep (`--sweep`) prints Jev's
+    agreement against the share it decides alone, for each review band from 0.3/0.7
+    outward and each `completeness` confidence gate. Levels are cut at the midpoints
+    and never averaged, and `calibration_answers` reads Jev's raw probabilities
+    without thresholds.
+  - **The escalation judge** (`openai/gpt-6-luna`, `judge.escalation`) decides only Jev's
+    in-band yes/no answers (`escalate_in_band`). It decides only on questions where its
+    agreement pass reaches `min(agreement_floor, κ_labellers)` (0.90), never on a
+    low-κ question, and reads `undecided` elsewhere without a call. Its κ is reported
+    beside the labellers' and flagged when above it, together with its agreement with
+    each labeller alone.
+    `judge.escalation.floor_scale` (`percent_agreement`, as specified, or `kappa`)
+    decides which of its figures meets the floor; that choice is an open owner word.
+    Answers are cached by input hash, so a second scoring pass makes zero calls. Every
+    call is metered into a spend ledger; a call OpenRouter does not price is booked at
+    `answer_cost_bound_usd` (0.05, derived from Luna's price), and no call starts unless
+    one more at that bound fits under `spend_cap_usd` (2.00). Beyond it in-band answers
+    read `undecided`. Reaching the cap and an outage each log one JSON line.
+  - **The pilot verb sizes the passes.** `label-alignment` prints its plan for free and
+    rehearses everything offline with `--dry-run`. With `--confirm-spend` it asks the
+    pinned labellers on the Batch API. The pilot ends with the measured cost per item
+    against the $0.09–0.20 the budget assumed, the first κ, and how many items
+    `sub_budget_usd` (15.00) buys for pass 1 and pass 2. Pass 2, and any
+    swe-qa-questions item, refuse to run until the swe-qa-questions slices land
+    (`SWE_QA_QUESTION_SLICES`). (#381)
+- **Same-commit variant arms, a reusable baseline, and resume that keeps
+  finished tasks** (`campaign before-after`, issue #385). Two arms on one commit
+  can now differ only by their settings, a finished baseline can stand in for a
+  new run's, and a killed arm resumed from its `queue.jsonl` keeps every task it
+  had already answered.
+  - **`--baseline-settings` / `--candidate-settings <overlay.yaml>`** give one
+    arm an `ask_your_docs` overlay: `architecture`, `max_agent_turns`,
+    `seed_search_with_question` and `llm`, validated at plan time by the
+    product's own `AskYourDocsConfig` (`extra="forbid"`, so `guidance_task` is
+    refused until the product has that knob), plus the eval-only
+    `guidance_sections` (a skill document, validated with the product loader
+    and handed to every rollout) and `task_scaffold` (`citing` only for now). A
+    `model` key, top-level or under `llm`, is refused: `--model` owns it. The
+    `--llm-block` file merges under the overlay's `llm`.
+    (`campaign/before_after_arm_settings.py`, `before_after_arm_variant.py`.)
+  - **The plan prints each arm's settings digest and the sorted diff** between
+    the arms. The digest is a SHA-256 of the effective settings plus the
+    scaffold version; the guidance file counts by its text, not its path.
+    One commit under one setting is refused unless `--allow-identical` marks it
+    as the A/A arm. A plan without an overlay prints exactly what it printed
+    before.
+  - **Each arm runs and is probed under its own variant.** The runner and the
+    plan-time block probe are built with the arm's architecture (never the
+    pinned `text_react`; an `auto` arm lets the product route a multimodal
+    model) and its harness keys, sent as written so the arm's own commit
+    decides their defaults. Each sample carries its task's own framing, else
+    `repo_qa`, which the binding uses to find the guidance's task head. The
+    probe also refuses an architecture the arm's product does not register.
+  - **`arm_settings.json`, `arm.json` and the report's provenance carry the
+    architecture, scaffold, guidance path and digest**, and the compare verb's
+    arm lines carry the digest, which its A/A twin check also compares (two
+    arms that recorded none still pair). `--report-only` re-renders each arm
+    under the variant its `arm_settings.json` recorded (an overlay flag, if
+    given, must name that digest), probes nothing, and keeps the run's
+    `plan.txt`. Files written before these fields still load:
+    an old settings file reads as the pinned arm it ran, an old summary as
+    "not recorded".
+  - **`--reuse-baseline <arm dir>`** compares the candidate against a finished
+    baseline arm instead of running one. It is refused by name, at plan time
+    and before either arm is probed, unless its `commit`, `model`,
+    `max_agent_turns` and settings digest all match the plan's baseline. The
+    arm must also have finished (`completed`), with no task outside the plan's
+    split and enough tasks answered or excluded to cover it. On a match it runs
+    zero baseline rollouts, never probes the baseline, links `<out>/baseline`
+    to the reused arm, and prices only the candidate. A later run that finds
+    that link refuses to write through it. The
+    vendored chat runner's output now records its own variant, digest
+    included: the served architecture and the bare question the chat page
+    sends. A plan whose baseline runs the same settings can therefore reuse it,
+    and a citing-scaffold plan refuses it by its digest. Every arm, the chat
+    runner's included, also writes a `serving.json` fingerprint (the serving
+    YAML's content, the endpoint, the served index's embedder and scope, and
+    the llm block key by key), and the reuse is refused naming each key that
+    differs, or as "not recorded" for an arm without one, unless
+    `--allow-serving-mismatch` forces it (a forced reuse is logged as one JSON
+    line and named in the plan, in a `serving_override.json` the parent writes
+    beside the candidate's `arm.json` before it runs, and in every report),
+    and an `--out` whose arms were served differently is not resumed.
+  - **A resumed arm keeps its finished tasks.** The arm rewrites `arm.json`
+    atomically after every answered task, before the ledger marks the task DONE.
+    The checkpoint's halt reason is `in_progress`. A restart seeds its rows
+    from that file and drops any row whose trace directory no longer holds
+    `server_events.jsonl`, logging each drop as a
+    `before_after_resume_dropped_untraced_rows` event; every DONE task left
+    without a row is queued again one attempt later (one
+    `before_after_resume_requeued_untraced_rows` event), and exclusions are
+    counted off the ledger, so an earlier process's survive. Rows answered under
+    another role, commit, model or settings digest, or for tasks outside the
+    plan's (another `--split`, a shorter `--limit`, another draw), are refused
+    by name before the parent writes into the arm dir, never restamped. `--report-only` and `before-after-compare` refuse an arm that still reads `in_progress`
+    (`HaltReason.IN_PROGRESS`). Before this, a restart wrote an `arm.json`
+    holding only its own process's tasks.
+  - **`TaskScaffold`** (`task_rendering.py`) names `citing` and `bare` and
+    gives each a version. `citing` keeps `task_scaffold_v1` byte-identical.
+
+- **The bare task scaffold: the chat slice runs through `before-after`**
+  (`task_rendering.py`, issue #386). An arm overlay's `task_scaffold: bare` now
+  sends every rollout the question alone, as the chat page does, instead of the
+  citing scaffold; `citing` stays the default.
+  - **`render_task_prompt(question, scaffold=)`** returns the question unchanged
+    for `bare`; `sample_row_for_task(scaffold=)` renders the row's prompt under
+    it, and a before/after arm mints its samples under its own scaffold. The
+    module keeps its stdlib-only imports, now pinned by a test, and renders each
+    scaffold through its own template, so a scaffold without one fails loudly.
+  - **`ask_binding_identity(scaffold=)` folds that scaffold's version.** The
+    citing identity and `TASK_SCAFFOLD_VERSION` (`task_scaffold_v1`) are
+    byte-identical, so no recorded ledger moves; the bare scaffold folds
+    `task_scaffold_bare_v1`. Every ask-rubric objective still renders citing; a
+    before/after arm is identified by its settings digest, which folds the same
+    per-scaffold version.
+  - **A bare `auto` arm writes the rows the vendored chat runner writes** for
+    the same questions, and its settings digest is the runner's, so
+    `--reuse-baseline <runner output>` accepts a runner output for a plan whose
+    baseline runs the same settings. Two shipped files make that the
+    instrument: `configs/ask_example_needle_chat_bare_auto_arm.yaml` (the arm
+    overlay: `architecture: auto`, `task_scaffold: bare`, the served
+    `llm.vision: true`) and `configs/ask_openrouter_example_needle_chat_serve.yaml`
+    (the serving file `--config` accepts: the chat config's embedder and
+    discovery, without the model settings a plan refuses).
+  - **The chat runner records the llm block its agent is sent**: the
+    `--llm-block` file plus the served vision rule. Before, the recorded block
+    left `vision` out, so no plan that runs the same multimodal agent could
+    reproduce the runner's digest.
+
+- **Corpus metadata on the multi-location datasets, `/all` for the unpartitioned
+  ones, the swe-qa-questions slices and the reference-answer carry**
+  (`campaign before-after`, issue #387).
+  - **Every task of swe-qa-questions, lca-bug-loc and crosscommitvuln carries
+    `repo` + `commit`**, so a before/after plan gives each corpus its own
+    workspace instead of the shared `--workspace`, which holds none of them.
+    swe-qa (and so swe-qa-questions) now spells `repo` as the pinned clone's
+    `owner/name` (`matplotlib/matplotlib`, not the split key `matplotlib`, which
+    stays in the task id) with its short commit pin; lca-bug-loc and
+    swe-bench-verified-loc add their base commit; crosscommitvuln derives `repo`
+    from its `repo_url` and pins `commit` to the record's `prefix_sha` (a record
+    whose URL names no `<owner>/<name>` is dropped and logged, like a bad sha).
+    The plan's `corpora:` block now names every corpus as
+    `owner/name@<sha12> — N task(s), built|to build`.
+    (`datasets/repo_coordinates.py`.)
+  - **Sweeps that run the Context7 or Neuledge baselines over these datasets
+    name a different library.** `sweep_support` hands those systems
+    `metadata["repo"]` (plus `@<sha7>` of `metadata["commit"]` for Neuledge), so
+    swe-qa now names `matplotlib/matplotlib@a5e1f60` instead of `matplotlib`,
+    lca-bug-loc and swe-bench-verified-loc gain the `@<sha7>` pin, and
+    crosscommitvuln names a library where it named none. Such baseline runs made
+    before this change are not comparable with later ones either.
+  - **crosscommitvuln runs made before this change are no longer comparable
+    with runs made after it: the corpus key changed.** Its tasks used to carry
+    no corpus coordinates and all searched the one shared workspace; each now
+    searches the index of its own pinned snapshot.
+  - **`lca-bug-loc/all` and `crosscommitvuln/all` load.** The two datasets have
+    no split field, so `before_after_split.UNPARTITIONED_DATASETS` builds them
+    whole for `/all` and refuses any other slice by name, naming the dataset
+    and `all`.
+  - **swe-qa-questions is sliceable** — `dev`, `test`, `small_dev`,
+    `small_test` and `all` — by gold-size bucket (`1`, `2-3`, `4+` cited files;
+    `swe_qa_question_slices.SWE_QA_QUESTION_SLICES`), never by repo, through
+    the shared `stratified_split` with seed 0 and a 0.2 dev fraction
+    (`_SWE_QA_QUESTION_SPLIT_SEED`, `_SWE_QA_QUESTION_DEV_FRACTION`). `swe-qa`
+    itself still refuses every dev/test name, and `all` is the whole corpus as
+    before.
+  - **Reference answers ride the gold, for the judge only.** A swe-qa task
+    carries its human-written answer as `gold.extra["reference_answer"]`, a
+    `ReferenceAnswer` with model id `swe-qa` and an empty prompt hash; its
+    file-set gold is unchanged. A repoqa-qa task carries its row from
+    `repoqa_reference_answers_v1.jsonl`, looked up by task id; a task without a
+    row carries none. The text never reaches the agent (pinned over the real
+    binding: neither the rendered prompt nor the candidate skill holds it) and
+    is never a gate or check candidate: a `params: {keys: [...]}` naming
+    `reference_answer` is refused when the gate or check is built, and by the
+    candidate reader itself.
+
+- **A fresh repoqa test draw: `--split-seed`, `--exclude-task-ids` and the
+  committed consumed-ids file** (`campaign before-after`, issue #388).
+  - **`--split repoqa-qa/small_test --split-seed <int>` redraws `small_test`**
+    — 30 tasks, apportioned by repo with `small_test`'s own largest-remainder
+    rule — from the held-out `test` partition at the dataset's OWN split seed.
+    The seed moves only the redraw (`_split.reseeded_stratified_subsample`),
+    never the dev/test cut: `stratified_split` drives the cut and the
+    subsample from one RNG, so forwarding the seed to `RepoQADataset.split_seed`
+    would have let seed-0 `dev` and `small_dev` tasks into a "fresh" sample.
+    Any other dataset or slice is refused by name.
+  - **`--exclude-task-ids <file>` filters, then draws.** The file's ids leave
+    the pool first, so the draw keeps its full size; an id outside the `test`
+    pool is refused (it would exclude nothing), and a draw that still shares
+    an id with the file is refused by name. It needs `--split-seed`. The file
+    is JSON, `{"provenance": …, "task_ids": […]}`; the plan, each arm's
+    `arm_settings.json` (`task_draw`, ids frozen at plan time, so the arm child
+    loads the same tasks) and the report's provenance record the seed, the
+    file's sha256, its id count and its provenance. `--report-only` and
+    `before-after-compare` score against the draw the arms recorded (flags
+    optional; flags naming another sample, arms that answered different ones,
+    or an exclusion file edited since the run are refused), and compare prints
+    it. `write-references` takes the same two flags. Without either flag every
+    slice, plan text and arm identity is unchanged.
+    (`campaign/before_after_fresh_draw.py`, `before_after_recorded_draw.py`.)
+  - **`baselines/repoqa_qa_small_test_consumed_2026-09-15.json`** holds the 30
+    `repoqa-qa/small_test` ids the 2026-09-15 run consumed, re-derived offline
+    from release `2024-06-23` at split seed 0 (no output of that run
+    survives), with its provenance; a test pins its sha256. The seed-1 draw
+    against it is recorded in the README's consumption ledger.
+
+- **The alignment annotation page** (`pydocs_eval.judge.annotate_app`;
+  `python -m pydocs_eval.campaign annotate-alignment --labels FILE [--read-only]`).
+  The owner rules on the alignment items the two labellers did not settle in a small
+  Streamlit page. Streamlit comes with the `[ask]` extra and is imported only while
+  the page draws, so `import pydocs_eval.judge` never loads it.
+  - **It opens one label file** and lists the owner's queue (every item with an
+    escalation reason, or every item on request) with how many items still await a
+    ruling, counted the way `report-alignment` counts them. For each item it shows the
+    question, the gold and the code at it, the reference answer and the agent answer
+    verbatim, both labellers' verdicts with their confidence and evidence lines, the
+    code check, and why the item is in the queue.
+  - **Only the owner's fields are written back.** A verdict per question (true/false,
+    or a level for `completeness`; or none) and a free-text note go into
+    `owner_decision` and `owner_note` through one atomic rewrite of the file. The file
+    is read again when Save is pressed, so rows a labelling run wrote in the meantime
+    are kept, and every other byte stays as it was. A ruling on an item or a question
+    the file does not hold, or with a verdict the question cannot take, is refused,
+    `undecided` included: the audit would count it as the labellers being wrong. A
+    failed save says so and leaves the file as it was; a file the page cannot open
+    (missing, a line the reader refuses, a hand-edited owner verdict that does not fit)
+    is named, in the terminal by `annotate-alignment` and on the page.
+  - **`--read-only`** opens the file for review: every ruling control is disabled and
+    nothing is written. (#382)
+
 - **Each before/after arm re-indexes its task bundles under its own product
   before serving** (`campaign/before_after_index_step.py`). Both arms share one
   bundle per corpus, the bundle key carries no chunk-tree rule, and the serve
@@ -702,6 +976,12 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Changed
 
+- **The `suggestions_off` campaign overlay also turns off the product's
+  `kind="api"` zero-hit fallback** (`output.suggestions.api_zero_hit_fallback_any:
+  false`), so its arm stays "every deterministic suggestion rule off". The
+  overlay's parity test requires every flag the product's suggestions config
+  declares. A build from before that flag existed rejects the key, so this
+  overlay needs a product that has the flag.
 - **`ci_compare` reads a resumed run file** (#420). The last `<metric>_mean` in the
   file still wins, and in a file written with `--run-id` it is the full-leg aggregate.
   A corrupt line before the file's last `run_resume` (the cut tail of an invocation
@@ -810,6 +1090,27 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   corpus, so today the change adds code files as candidates, not reachable
   gold. No bug_loc baselines had been recorded yet, so no recorded number
   changes meaning.
+- **The bench VM images' eval lock moves openai 1.109.1 → 2.54.0.** This follows
+  the product's move to openai 2 (the root changelog's `[Unreleased]`).
+  - `infra/bench-vm/docker/eval-requirements.txt` was regenerated by the
+    documented `image_deps.py lock-eval --repo .`. Only the `openai==` block
+    and the `# exclude-newer:` cutoff (now `2026-11-08T16:38:11Z`) moved;
+    the recorded-cutoff fallback was not needed.
+  - Its audit with no ignores stays clean.
+  - The eval suite imports neither OpenAI SDK, and pydocs-mcp itself is not
+    in the eval lock, so openai's consumer there is a third-party package.
+    The first image built from this lock is its first real check.
+- **The ask harness's cache-creation figures and request bytes are not
+  comparable across the openai 2 / langchain-openai 1.3.5 bump.** Two things
+  change:
+  - `cache_creation_input_tokens` in `model_usage.json` was always 0. It now
+    carries the endpoint's `cache_write_tokens`, except on the `priority` and
+    `flex` service tiers, which stay 0.
+  - A tool round no longer sends LangChain's block `id` in tool-result text
+    blocks, so request bytes and prompt-cache prefixes change.
+
+  Compare arms only within one dependency set. A campaign on an older base is
+  unaffected until it rebases.
 
 ### Fixed
 
@@ -827,6 +1128,13 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   two US cents an hour more than `pd-standard`, only while the VM exists. The
   runbook's GPU quota section now says how the Deep Learning VM boot image may
   fail on G2 and what the fallback is. (#434)
+- **A failed atomic write no longer leaves its temporary file behind.**
+  `write_text_atomically` writes to a temporary file beside the target and swaps
+  it in; when the write or the swap failed, the target kept its old text but the
+  temporary file stayed. The vendored alignment label files live in the source
+  tree, so a failed save on the annotation page would have left an untracked
+  `*.tmp` beside them. Any failure now removes the temporary file before the
+  error is raised. (#382)
 - **A seed-on arm seeds the task's question, not the scaffolded prompt.**
   `sample_row_for_task` now carries the task's bare query in an optional
   `question` field beside `rendered_prompt` (the required keys are unchanged),
@@ -907,6 +1215,14 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   exactly as before, and the campaign index cache's in-process seam
   (`index_project_in_process`: project-only, static, stock capture) builds
   byte-identical bundles.
+- **The bench VM launcher refuses a local branch out of step with its remote-tracking
+  branch** (`bench_vm/run_commits.py`, #416, #434). The launch never fetches, so
+  `git_ref: main` in a checkout whose `main` sat behind `origin/main` froze an old commit
+  into the run record for every attempt. A first launch, and the dry run, now refuse a
+  `git_ref`, `baseline_ref` or `candidate_ref` naming a local branch whose upstream (else
+  every remote's branch of that name) is at another commit, behind, ahead or diverged,
+  naming both commits and the fix. A SHA, a tag or `origin/main` is taken as written, and
+  a relaunch still runs its recorded commits.
 
 ## [0.2.0] — 2026-09-10
 

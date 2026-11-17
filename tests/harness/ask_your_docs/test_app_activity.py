@@ -132,6 +132,54 @@ def test_a_failed_turn_keeps_its_steps_and_survives_a_rerun(tmp_path, monkeypatc
     _assert_failed_turn(at.run())
 
 
+def test_a_timed_out_turn_reads_did_not_answer_in_time(tmp_path, monkeypatch, caplog) -> None:
+    """The stream timer's error is a TimeoutError subclass. The status label reads
+    the timed-out reason through that base; the caption and the log name the raised class."""
+    timed_out = type("StreamChunkTimeoutError", (TimeoutError,), {})("no chunk for 0.3 s")
+    script = [ACTIVITY_SCRIPT[0], {"raises": timed_out}]
+    with caplog.at_level(logging.WARNING, logger=PAGE_LOGGER):
+        at, _ = _asked(tmp_path, monkeypatch, script=script)
+    [status] = at.status
+    assert status.state == "error"
+    assert status.label.endswith(" · the model endpoint did not answer in time"), status.label
+    assert [e.value for e in at.error] == ["StreamChunkTimeoutError: no chunk for 0.3 s"]
+    records = [json.loads(r.getMessage()) for r in caplog.records if r.name == PAGE_LOGGER]
+    assert {"event": "send_failed", "error": "StreamChunkTimeoutError"} in records
+
+
+def _synthetic_stream_chunk_timeout() -> BaseException:
+    """Named like langchain-openai's stream timer error, on the same TimeoutError base."""
+    return type("StreamChunkTimeoutError", (TimeoutError,), {})("no chunk for 0.3 s")
+
+
+def _synthetic_openai_timeout_wrapper() -> BaseException:
+    """A subclass named like langchain-openai 1.6+'s wrapper of the SDK's timeout."""
+    import httpx
+    import openai
+
+    wrapper = type("OpenAITimeoutError", (openai.APITimeoutError,), {})
+    return wrapper(request=httpx.Request("POST", "http://llm.test/v1/chat/completions"))
+
+
+@pytest.mark.parametrize(
+    "timeout_leaf", [_synthetic_stream_chunk_timeout, _synthetic_openai_timeout_wrapper]
+)
+def test_a_timeout_inside_an_exception_group_still_reads_did_not_answer_in_time(
+    tmp_path, monkeypatch, caplog, timeout_leaf
+) -> None:
+    """anyio task groups wrap errors: the label unwraps the group to its leaf, while the
+    caption and the send_failed log keep naming the class that was raised."""
+    grouped = ExceptionGroup("unhandled errors in a TaskGroup", [timeout_leaf()])
+    script = [ACTIVITY_SCRIPT[0], {"raises": grouped}]
+    with caplog.at_level(logging.WARNING, logger=PAGE_LOGGER):
+        at, _ = _asked(tmp_path, monkeypatch, script=script)
+    [status] = at.status
+    assert status.label.endswith(" · the model endpoint did not answer in time"), status.label
+    assert [e.value for e in at.error] == [f"ExceptionGroup: {grouped}"]
+    records = [json.loads(r.getMessage()) for r in caplog.records if r.name == PAGE_LOGGER]
+    assert {"event": "send_failed", "error": "ExceptionGroup"} in records
+
+
 def test_the_panel_off_keeps_todays_page(tmp_path, monkeypatch) -> None:
     at, _ = _asked(tmp_path, monkeypatch, ui="    activity:\n      enabled: false\n")
     assert not at.status and not at.expander

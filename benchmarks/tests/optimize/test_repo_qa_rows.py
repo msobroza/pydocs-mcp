@@ -25,6 +25,7 @@ from pydocs_eval.optimize.rubric.model import (
     SampleRubricRecord,
 )
 from pydocs_eval.optimize.rubric.sample_ledger import SampleRubricLedger, _as_line
+from pydocs_eval.task_rendering import TaskScaffold, render_task_prompt
 from tests.optimize._trajectories import make_trajectory, server_call
 
 
@@ -52,6 +53,16 @@ class TestSampleRowIdentityDerivation:
         assert sample_row_for_task(bare)["record_id"] == "cve-2025-10283"
         assert sample_row_for_task(bare)["task_name"] == "repo_qa"
         assert sample_row_for_task(bare, task_name="vuln")["task_name"] == "vuln"
+
+    def test_the_rendered_prompt_follows_the_scaffold(self) -> None:
+        task = _task("repoqa-qa/repo_qa/r1", query="Where is X?")
+        citing = sample_row_for_task(task)
+        bare = sample_row_for_task(task, scaffold=TaskScaffold.BARE)
+        assert citing["rendered_prompt"] == render_task_prompt("Where is X?")
+        assert bare["rendered_prompt"] == "Where is X?" == bare["question"]
+        assert {k: v for k, v in bare.items() if k != "rendered_prompt"} == {
+            k: v for k, v in citing.items() if k != "rendered_prompt"
+        }
 
     def test_a_three_part_id_yields_the_record_and_the_framing(self) -> None:
         row = sample_row_for_task(_task("repoqa-qa/repo_qa/psf/black@f0/x.py::y"))

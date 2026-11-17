@@ -14,6 +14,11 @@ YAML), so those are the only third-party imports a judge module may make
 itself. What the eval's other packages import (``pydocs_eval.trajectory``, read
 by the code-first check) is theirs: the AST check reads the judge's own modules
 only, and the subprocess check proves no product and no vendor SDK loads.
+
+The one exception is the annotation page (``annotate_app``, spec 9e): it imports
+Streamlit, which arrives with the ``[ask]`` extra, inside the functions that
+draw. Importing the package — that module included — never loads Streamlit,
+which a second subprocess check proves.
 """
 
 from __future__ import annotations
@@ -30,6 +35,21 @@ import pydocs_eval.judge
 _JUDGE_ROOT = Path(pydocs_eval.judge.__file__).parent
 # httpx for every client; pydantic and pyyaml for the typed YAML configuration.
 _THIRD_PARTY_ALLOWED = frozenset({"httpx", "pydantic", "yaml"})
+# The annotation page draws with Streamlit, imported function-locally (see the module docstring).
+_PAGE_THIRD_PARTY_ALLOWED = {"annotate_app.py": frozenset({"streamlit"})}
+
+_IMPORT_EVERY_JUDGE_MODULE_WITHOUT_STREAMLIT = """
+import importlib
+import pkgutil
+import sys
+import pydocs_eval.judge
+names = [m.name for m in pkgutil.walk_packages(pydocs_eval.judge.__path__, "pydocs_eval.judge.")]
+assert "pydocs_eval.judge.annotate_app" in names, names
+for name in names:
+    importlib.import_module(name)
+loaded = sorted(name for name in sys.modules if name.split(".")[0] == "streamlit")
+assert not loaded, f"{len(loaded)} streamlit modules loaded, e.g. {loaded[:3]}"
+"""
 
 _SCORE_WITHOUT_THE_PRODUCT = """
 import importlib
@@ -72,6 +92,22 @@ def test_the_judge_scores_an_answer_without_the_product() -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_importing_the_judge_package_never_imports_streamlit() -> None:
+    """Every judge module, the annotation page included, imports without loading Streamlit."""
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
+
+    result = subprocess.run(
+        [sys.executable, "-c", _IMPORT_EVERY_JUDGE_MODULE_WITHOUT_STREAMLIT],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def _imported_roots(source: Path) -> set[str]:
     """The top-level package of every absolute import in ``source``."""
     roots: set[str] = set()
@@ -94,6 +130,7 @@ def test_a_judge_module_imports_only_the_stdlib_httpx_and_the_config_stack() -> 
             foreign := _imported_roots(module)
             - set(sys.stdlib_module_names)
             - _THIRD_PARTY_ALLOWED
+            - _PAGE_THIRD_PARTY_ALLOWED.get(str(module.relative_to(_JUDGE_ROOT)), frozenset())
             - {"pydocs_eval"}
         )
     }

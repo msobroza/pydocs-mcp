@@ -197,6 +197,13 @@ A run spec's `git_ref` must resolve to a commit that is reachable from a
 remote-tracking branch (push it first) and that carries this tree. The two
 smoke specs use `git_ref: main`.
 
+A ref that names a local branch, such as `main`, must also be in step with its
+remote-tracking branch (`origin/main`, as your last `git fetch` left it): the
+launch never fetches, and a local `main` left behind would freeze an old commit
+into the run. Otherwise the launch is refused, naming both commits; run
+`git pull --ff-only` on `main` (or push it) and launch again, or write
+`origin/main` or a commit SHA instead.
+
 A `before_after` spec's `baseline_ref` and `candidate_ref` must also be
 reachable from a remote-tracking branch of the product repository itself,
 `https://github.com/msobroza/pydocs-mcp`: the VM clones that repository to
