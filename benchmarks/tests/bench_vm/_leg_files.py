@@ -10,7 +10,9 @@ import json
 from collections.abc import Mapping
 from pathlib import Path
 
-_SYSTEM, _DATASET, _DATASET_SLUG = "pydocs-mcp", "repoqa@2024-06-23", "repoqa_at_2024-06-23"
+# The header names the dataset with its revision; a ``--run-id`` leg file is named
+# after the dataset alone, a plain one after both (``JsonlExperimentTracker``).
+_SYSTEM, _DATASET_NAME, _DATASET = "pydocs-mcp", "repoqa", "repoqa@2024-06-23"
 
 
 def leg_name(config_name: str = "bm25") -> str:
@@ -23,7 +25,7 @@ LEG_NAME = leg_name()
 
 def run_leg_path(pulled: Path, run_id: str, config_name: str = "bm25") -> Path:
     """A ``--run-id`` leg file as ``pull`` lays it out under the run's state."""
-    stem = f"{_SYSTEM}_{config_name}_{_DATASET_SLUG}"
+    stem = f"{_SYSTEM}_{config_name}_{_DATASET_NAME}"
     return pulled / run_id / "state" / "results" / run_id / f"{stem}.jsonl"
 
 
@@ -31,7 +33,7 @@ def local_leg_path(
     local: Path, run_id: str, config_name: str = "bm25", stamp: str = "20261117T000000Z"
 ) -> Path:
     """A plain (timestamped) leg file where ``local-command`` points the runner."""
-    stem = f"{_SYSTEM}_{config_name}_{_DATASET_SLUG}_{stamp}"
+    stem = f"{_SYSTEM}_{config_name}_{_DATASET_NAME}_at_2024-06-23_{stamp}"
     return local / run_id / "results" / f"{stem}.jsonl"
 
 

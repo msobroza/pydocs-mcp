@@ -385,7 +385,7 @@ def test_it_lists_each_sides_leg_files_with_progress_even_with_nothing_to_compar
     assert result.exit_code == 1
     assert result.out.splitlines()[:4] == [
         f"run:   {run_results}",
-        f"  {run_id}/pydocs-mcp_bm25_repoqa_at_2024-06-23.jsonl: leg {LEG_NAME}, "
+        f"  {run_id}/pydocs-mcp_bm25_repoqa.jsonl: leg {LEG_NAME}, "
         "8 task records, no final aggregate block yet",
         f"local: {local_results}",
         "  (no leg files)",
