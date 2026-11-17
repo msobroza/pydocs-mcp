@@ -224,4 +224,4 @@ def test_server_instructions_carry_the_mutual_context_rules() -> None:
     assert "many targets" in text  # batch over fan-out
     assert "goes to grep and read_file" in text  # exact strings
     assert "goes to search_codebase" in text  # ranked questions
-    assert "symbol card" in text  # card before source
+    assert "symbol card" in text  # the card only for a member list

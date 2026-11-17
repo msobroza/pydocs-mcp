@@ -105,11 +105,17 @@ not match), reorder them, or drop one. The label constants are importable as
 tool — and nothing that belongs to every tool.** The workflow line and the
 response-contract line used to be repeated verbatim in all nine sections;
 they now live once in `SERVER_INSTRUCTIONS`, next to the rules that tell a
-caller how to use one response to shape the next call (follow the offered
-pointer instead of re-searching, never re-read what a result already
-rendered, `Together:` calls are safe to issue at once while `Then:` calls
-need the earlier result, one batch call beats a fan-out, exact strings go to
-`grep`/`read_file`, look at the symbol card before asking for source).
+caller how to use one response to shape the next call (follow-up calls are
+offers, so take only the ones the question needs; the `Together:` calls taken
+go out in one turn while `Then:` calls need the earlier result; follow the
+offered pointer instead of re-searching; never re-read what a result already
+rendered, and a hit that offers no source call has rendered its whole span;
+one batch call beats a fan-out; exact strings go to `grep`/`read_file`; code
+is one source view, and the symbol card is only for a member list). Three of
+these rules restate the chat agent's `system_v3` rules 7, 9 and 12 and carry
+their key sentences word for word (`tests/test_tool_descriptions.py` checks
+each one against the template), so an MCP client and the chat agent get one
+policy from one server.
 
 **Length follows decision content.** There is no token-reduction target: a
 section may be longer than its neighbours when its arguments genuinely need
