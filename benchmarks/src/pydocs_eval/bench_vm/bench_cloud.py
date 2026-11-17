@@ -45,8 +45,7 @@ class MachineTypeFacts:
 
     ``architecture`` is the API's spelling (``X86_64``, ``ARM64``), ``None``
     when it reports none, as it does for the classic x86 families
-    (``n2-standard-8``, ``e2-standard-8``); the machine check reads ``None``
-    as x86_64. ``bundled_accelerators`` are the GPUs an
+    (``n2-standard-8``, ``e2-standard-8``). ``bundled_accelerators`` are the GPUs an
     accelerator-optimized type (``g2-…``) carries by itself, as
     ``(accelerator type, count)`` pairs.
     """

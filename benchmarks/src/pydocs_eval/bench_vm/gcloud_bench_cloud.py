@@ -73,6 +73,9 @@ _METADATA_CURL_MAX_TIME_S = 10
 _METADATA_SERVER_URL = "http://metadata.google.internal/computeMetadata/v1/"
 # `curl -f` exits 22 on an HTTP error status; 404 means the key is unset.
 _CURL_HTTP_404 = re.compile(r"returned error: 404\b")
+# The architecture enum's unset value: the Compute API leaves the field out
+# instead (n2-standard-8, #434), but sending it, or nothing, means the same.
+_UNREPORTED_ARCHITECTURES = frozenset({"ARCHITECTURE_UNSPECIFIED", ""})
 
 _NOT_FOUND = NOT_FOUND
 _PRECONDITION_FAILED = PRECONDITION_FAILED
@@ -422,10 +425,9 @@ def _labelled_instance(item: Mapping[str, Any]) -> LabelledInstance:
 
 def _machine_type_facts(answer: Mapping[str, Any]) -> MachineTypeFacts:
     accelerators = answer.get("accelerators") or []
-    architecture = answer.get("architecture")
     return MachineTypeFacts(
         name=str(answer["name"]),
-        architecture=architecture if isinstance(architecture, str) else None,
+        architecture=_reported_architecture(answer),
         guest_cpus=int(answer["guestCpus"]),
         memory_mb=int(answer["memoryMb"]),
         bundled_accelerators=tuple(
@@ -433,3 +435,10 @@ def _machine_type_facts(answer: Mapping[str, Any]) -> MachineTypeFacts:
             for entry in accelerators
         ),
     )
+
+
+def _reported_architecture(answer: Mapping[str, Any]) -> str | None:
+    architecture = answer.get("architecture")
+    if not isinstance(architecture, str) or architecture in _UNREPORTED_ARCHITECTURES:
+        return None
+    return architecture
