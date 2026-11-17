@@ -3,6 +3,13 @@
 A bench VM must be x86_64 with at least 8 vCPU and 32 GB (32768 MB, what
 ``n2-standard-8`` reports). The check runs before anything is written, on the
 machine type's facts in the first zone of the launch order that offers it.
+
+The Compute API reports no architecture at all for the classic x86 families
+(``n2-standard-8``, ``e2-standard-8``) and one for the newer families
+(``X86_64`` for ``g2-standard-8``, ``ARM64`` for ``t2a-standard-8`` and
+``c4a-standard-8``; asked in europe-west4-a on 2026-11-17, #434). So a type
+that reports none counts as x86_64, and only a reported architecture other
+than ``X86_64`` is refused.
 """
 
 from __future__ import annotations
@@ -32,7 +39,7 @@ def check_machine_type(facts: MachineTypeFacts, gpu: GpuRequest | None) -> GpuAt
 
 def _check_floor(facts: MachineTypeFacts) -> None:
     under_floor = (
-        facts.architecture != REQUIRED_ARCHITECTURE
+        _reports_another_architecture(facts)
         or facts.guest_cpus < MIN_GUEST_CPUS
         or facts.memory_mb < MIN_MEMORY_MB
     )
@@ -44,6 +51,11 @@ def _check_floor(facts: MachineTypeFacts) -> None:
         f"{architecture}), expected {REQUIRED_ARCHITECTURE} with at least {MIN_GUEST_CPUS} vCPU "
         f"and {MIN_MEMORY_MB} MB (ADR 0014's floor)"
     )
+
+
+def _reports_another_architecture(facts: MachineTypeFacts) -> bool:
+    # None is the classic x86 families' answer, never an Arm type's (#434).
+    return facts.architecture is not None and facts.architecture != REQUIRED_ARCHITECTURE
 
 
 def _gpu_attachment(facts: MachineTypeFacts, gpu: GpuRequest | None) -> GpuAttachment | None:
