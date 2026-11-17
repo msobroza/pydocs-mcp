@@ -20,7 +20,7 @@ from ._git_fixture import (
     FIXTURE_CONFIG,
     FIXTURE_CORPUS_DIR,
     FixtureRepo,
-    add_bare_remote,
+    add_fork_remote,
     point_url_at,
     run_git,
 )
@@ -28,16 +28,11 @@ from ._launch_harness import LaunchHarness, LaunchResult
 from ._spec_dicts import before_after_spec, retrieval_spec
 
 Capsys = pytest.CaptureFixture[str]
-_FORK_URL = "git@github.com:someone-else/pydocs-mcp.git"
-
-
-def _add_fork(repo: FixtureRepo, root: Path, name: str = "fork") -> None:
-    add_bare_remote(repo, root, name, _FORK_URL)
 
 
 def _commit_on_the_fork_only(repo: FixtureRepo, root: Path, name: str = "fork") -> str:
     """A commit pushed to remote ``name`` and nowhere else; local ``main`` stays at ``origin/main``."""
-    _add_fork(repo, root, name)
+    add_fork_remote(repo, root, name)
     pushed = repo.head()
     repo.write("product.txt", "fork only\n")
     commit = repo.commit("a fork's candidate")
@@ -99,7 +94,7 @@ def test_a_retrieval_run_commit_may_live_on_any_remote(
     harness: LaunchHarness, capsys: Capsys, tmp_path: Path
 ) -> None:
     """Only before/after clones the product repository; other kinds' commits ship in the image."""
-    _add_fork(harness.repo, tmp_path)
+    add_fork_remote(harness.repo, tmp_path)
     harness.repo.write("notes/fork.txt", "fork\n")
     commit = harness.repo.commit("a fork's run commit")
     run_git(harness.repo.path, "push", "-q", "fork", "HEAD:refs/heads/feature")

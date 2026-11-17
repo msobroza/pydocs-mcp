@@ -167,15 +167,12 @@ A run spec's `git_ref` must resolve to a commit that is reachable from a
 remote-tracking branch (push it first) and that carries this tree. The two
 smoke specs use `git_ref: main`.
 
-The launch never fetches, and a ref that names a local branch resolves to
-your local copy. That copy must be at the same commit as its remote-tracking
-branch (its upstream, else every remote's branch of that name), or a stale
-local `main` would freeze an old commit into the run for every attempt.
-Behind, ahead or diverged, the launch is refused, naming both commits: update
-the branch (`git pull --ff-only` on `main`, or push it) and launch again. The
-check sees the remote as your last `git fetch` left it, so fetch before a
-launch. A commit SHA, a tag or `origin/main` is taken as written, and a
-relaunch never checks the branch again.
+A ref that names a local branch, such as `main`, must also be in step with its
+remote-tracking branch (`origin/main`, as your last `git fetch` left it): the
+launch never fetches, and a local `main` left behind would freeze an old commit
+into the run. Otherwise the launch is refused, naming both commits; run
+`git pull --ff-only` on `main` (or push it) and launch again, or write
+`origin/main` or a commit SHA instead.
 
 A `before_after` spec's `baseline_ref` and `candidate_ref` must also be
 reachable from a remote-tracking branch of the product repository itself,

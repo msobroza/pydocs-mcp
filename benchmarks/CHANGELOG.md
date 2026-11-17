@@ -813,20 +813,6 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Fixed
 
-- **The bench VM launcher refuses a ref naming a local branch that is out of step with
-  its remote-tracking branch** (`bench_vm/run_commits.py`, #416, #434). The launch never
-  fetches, and `git_ref: main` resolved to the local `main`. So a checkout whose `main`
-  sat behind `origin/main` froze an old commit into the run record, and every relaunch
-  reused it; a commit from before the bench VM was refused for a missing recipe instead,
-  which hid the cause. A first launch now refuses a `git_ref`, `baseline_ref` or
-  `candidate_ref` that names a local branch whose counterpart is at another commit,
-  whether the branch is behind, ahead or diverged. The counterpart is the configured
-  upstream, else every remote's branch of the same name. The refusal names both commits
-  and the fix: fast-forward or push the branch, or write the remote-tracking name or a
-  SHA. A SHA, a tag or a remote-tracking name (`origin/main`) is taken as written, a
-  branch with no counterpart keeps the reachability rule, and a relaunch still runs its
-  recorded commits without looking at the branch. The dry run lists the check under
-  `checks: passed`.
 - **A seed-on arm seeds the task's question, not the scaffolded prompt.**
   `sample_row_for_task` now carries the task's bare query in an optional
   `question` field beside `rendered_prompt` (the required keys are unchanged),
@@ -907,6 +893,14 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   exactly as before, and the campaign index cache's in-process seam
   (`index_project_in_process`: project-only, static, stock capture) builds
   byte-identical bundles.
+- **The bench VM launcher refuses a local branch out of step with its remote-tracking
+  branch** (`bench_vm/run_commits.py`, #416, #434). The launch never fetches, so
+  `git_ref: main` in a checkout whose `main` sat behind `origin/main` froze an old commit
+  into the run record for every attempt. A first launch, and the dry run, now refuse a
+  `git_ref`, `baseline_ref` or `candidate_ref` naming a local branch whose upstream (else
+  every remote's branch of that name) is at another commit, behind, ahead or diverged,
+  naming both commits and the fix. A SHA, a tag or `origin/main` is taken as written, and
+  a relaunch still runs its recorded commits.
 
 ## [0.2.0] — 2026-09-10
 

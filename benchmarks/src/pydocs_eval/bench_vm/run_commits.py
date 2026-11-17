@@ -4,17 +4,19 @@ All of it runs on the laptop, offline: refs resolve against the local
 repository and reachability is checked against the remote-tracking branches it
 already has (``git fetch`` first if they are stale). A commit no
 remote-tracking branch contains is refused, because the VM's image is built
-from what the remote holds. A ref naming a local branch must also sit at the
-commit of its remote-tracking counterpart (its configured upstream, else every
-remote's branch of the same name): a first launch freezes the commit for every
-attempt, so a local ``main`` behind ``origin/main`` would freeze an old one for
-good. Behind, ahead or diverged, it is refused; a SHA, a tag or a
-remote-tracking name (``origin/main``) is taken as written, and a relaunch
-never resolves the refs again. A before/after baseline or candidate must be on a
+from what the remote holds. A before/after baseline or candidate must be on a
 remote-tracking branch of the product repository itself (a remote whose URL
 normalises to ``PRODUCT_REPO_URL``), because that is what the VM clones to
 check them out; a fork's branch is not enough. Files are read at the commit,
 never from the working tree, so an uncommitted edit can never reach a VM.
+
+A ref naming a local branch must also be in step with its remote-tracking
+counterpart (its upstream while that exists, else every remote's branch of the
+same name), at one commit: a first launch freezes the commit for every attempt,
+so a local ``main`` behind ``origin/main`` would freeze an old one for good.
+Behind, ahead or diverged, it is refused; a SHA, a tag or a remote-tracking
+name (``origin/main``) is taken as written, and a relaunch never resolves the
+refs again.
 """
 
 from __future__ import annotations
@@ -220,9 +222,9 @@ class HostScripts:
 def freeze_commits(git: GitCheckout, spec: RunSpec) -> FrozenCommits:
     """Resolve ``git_ref`` (and the before/after refs); each must be on a remote-tracking branch.
 
-    A ref naming a local branch must sit where its remote-tracking branch
-    does. A before/after baseline and candidate must be on one of the product
-    repository's: the VM clones it to check them out.
+    A ref naming a local branch must be in step with its remote-tracking
+    branch. A before/after baseline and candidate must be on one of the
+    product repository's: the VM clones it to check them out.
     """
     product_urls = git.remote_fetch_urls() if spec.kind is RunKind.BEFORE_AFTER else None
     return FrozenCommits(

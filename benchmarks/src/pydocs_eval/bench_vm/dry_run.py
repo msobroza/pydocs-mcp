@@ -2,7 +2,7 @@
 
 A dry run never invokes ``gcloud``, ``terraform`` or the network, and writes
 nothing. It loads the spec, derives the run id, resolves the refs, checks that
-a ref naming a local branch sits where its remote-tracking branch does and
+a ref naming a local branch is in step with its remote-tracking branch and
 that each commit is on a remote-tracking branch, and checks the recipe, the
 configs, ``corpus_dir`` and the host scripts at the commit — the same code a
 real launch runs. What only the cloud knows (the deployment's names, the image
@@ -51,7 +51,7 @@ _PASSED_CHECKS = (
     "run spec",
     "run id",
     "ref resolution",
-    "local branches level with their remote-tracking branches",
+    "local branches in step with their remote-tracking branches",
     "remote-tracking reachability",
     "recipe at the commit",
     "configs and corpus_dir at the commit",

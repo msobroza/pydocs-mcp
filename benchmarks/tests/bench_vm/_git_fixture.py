@@ -33,6 +33,8 @@ from pydocs_eval.bench_vm.vm_request import ImageFlavour
 FIXTURE_CONFIG = "benchmarks/configs/baseline.yaml"
 FIXTURE_CORPUS_DIR = "benchmarks/fixtures/reference_project"
 FIXTURE_RUNS_DIR = "infra/bench-vm/runs"
+# A fork of the product repository: a second remote that is not the product's.
+FORK_URL = "git@github.com:someone-else/pydocs-mcp.git"
 
 
 def run_git(repo: Path, *args: str) -> str:
@@ -83,6 +85,16 @@ class FixtureRepo:
         run_git(self.path, "reset", "-q", "--hard", local)
         return local, remote
 
+    def move_ahead_of_origin(self) -> tuple[str, str]:
+        """Give local ``main`` one commit ``origin/main`` lacks; return (local, remote)."""
+        remote = self.head()
+        return self.commit_unpushed("local only"), remote
+
+    def diverge_from_origin(self) -> tuple[str, str]:
+        """Leave local ``main`` one commit behind ``origin/main`` and one ahead; return (local, remote)."""
+        _, remote = self.fall_behind_origin()
+        return self.commit_unpushed("local only"), remote
+
     def remove(self, relative: str) -> None:
         run_git(self.path, "rm", "-q", "-r", relative)
 
@@ -95,12 +107,12 @@ def point_url_at(repo: Path, url: str, bare: Path) -> None:
     run_git(repo, "config", "--add", f"url.{bare}.pushInsteadOf", url)
 
 
-def add_bare_remote(repo: FixtureRepo, root: Path, name: str, url: str) -> None:
-    """Add remote ``name`` with ``url``, its pushes landing in a new bare repository under ``root``."""
+def add_fork_remote(repo: FixtureRepo, root: Path, name: str = "fork") -> None:
+    """Add remote ``name`` with ``FORK_URL``; its pushes land in a new bare repository under ``root``."""
     bare = root / f"{name.replace('/', '-')}.git"
     subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True, capture_output=True)
-    run_git(repo.path, "remote", "add", name, url)
-    point_url_at(repo.path, url, bare)
+    run_git(repo.path, "remote", "add", name, FORK_URL)
+    point_url_at(repo.path, FORK_URL, bare)
 
 
 def write_run_commit_layout(repo: FixtureRepo, marker: str) -> None:

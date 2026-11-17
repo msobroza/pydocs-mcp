@@ -36,7 +36,7 @@ def test_a_commit_not_on_any_remote_tracking_branch_is_refused(
     unpushed = harness.repo.commit_unpushed("local only")
     harness.publish_images(unpushed)
 
-    # Written as a SHA: as `main`, the branch-against-origin/main check refuses it first.
+    # Written as a SHA: as `main`, the branch-in-step check refuses it first.
     result = harness.launch(capsys, "cpu-smoke", _spec(git_ref=unpushed))
 
     _assert_refused_before_any_write(harness, result)
