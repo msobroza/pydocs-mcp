@@ -7,6 +7,7 @@ working without each call site needing to learn the submodule path.
 Module layout:
 
 - :mod:`.bm25_scorer` — :class:`BM25ScorerStep`
+- :mod:`.child_expand` — :class:`ChildExpandStep`
 - :mod:`.chunk_fetcher` — :class:`ChunkFetcherStep`
 - :mod:`.dense_fetcher` — :class:`DenseFetcherStep`
 - :mod:`.dense_scorer` — :class:`DenseScorerStep`
@@ -38,6 +39,7 @@ from __future__ import annotations
 from pydocs_mcp.retrieval.steps import sub_pipeline as _sub_pipeline  # noqa: F401
 from pydocs_mcp.retrieval.steps.bm25_scorer import BM25ScorerStep
 from pydocs_mcp.retrieval.steps.centrality_prior import CentralityPriorStep
+from pydocs_mcp.retrieval.steps.child_expand import ChildExpandStep
 from pydocs_mcp.retrieval.steps.chunk_fetcher import ChunkFetcherStep
 from pydocs_mcp.retrieval.steps.community_diversity import CommunityDiversityStep
 from pydocs_mcp.retrieval.steps.conditional import ConditionalStep
@@ -67,6 +69,7 @@ __all__ = (
     "COMPOSITE_TITLE_SENTINEL",
     "BM25ScorerStep",
     "CentralityPriorStep",
+    "ChildExpandStep",
     "ChunkFetcherStep",
     "CommunityDiversityStep",
     "ConditionalStep",
