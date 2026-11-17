@@ -113,7 +113,7 @@ def _seed_basic_fixture(db_path: Path) -> None:
     conn.close()
 
 
-def _run_server_capture_tools(db_path: Path):
+def _run_server_capture_tools(db_path: Path, overlay_extra: str = ""):
     """Boot ``server.run`` with FakeMCP injected so we can call handlers.
 
     Pins the vector-free BM25 chunk pipeline via ``config_path``: these tests
@@ -121,12 +121,13 @@ def _run_server_capture_tools(db_path: Path):
     FTS path, not dense ranking. The shipped default is dense+graph (needs a
     seeded ``.tq`` sidecar); pinning BM25 keeps the wiring tests deterministic
     without seeding vectors. The dense+graph default is covered by the benchmark
-    A/B + the dense-pipeline unit tests.
+    A/B + the dense-pipeline unit tests. ``overlay_extra`` appends YAML to
+    that overlay (a fixture's flag choice, e.g. the ADR 0027 fallback off).
     """
     config_path = db_path.parent / "bm25_overlay.yaml"
     config_path.write_text(
         "pipelines:\n  chunk:\n    - default: true\n"
-        "      pipeline_path: pipelines/chunk_search.yaml\n"
+        "      pipeline_path: pipelines/chunk_search.yaml\n" + overlay_extra
     )
     fake_mcp = FakeMCP("test")
     fake_mcp_module = MagicMock()
@@ -158,6 +159,16 @@ def server_tools(tmp_path: Path):
     db_path = tmp_path / "test.db"
     _seed_basic_fixture(db_path)
     return _run_server_capture_tools(db_path), db_path
+
+
+@pytest.fixture
+def server_tools_fallback_off(tmp_path: Path):
+    """``server_tools`` served with the ADR 0027 ``kind="api"`` zero-hit
+    fallback OFF — the pre-ADR-0027 zero-hit bytes."""
+    db_path = tmp_path / "test.db"
+    _seed_basic_fixture(db_path)
+    overlay = "output:\n  suggestions:\n    api_zero_hit_fallback_any: false\n"
+    return _run_server_capture_tools(db_path, overlay), db_path
 
 
 def _seed_tree_for_fastapi(db_path: Path) -> DocumentNode:
@@ -396,10 +407,27 @@ class TestSearchApi:
         out = _text(_arun(tools["search_codebase"](query="compute", kind="api")))
         assert "compute" in out
 
-    def test_no_matches_returns_symbol_msg(self, server_tools) -> None:
-        tools, _ = server_tools
+    def test_no_matches_returns_symbol_msg(self, server_tools_fallback_off) -> None:
+        tools, _ = server_tools_fallback_off
         out = _text(_arun(tools["search_codebase"](query="zzznonexistenttermzzz", kind="api")))
         assert "No symbols" in out
+
+    def test_no_matches_with_fallback_on_reports_both_kinds_empty(self, server_tools) -> None:
+        # ADR 0027 twin (shipped default: fallback ON). The BM25 fixture holds no
+        # chunk for the nonsense term either, so the kind="any" fallback finds
+        # nothing (outcome E, observed by running it): the literal stays and the
+        # fixed both-empty label replaces the retry line.
+        tools, _ = server_tools
+        result = _arun(tools["search_codebase"](query="zzznonexistenttermzzz", kind="api"))
+        both_empty = (
+            '[suggestion: kind="api" matched nothing, and kind="any" found nothing '
+            "for the same query and filters either]"
+        )
+        out = _text(result)
+        assert "No symbols" in out and out.splitlines()[-1] == both_empty
+        assert "retry with" not in out
+        assert result.structuredContent["meta"]["suggestion"] == both_empty
+        assert result.structuredContent["items"] == []
 
 
 class TestSearchAny:

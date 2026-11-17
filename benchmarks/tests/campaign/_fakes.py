@@ -11,15 +11,19 @@ plan test stays offline and instant while still proving WHICH arms were asked.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydocs_eval.campaign.before_after import CommitUnderTest, MeasurementPlan
-from pydocs_eval.campaign.before_after_arm import ArmSummary
+from pydocs_eval.campaign.before_after_arm import ArmSummary, read_arm_settings, write_arm_summary
+from pydocs_eval.campaign.before_after_arm_variant import ArmVariant
 from pydocs_eval.campaign.before_after_block_probe import ArmBlockAcceptance, ArmBlockVerdict
+from pydocs_eval.campaign.before_after_corpora import IndexIdentity
+from pydocs_eval.campaign.before_after_serving import ServingBasis, ServingSettings
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.datasets.repo_qa import GOLD_SYMBOL_KEY
 from pydocs_eval.trajectory.server_capture import SERVER_EVENTS_FILENAME
@@ -29,6 +33,48 @@ from pydocs_eval.trajectory.token_accounting import ASK_MODEL_USAGE_FILENAME
 # the baseline predated it, and the block was validated against the candidate.
 REJECTED_KEY = "harness.llm.parallel_tool_calls"
 
+# What the ``stub_command`` plan is served under: a serving config the CLI tests
+# never read, so its digest is a stand-in, and the endpoint and index it names.
+# The endpoint rides as ``--base-url`` would, so every arm resolves the same one.
+STUB_SERVING = ServingBasis(
+    config_digest="stub-serving-config",
+    cli_url="http://e",
+    file_llm=None,
+    index=IndexIdentity(embedder_model="m", embedder_dim=8, scope_id="scope"),
+)
+
+
+def stub_serving_settings(max_agent_turns: int) -> ServingSettings:
+    """``_serving_settings``' answer for :data:`STUB_SERVING`, at a turn cap."""
+    return ServingSettings(endpoint="http://e", max_agent_turns=max_agent_turns, basis=STUB_SERVING)
+
+
+@contextlib.contextmanager
+def no_worktree(repo: Path, sha: str, root: Path) -> Iterator[Path]:
+    """``product_worktree`` without git — the arm child is stubbed out anyway."""
+    yield root / sha[:12]
+
+
+def write_finished_summary_from_settings(
+    worktree: Path, *, arm_dir: Path, split: str, limit: int | None
+) -> None:
+    """Stand in for the arm child: the finished ``arm.json`` it writes from its settings,
+    through the real writer, with both plan tasks excluded (no trace to measure)."""
+    settings = read_arm_settings(arm_dir)
+    summary = ArmSummary(
+        role=settings.role,
+        commit=settings.commit,
+        model=settings.model,
+        trace_root=settings.trace_root,
+        tasks=[],
+        estimated_usd=0.0,
+        halt_reason="completed",
+        excluded=2,
+        max_agent_turns=settings.max_agent_turns,
+        **settings.summary_variant_fields(),  # type: ignore[arg-type]
+    )
+    write_arm_summary(arm_dir, summary)
+
 
 @dataclass
 class FakeArmBlockProbe:
@@ -36,18 +82,18 @@ class FakeArmBlockProbe:
 
     Every arm accepts unless ``reject_role`` names one — which is the real
     failure shape: both arms are handed the same block and only ONE of them
-    refuses it. ``asked`` records what each arm was shown, so a test can prove
-    the probe ran per arm and saw the byte-identical block.
+    refuses it. ``asked`` records the variant each arm was shown, so a test can
+    prove the probe ran per arm and saw that arm's own block and overlay.
     """
 
     reject_role: str | None = None
     refused_keys: tuple[str, ...] = (REJECTED_KEY,)
-    asked: list[tuple[str, str, Mapping[str, object]]] = field(default_factory=list)
+    asked: list[tuple[str, str, ArmVariant]] = field(default_factory=list)
 
     def __call__(
-        self, repo: Path, commit: CommitUnderTest, block: Mapping[str, object]
+        self, repo: Path, commit: CommitUnderTest, variant: ArmVariant
     ) -> ArmBlockAcceptance:
-        self.asked.append((commit.role, commit.sha, dict(block)))
+        self.asked.append((commit.role, commit.sha, variant))
         if commit.role != self.reject_role:
             return ArmBlockAcceptance(
                 role=commit.role, sha=commit.sha, verdict=ArmBlockVerdict.ACCEPTS
@@ -202,6 +248,39 @@ class ScriptedArmRunner:
         return scripted
 
 
+@dataclass
+class FakeHarnessRunner:
+    """One trajectory per sample, its trace file on disk; no agent and no endpoint.
+
+    ``samples`` and ``guidance`` record what each rollout was handed, so a test
+    can prove which tasks ran and what guidance reached the runner.
+    """
+
+    trace_root: Path
+    samples: list[Mapping[str, object]] = field(default_factory=list)
+    guidance: list[Mapping[str, str]] = field(default_factory=list)
+
+    async def run(self, sample: Mapping[str, object], guidance: Mapping[str, str]) -> object:
+        self.samples.append(dict(sample))
+        self.guidance.append(dict(guidance))
+        return run_with_trace_file(self.trace_root, str(sample["record_id"]))
+
+
+@dataclass
+class RecordingAskRunnerBuild:
+    """Stands in for ``build_ask_harness_runner``: records each build's keyword arguments.
+
+    What an arm's runner is BUILT from — its architecture, its llm block, its
+    harness keys — is the whole question, so no runner is returned at all.
+    """
+
+    calls: list[dict[str, object]] = field(default_factory=list)
+
+    def __call__(self, **settings: object) -> object:
+        self.calls.append(settings)
+        return object()
+
+
 def eval_task(task_id: str, gold: tuple[str, ...] = ("a.py",), symbol: str = "") -> EvalTask:
     """One split task, with a gold file set and a corpus nothing reads.
 
@@ -230,8 +309,13 @@ class FakeSplitTasks:
 
     gold_by_task: dict[str, tuple[str, ...]]
     symbol_by_task: dict[str, str] = field(default_factory=dict)
+    #: The ``draw`` each load was asked for, in call order (None = the slice as-is).
+    draws: list[object] = field(default_factory=list)
 
-    async def __call__(self, split: str, *, limit: int | None = None) -> tuple[EvalTask, ...]:
+    async def __call__(
+        self, split: str, *, limit: int | None = None, draw: object = None
+    ) -> tuple[EvalTask, ...]:
+        self.draws.append(draw)
         tasks = tuple(
             eval_task(task_id, gold, self.symbol_by_task.get(task_id, ""))
             for task_id, gold in self.gold_by_task.items()

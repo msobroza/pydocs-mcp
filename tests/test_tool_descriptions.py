@@ -4,11 +4,17 @@ Substring assertions (case-insensitive) catch capability claims and
 forbidden internal jargon. Resilient to whitespace + minor wording
 changes — future tightening of the prose is unblocked as long as the
 required signals survive.
+
+The server-instruction lines that restate the chat prompt are the exception:
+they carry exact phrases (issue #379) or whole sentences checked against
+``system_v3`` itself (issue #395), because their job is to agree with it.
 """
 
 from __future__ import annotations
 
 import re
+
+import pytest
 
 
 # ── MCP side ─────────────────────────────────────────────────────────────
@@ -185,11 +191,17 @@ def test_no_internal_jargon_in_any_description() -> None:
 _OVERVIEW_TRIGGERS = "after a search misses, or for a question about the project's structure"
 
 
-def _server_instruction_line(prefix: str) -> str:
+def _served_instructions() -> str:
+    # Read at call time: other tests rebind tool_docs.SERVER_INSTRUCTIONS.
     from pydocs_mcp.application.tool_docs import SERVER_INSTRUCTIONS
 
-    (line,) = [ln for ln in SERVER_INSTRUCTIONS.splitlines() if ln.startswith(prefix)]
-    return line
+    return SERVER_INSTRUCTIONS
+
+
+def _server_instruction_line(prefix: str) -> str:
+    lines = [ln for ln in _served_instructions().splitlines() if ln.startswith(prefix)]
+    assert len(lines) == 1, f"expected one server-instruction line opening {prefix!r}: {lines!r}"
+    return lines[0]
 
 
 def test_get_overview_is_no_longer_the_first_call() -> None:
@@ -214,19 +226,69 @@ def test_the_workflow_starts_at_search_codebase() -> None:
     )
 
 
-def test_the_other_follow_up_lines_wait_for_their_own_edit() -> None:
-    """The step-5 edit touches only the Workflow line; these follow-up lines
-    (descriptions.md :9, :11, :14) move in a later PR."""
-    assert _server_instruction_line('- The calls on a "Together:"') == (
-        '- The calls on a "Together:" line are independent of each other — issue all of '
-        'them in ONE turn. The calls on a "Then:" line need an earlier result first, so '
-        "leave them for a later turn."
-    )
-    assert _server_instruction_line("- Never re-read") == (
-        "- Never re-read content a response already showed you; ask for a different "
-        "depth or a different symbol instead."
-    )
-    assert _server_instruction_line("- Look at the symbol card") == (
-        "- Look at the symbol card — get_symbol's default depth — before asking for "
-        'depth="source".'
-    )
+# ── the follow-up rules agree with system_v3 (issue #395) ────────────────
+#
+# One server hands out two policy surfaces: the chat agent's system prompt and
+# SERVER_INSTRUCTIONS, which every external MCP client reads and chat never
+# receives. system_v3 rewrote v2's rules 7, 9 and 12, so the three
+# server-instruction lines that restated them now carry v3's sentences. v3 is
+# rendered by name: it is byte-frozen, and a later prompt version that moves
+# these rules elsewhere does not change what an external client should be told.
+# The golden (tests/application/test_description_loading.py) pins every byte.
+
+# rule -> (how its server-instruction line opens, the system_v3 sentences it carries)
+_SERVER_LINES_CARRYING_V3_RULES = {
+    "rule-7-follow-ups-are-offers": (
+        "- Follow-up calls are offers",
+        (
+            "are offers, not orders: take only the ones the question needs.",
+            'The calls on a "Together:" line are independent of each other, so when you '
+            "take several, issue them in one turn.",
+        ),
+    ),
+    "rule-9-what-already-shown-means": (
+        "- Never re-read",
+        (
+            'A hit whose follow-up calls offer no source call (no depth="source", no '
+            "read_file) has already shown its whole span.",
+            'When a view says lines are "not in the index", read exactly those lines, once.',
+        ),
+    ),
+    "rule-12-the-card-only-for-a-member-list": (
+        "- To see a symbol's code",
+        (
+            'To see a symbol\'s code, make one get_symbol call with depth="source" or one '
+            "windowed read_file call.",
+            "Ask for the symbol card (get_symbol's default depth) only when the question "
+            "needs its member list.",
+        ),
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("opening", "v3_sentences"),
+    list(_SERVER_LINES_CARRYING_V3_RULES.values()),
+    ids=list(_SERVER_LINES_CARRYING_V3_RULES),
+)
+def test_the_server_instruction_line_carries_the_system_v3_rule(
+    opening: str, v3_sentences: tuple[str, ...]
+) -> None:
+    from pydocs_mcp.harness.core.prompts import render_core_prompt
+
+    # The template wraps its rules across lines, so v3 is matched unwrapped.
+    system_v3 = " ".join(render_core_prompt("system_v3").split())
+    line = _server_instruction_line(opening)
+    for sentence in v3_sentences:
+        assert sentence in system_v3, f"system_v3 no longer says {sentence!r}"
+        assert sentence in line, f"the {opening!r} line omits {sentence!r}"
+
+
+def test_the_call_inducing_wording_is_gone_from_the_server_instructions() -> None:
+    """No obligation to issue every "Together:" call, no card-first rule, and no
+    "ask for a different depth instead": on a hit that has already shown its
+    whole span, another depth is the same text again."""
+    instructions = _served_instructions()
+    assert "issue all of them in ONE turn" not in instructions
+    assert 'before asking for depth="source"' not in instructions
+    assert "ask for a different depth" not in instructions

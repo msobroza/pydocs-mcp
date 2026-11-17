@@ -147,6 +147,12 @@ search:
     # context spent is a deployment decision. Raising it shows more hits per
     # search; lowering it shows fewer and names the cut in the footer.
     budget_tokens: 2000
+    # Experiment (issue #393): a class or module hit names its immediate
+    # children in a "Members (N): ..." line under its header, capped by
+    # symbol_card.child_cap — so an agent can pick a member from the search
+    # itself instead of calling get_symbol for it. Off until the experiment
+    # wins; turning it on loads each hit module's document tree once per search.
+    members_line: false
 
 files:                        # filesystem tools grep/glob/read_file (tool-contracts.md §3.7-3.9)
   grep_head_limit: 100        # default cap on grep entries when head_limit is omitted
@@ -215,8 +221,15 @@ output:
     # the kind="any" retry inline (preserved query + non-default selectors,
     # safely escaped) saves one turn of back-and-forth without changing
     # engine semantics. Independently flaggable from search_zero_hit so each
-    # hint's contribution is measurable (ADR 0007).
+    # hint's contribution is measurable (ADR 0007). Superseded while
+    # api_zero_hit_fallback_any is on.
     api_zero_hit_retry_any: true
+    # Hypothesis: a descriptive query sent to kind="api" is answered in the
+    # same turn by the results a default-kind search returns, instead of
+    # waiting for the agent to follow a retry hint. On a kind="api" zero hit
+    # the server runs the same request at kind="any" and serves its rows
+    # under a fixed label (ADR 0027); false restores the hint-only response.
+    api_zero_hit_fallback_any: true
     # Hypothesis: after a checkout the index still serves the previous
     # branch; naming the one command that indexes the checked-out branch
     # (meta.suggestion on search_codebase / get_why / grep, never the text)
@@ -689,7 +702,16 @@ ask_your_docs:
   #   timeout_seconds: null              # the chat model's request timeout, in seconds;
   #                                      # null = the client's own. The models the agent
   #                                      # builds (main, vision) carry it; the Test button
-  #                                      # and the image probe keep their own short bounds
+  #                                      # and the image probe keep their own short bounds.
+  #                                      # A live (streamed) reply also has a silence
+  #                                      # limit (langchain-openai 1.2+): it ends after
+  #                                      # 120 s without a streamed chunk, counted from
+  #                                      # the response headers; server keepalive
+  #                                      # comments do not reset it. A value LONGER than
+  #                                      # that limit extends it; a shorter one leaves it.
+  #                                      # LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S sets the
+  #                                      # limit in place of 120 s (0 keeps it off), and
+  #                                      # ui.activity.live: false avoids streaming
   #   max_retries: null                  # retries of a failed request; null = the client's own
   #   provider_routing: null             # OpenRouter only — refused under any other provider
   #                                      # profile. Pins the upstream(s) serving the model,

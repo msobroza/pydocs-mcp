@@ -92,9 +92,23 @@ def _membership(db: Path, branch: str) -> dict[int, tuple[int, int]]:
         return {row[0]: (row[1], row[2]) for row in conn.execute(sql, (branch,))}
 
 
-def _search(root: Path, payload: SearchInput, branch: str = ""):
-    router, _services = build_routers(AppConfig.load(), db_path=_db(root), surface="mcp")
+def _search(root: Path, payload: SearchInput, branch: str = "", config: AppConfig | None = None):
+    router, _services = build_routers(config or AppConfig.load(), db_path=_db(root), surface="mcp")
     return asyncio.run(router.search_codebase(payload, branch=branch))
+
+
+def _fallback_off_config() -> AppConfig:
+    """The shipped config with the ADR 0027 ``kind="api"`` zero-hit fallback OFF."""
+    config = AppConfig.load()
+    flags = config.output.suggestions.model_copy(update={"api_zero_hit_fallback_any": False})
+    output = config.output.model_copy(update={"suggestions": flags})
+    return config.model_copy(update={"output": output})
+
+
+_FALLBACK_SERVED = (
+    '[suggestion: kind="api" matched nothing — showing kind="any" results '
+    "for the same query and filters]"
+)
 
 
 def _project_hits(response) -> dict[int, dict]:
@@ -171,12 +185,45 @@ def test_a_hit_on_both_branches_carries_the_selected_branch_span(indexed: Path) 
     assert len(feature_ids) == len(set(feature_ids))
 
 
+def test_the_members_line_names_the_selected_branch_members(indexed: Path, tmp_path: Path) -> None:
+    """#393: a module hit's Members line reads the tree of the branch searched."""
+    overlay = tmp_path / "members-line.yaml"
+    overlay.write_text("search:\n  output:\n    members_line: true\n", encoding="utf-8")
+    config = AppConfig.load(explicit_path=overlay)
+    router, _services = build_routers(config, db_path=_db(indexed), surface="mcp")
+    on_feature = asyncio.run(router.search_codebase(_EVERY_CHUNK, branch=FEATURE)).text
+    on_main = asyncio.run(router.search_codebase(_EVERY_CHUNK)).text
+    module_header = "\n## app.core — app/core.py:"
+    assert module_header in on_feature and module_header in on_main
+    assert "\nMembers (3): gamma, alpha, beta\n" in on_feature
+    assert "\nMembers (2): alpha, beta\n" in on_main
+
+
 def test_member_search_follows_the_branch(indexed: Path) -> None:
+    # Pinned with the ADR 0027 zero-hit fallback OFF; the twin below runs it ON.
     by_name = SearchInput(query="gamma", kind="api")
-    on_feature = _search(indexed, by_name, FEATURE)
-    on_main = _search(indexed, by_name)
+    fallback_off = _fallback_off_config()
+    on_feature = _search(indexed, by_name, FEATURE, fallback_off)
+    on_main = _search(indexed, by_name, config=fallback_off)
     assert [item["qualified_name"] for item in on_feature.items] == ["app.core.gamma"]
     assert on_main.items == ()
+
+
+def test_member_search_fallback_serves_only_the_branch_rows(indexed: Path) -> None:
+    """ADR 0027 on a real two-branch bundle (shipped config, fallback ON): the
+    kind="api" zero hit on main is answered by main's kind="any" rows — the
+    shipped docs pipeline has no score floor, so it serves rows — and not one
+    of them is feature/x's: no gamma member, no feature-only chunk."""
+    by_name = SearchInput(query="gamma", kind="api")
+    on_main = _search(indexed, by_name)
+    on_feature = _search(indexed, by_name, FEATURE)
+    assert on_main.items and on_main.text.split("\n")[2] == _FALLBACK_SERVED
+    assert on_main.meta["suggestion"] == _FALLBACK_SERVED and on_main.meta["branch"] == MAIN
+    assert "app.core.gamma" not in {item["qualified_name"] for item in on_main.items}
+    assert "Gamma exists only on the feature branch" not in on_main.text
+    assert set(_project_hits(on_main)) <= set(_membership(_db(indexed), MAIN))
+    # The hit on feature/x is no zero hit: the member row, as with the flag off.
+    assert [item["qualified_name"] for item in on_feature.items] == ["app.core.gamma"]
 
 
 def test_the_cli_searches_a_named_branch(

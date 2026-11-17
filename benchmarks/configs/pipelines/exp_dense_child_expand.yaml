@@ -1,0 +1,35 @@
+# exp_dense.yaml (the dense-only pipeline ask_openrouter_qwen3_4b.yaml serves)
+# plus ONE step: `child_expand` (#393), between top_k_filter and limit. It
+# appends the children (classes, functions, methods) of the leading class /
+# module candidates into the result slots the original candidates leave free,
+# and never displaces an original.
+#
+# The window child_expand reads is the query's own cap — every MCP / CLI search
+# carries one — which is also what this limit step applies; only a query with
+# no cap of its own would see the two differ (limit 10 here, the step's
+# fallback 8). params stay empty on purpose: top_s / per_parent / decay come
+# from the step class, their single source. A test pins this file to
+# exp_dense.yaml plus this step.
+name: exp_dense_child_expand
+steps:
+  - name: pre_filter
+    type: pre_filter
+    params:
+      schema_name: chunk
+      target_field: chunk
+  - name: fetch
+    type: dense_fetcher
+    params: {}
+  - name: filter
+    type: metadata_post_filter
+    params: {}
+  - name: topk
+    type: top_k_filter
+    params: {}
+  - name: children
+    type: child_expand
+    params: {}
+  - name: limit
+    type: limit
+    params:
+      max_results: 10

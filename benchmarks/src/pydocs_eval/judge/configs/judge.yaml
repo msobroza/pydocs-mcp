@@ -27,13 +27,31 @@ jev:
   citation_extensions: [".py", ".md", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".txt", ".json", ".rst"]
 
 escalation:
-  # The in-band judge: it decides only answers inside Jev's review band.
+  # The in-band judge: it decides only answers inside Jev's review band, and
+  # only while ladder arms are scored.
   model: ""
   endpoint: https://openrouter.ai/api/v1
   api_key_env: OPENROUTER_API_KEY
   reasoning_effort: xhigh
   timeout_seconds: 120.0
   retries: 2
+  # It decides a question only when its agreement with the alignment label on
+  # that question is at least min(agreement_floor, the labellers' kappa);
+  # otherwise every in-band answer on it reads `undecided`.
+  agreement_floor: 0.90
+  # What its side of that comparison is: `percent_agreement` (its raw agreement
+  # rate, as the spec states it) or `kappa` (its own Cohen's kappa: one scale
+  # for both sides). An open owner word; see the umbrella issue.
+  floor_scale: percent_agreement
+  # In-band escalations stop for the whole program once this is spent,
+  # metered from OpenRouter's reported cost into a ledger beside the cache.
+  spend_cap_usd: 2.00
+  # The most one answer can cost at the pinned model's price: an answer
+  # OpenRouter does not price is booked at it, and no call starts unless it
+  # still fits under the cap. Re-derive it whenever `model` changes.
+  answer_cost_bound_usd: 0.05
+  # Escalations are cached by input hash; "" = cache_root()/escalation.
+  cache_dir: ""
 
 alignment:
   # The two blind labellers of the alignment set, of two different families.
@@ -51,6 +69,31 @@ alignment:
       reasoning_effort: high
       timeout_seconds: 600.0
       retries: 2
+  # The dual pilot's size, and what each pass aims at; all three share the
+  # sub-budget, and the item count is what flexes.
+  pilot_items: 10
+  n_items:
+    pass_1: 100
+    pass_2: 60
+  sub_budget_usd: 15.0
+  # Jev's review band is swept outward from here when its thresholds are fitted.
+  band_start: [0.3, 0.7]
+  # A first-pass Jev probability inside this window makes an answer borderline.
+  borderline_window: [0.2, 0.8]
+  # Answers carrying a vendored planted injection, inside the item count.
+  planted_injections: 4
+  # The share of each draw taken at random, to keep the set representative.
+  random_share: 0.25
+  # The share of agreed items the owner audits; it grows once more than
+  # audit_growth_threshold of the audited items prove wrong.
+  agreed_audit_share: 0.10
+  audit_growth_threshold: 0.05
+  # Below this inter-labeller Cohen's kappa a question is ill-posed: no judge is
+  # trusted on it until its criteria are rewritten.
+  min_labeller_kappa: 0.40
+  # <dataset>: <path> to write a dataset's labels elsewhere; a dataset not listed
+  # uses judge/data/alignment/<dataset>__<jev-model>.jsonl.
+  label_file: {}
 
 # judge.thresholds.<jev-model>.<dataset>.<question>: {low, high} for a Noul
 # question, {min_confidence} for `completeness`. Empty until an alignment pass

@@ -375,6 +375,25 @@ is refused with a message saying so instead of silently answering the whole
 corpus. Run a recorded before/after on `small_test` — that is the slice recorded
 experiments compare on — and use `small_dev` while iterating.
 
+**A fresh test draw, once `small_test` is consumed.** `--split
+repoqa-qa/small_test --split-seed <int> --exclude-task-ids <file>` replaces
+`small_test` with a redraw of the same size (30), apportioned across
+repositories the same way. The ids in the exclusion file are removed from the
+pool first, so the draw keeps its full size and shares no task with them; a
+draw that still overlapped them would be refused by name. The pool is the
+held-out `test` partition at the dataset's own split seed: `--split-seed`
+seeds only the redraw, never the dev/test cut, so no `dev` task can enter a
+"fresh" test sample. The exclusion file is JSON — `{"provenance": "<how the
+ids were derived>", "task_ids": [...]}` — and the plan, every arm's
+`arm_settings.json` and the report record the seed, the file's sha256, its id
+count and its provenance. Each arm loads the same frozen ids from its settings,
+and so do `--report-only` and `before-after-compare`: they score against the
+draw the arms recorded, whether or not the flags are repeated, and refuse flags
+naming another sample — or an exclusion file edited since the run.
+`write-references` takes the same two flags, so the references it writes belong
+to the redraw. Any other dataset or slice is refused with `--split-seed`;
+without either flag nothing changes.
+
 **Reading the report.** The change succeeds when the needless-call rate goes
 down while tool calls to first gold stay flat or improve. The table also carries
 what the runs' own searches retrieved (per-call and union recall, MRR,
@@ -425,6 +444,101 @@ two-sided p for the 0/1 rates (gold reached, budget exhausted, answered within
 budget). Count and total rows are whole-arm figures, and a `(p90)` row is each
 arm's 90th percentile over the tasks that defined it; none of them carries a test. Small splits are exactly where a raw difference misleads, so
 read the interval before the point estimate.
+
+#### The A/A noise band: how large a difference is noise
+
+A before/after difference is a finding only when it is larger than what the
+same run shows with nothing changed. To see that, run one commit against
+itself — the same command, the same flags, the same sha twice. One commit under
+one setting is refused unless `--allow-identical` marks the run as an A/A pair:
+
+```bash
+python -m pydocs_eval.campaign before-after \
+    --baseline <git sha> --candidate <the same git sha> --allow-identical \
+    --config <ask-your-docs serving YAML> \
+    --llm-block <ask_your_docs.llm block YAML> \
+    --split repoqa-qa/small_dev \
+    --workspace ~/pydocs-index \
+    --model <chat model>
+```
+
+The two arms of this **A/A pair** share the commit, the split, the model, the
+settings and the sampling seed, and they still differ: the model samples at
+temperature 1.0, and a shared seed does not make two arms take the same path.
+The first arm (**A1**, written under `baseline/`) and its replicate (**A2**,
+under `candidate/`) therefore differ by run-to-run noise only — plus whatever
+the fixed order adds. A1 always runs first, just as the baseline does in every
+before/after run, so a band measured this way already includes any effect of
+running second.
+
+**One pair: the correctness band.** `before-after-compare` reads one A/A pair
+through `--aa-replicate` and turns it into the correctness band its acceptance
+rule uses: the larger of the pair's `needle cited` difference and one task (and
+the same for gold-site coverage when the tasks have several gold sites). To
+print that band for an A/A pair alone, pass the replicate as the variant too,
+and ignore the verdict line — a replicate judged against its own pair means
+nothing:
+
+```bash
+python -m pydocs_eval.campaign before-after-compare \
+    --baseline runs/aa/baseline --aa-replicate runs/aa/candidate \
+    --variant runs/aa/candidate --split repoqa-qa/small_dev
+```
+
+**Several pairs: how much the noise itself moves.** One pair is one draw of the
+noise, so a band read from it can be too narrow or too wide by chance. Running
+the pair once per sampling seed — one before/after run per seed, A1 first each
+time — shows the spread. The tasks are the same in every seed, so three seeds of
+20 tasks are not 60 independent tasks: pairs are matched by task within a seed,
+and anything resampled is resampled by task.
+
+- **Per seed:** Δ = A2 − A1 over the tasks both arms defined — the `delta`
+  column of that seed's own report, read with the report's own definition of
+  every row.
+- **Single-seed band:** the largest per-seed |Δ| (at least one task for a row
+  whose value per task is 0 or 1 — both recall@5 rows, `needle cited`, the
+  budget-exhausted rate and the gold-reached rate, since every needle of this
+  split is a single site — as the correctness band does). Read a before/after difference from ONE
+  seed against it. With k seeds, one more A/A seed would show a larger
+  difference than all k about once in k + 1 runs — once in four with three
+  seeds — so this is a rough band, not a 95% one.
+- **Pooled:** each task's mean over the complete seeds, per arm; the pooled Δ is
+  the mean of the per-task differences, and its interval is the 2.5th to 97.5th
+  percentile of 1000 resamples of the tasks (seed 0) —
+  `paired_bootstrap_ci(a2_task_means, a1_task_means)` from
+  `pydocs_eval.metrics.aggregate`. Each task counts once, however many seeds
+  it was matched in, and a resample draws whole tasks, so a task's seed pairs
+  stay together. Read a before/after difference pooled over
+  the SAME number of seeds against it. With 20 tasks and a handful of seeds its
+  real coverage is unknown: it is an exploratory interval, not a
+  false-positive-rate guarantee. It is centred on the pair's own pooled
+  difference, which carries any effect of running second. An interval that
+  excludes zero is reported as a possible effect of order or time of day, not
+  as a failure; with ten rows, one such row is unsurprising by chance alone.
+
+Undefined values stay undefined, as in the report: a task that never searched
+has no first-search recall in that arm and drops out of that seed's pairs. A
+row with no matched task in any complete seed reads `n/a`, never `0`. A
+seed whose two arms did not both finish all of their tasks — a task that ran
+out of turns still finishes — is left out of the band entirely.
+
+No complete A/A pair of this setup has been measured yet; until one is, the only band is the correctness band of a pair you run yourself.
+
+**What this band does not say.**
+
+- It decides nothing. The acceptance rule of `before-after-compare` still reads
+  the correctness band of the one A/A pair it is given, and the band is no
+  retroactive verdict on any earlier before/after measurement.
+- It is no false-positive rate: read as a threshold, a single-seed band from
+  three seeds flags a change that did nothing about once in four runs, and the
+  pooled interval's real coverage is unknown.
+- It holds only for the split, model, endpoint, sampling settings, turn budget
+  and tasks it was measured on. A change that alters how the agent behaves can
+  alter the noise as well.
+- Arm order is fixed, so the noise and any effect of running second are not
+  separated; the endpoint's prompt cache can make the second arm cheaper or
+  faster; seeds run at different times of day on one endpoint, and wall
+  time includes any pause of the machine that ran the arms.
 
 ## Datasets
 
@@ -894,6 +1008,56 @@ how many times the test split has been consumed — budget roughly one
 confirmatory batch per release. Any RepoQA-tuned promotion must also not
 regress DS-1000 `--split test` — the cheap insurance against tuning into
 RepoQA's clean one-sentence query idiom.
+
+Test-split consumption so far:
+
+- **`repoqa-qa/small_test`, split seed 0 — consumed on 2026-09-15** by a
+  before/after confirmation run. Its 30 ids are committed in
+  `baselines/repoqa_qa_small_test_consumed_2026-09-15.json` (sha256
+  `47db1055eae8fdbb6b2dd6abb8720124c1c994abf054cb948e79f92fbd9488f2`), with
+  how they were derived: no arm output of that run survives, so they were
+  re-derived offline from the pinned RepoQA release `2024-06-23` at the
+  dataset defaults.
+- **The fresh `repoqa-qa/small_test` draw, seed 1 — drawn on 2026-11-08,
+  reserved for a final confirmation run, not yet consumed.** It is
+  `--split repoqa-qa/small_test --split-seed 1 --exclude-task-ids
+  benchmarks/baselines/repoqa_qa_small_test_consumed_2026-09-15.json`: 30
+  tasks, three per repository, inside `test` and disjoint from the consumed
+  ids, `dev` and `small_dev`. Task ids, each prefixed
+  `repoqa-qa/repo_qa/`:
+
+  ```text
+  Ciphey/Ciphey@5dfbe93/ciphey/basemods/Crackers/xandy.py::binary_to_ascii
+  Ciphey/Ciphey@5dfbe93/ciphey/ciphey.py::get_name
+  Ciphey/Ciphey@5dfbe93/ciphey/mathsHelper.py::strip_punctuation
+  ethereum/web3.py@257f464/web3/_utils/module_testing/eth_module.py::test_async_eth_sign_transaction_legacy
+  ethereum/web3.py@257f464/web3/_utils/module_testing/eth_module.py::test_eth_estimate_gas_revert_with_msg
+  ethereum/web3.py@257f464/web3/_utils/module_testing/eth_module.py::test_eth_call_revert_custom_error_with_msg
+  locustio/locust@6241e9c/locust/test/test_dispatch.py::test_ramp_down_users_to_3_workers_with_spawn_rate_of_9
+  locustio/locust@6241e9c/locust/test/test_env.py::test_user_classes_with_same_name_is_error
+  locustio/locust@6241e9c/locust/test/test_runners.py::test_worker_heartbeat_messages_sent_to_master
+  marshmallow-code/marshmallow@b8149ce/src/marshmallow/schema.py::_normalize_nested_options
+  marshmallow-code/marshmallow@b8149ce/src/marshmallow/schema.py::_invoke_field_validators
+  marshmallow-code/marshmallow@b8149ce/src/marshmallow/schema.py::_run_validator
+  mlc-ai/mlc-llm@068d5ea/mlc_llm/dispatch/llama/main.py::fused_decode4_matmul5_int3_int16_fp16_before
+  mlc-ai/mlc-llm@068d5ea/mlc_llm/dispatch/dispatch_tir_operator_adreno.py::fused_fused_decode7_matmul4
+  mlc-ai/mlc-llm@068d5ea/mlc_llm/transform/lift_tir_global_buffer_alloc.py::contain_symbolic_var
+  openai/openai-python@e41abf7/src/openai/_utils/_logs.py::_basic_config
+  openai/openai-python@e41abf7/src/openai/_utils/_transform.py::_transform_value
+  openai/openai-python@e41abf7/src/openai/_qs.py::_primitive_value_to_str
+  psf/black@f03ee11/src/black/concurrency.py::maybe_install_uvloop
+  psf/black@f03ee11/src/black/nodes.py::visit
+  psf/black@f03ee11/src/black/linegen.py::__post_init__
+  pyg-team/pytorch_geometric@af0f5f4/torch_geometric/loader/prefetch.py::maybe_init_stream
+  pyg-team/pytorch_geometric@af0f5f4/torch_geometric/datasets/tu_dataset.py::num_node_labels
+  pyg-team/pytorch_geometric@af0f5f4/torch_geometric/utils/loop.py::get_self_loop_attr
+  python-poetry/poetry@21ffd99/src/poetry/console/commands/env/info.py::_display_complete_info
+  python-poetry/poetry@21ffd99/src/poetry/installation/executor.py::_do_execute_operation
+  python-poetry/poetry@21ffd99/src/poetry/repositories/installed_repository.py::get_package_vcs_properties_from_path
+  reactive-python/reactpy@4307a09/src/py/reactpy/reactpy/core/hooks.py::create_context
+  reactive-python/reactpy@4307a09/src/py/reactpy/reactpy/backend/utils.py::all_implementations
+  reactive-python/reactpy@4307a09/src/py/reactpy/reactpy/core/hooks.py::sync_function
+  ```
 
 ## Results
 

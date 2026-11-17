@@ -254,6 +254,18 @@ def failure_reason(exc_class_name: str) -> str:
     return _FAILURE_REASONS.get(exc_class_name, "an error stopped the turn")
 
 
+def labelled_failure_class_name(exc: BaseException) -> str:
+    """The nearest class name in ``exc``'s MRO, own class first, that has a failure label.
+
+    Falls back to the exception's own class name. Matching the hierarchy, not one exact name,
+    keeps the labels on errors raised as renamed subclasses: langchain-openai 1.6+ re-raises
+    SDK errors as ``OpenAITimeoutError`` / ``OpenAIAuthenticationError`` / … wrappers, and
+    its async stream timer raises ``StreamChunkTimeoutError``, a builtin ``TimeoutError``.
+    """
+    known = (cls.__name__ for cls in type(exc).__mro__ if cls.__name__ in _FAILURE_REASONS)
+    return next(known, type(exc).__name__)
+
+
 __all__ = (
     "NOTE_ICONS",
     "NOTE_MAX_CHARS",
@@ -264,6 +276,7 @@ __all__ = (
     "VISION_ICON",
     "clip_label_text",
     "failure_reason",
+    "labelled_failure_class_name",
     "lenient_int",
     "rephrase_note",
     "scope_note",

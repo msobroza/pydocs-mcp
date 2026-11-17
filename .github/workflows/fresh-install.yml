@@ -90,15 +90,11 @@ jobs:
 
       # WHY --disable-pip --no-deps: the freeze is already the full closure
       # with exact pins, so there is nothing to resolve (same as ci.yml).
-      # WHY --ignore-vuln GHSA-r7w7-9xr2-qq2r / PYSEC-2026-76 (langchain-openai
-      # < 1.1.14): not reachable from pydocs-mcp and unfixable while openai is
-      # pinned < 2.0 — the full WHY lives beside the same flags in ci.yml's
-      # security job; drop them in both places together. The other ci.yml
-      # ignores cover extras this job does not install.
+      # WHY no --ignore-vuln: the ci.yml security job's ignores cover extras
+      # this job does not install.
       - name: pip-audit (fresh resolution)
         run: |
           python -m venv "$RUNNER_TEMP/audit-venv"
           "$RUNNER_TEMP/audit-venv/bin/python" -m pip install --upgrade pip pip-audit
           "$RUNNER_TEMP/audit-venv/bin/pip-audit" --strict --disable-pip --no-deps \
-            --requirement requirements-fresh.txt \
-            --ignore-vuln GHSA-r7w7-9xr2-qq2r --ignore-vuln PYSEC-2026-76
+            --requirement requirements-fresh.txt

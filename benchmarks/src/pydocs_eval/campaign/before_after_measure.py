@@ -35,13 +35,14 @@ fabricated — the module's own rule that ``None`` means undefined, never zero.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TypeVar
 
 from pydocs_eval.campaign.before_after import CommitUnderTest, CostModel, MeasurementPlan
 from pydocs_eval.campaign.before_after_answers import NO_ANSWER_KEY, AnswerKey
 from pydocs_eval.campaign.before_after_arm import ArmSummary, ArmTaskRecord
+from pydocs_eval.campaign.before_after_arm_records import ArmVariantRecord
 from pydocs_eval.campaign.before_after_task_measurement import TaskMeasurement, TaskValue
 from pydocs_eval.judge.needle_citation import is_multi_location
 from pydocs_eval.trajectory.ask_events import load_ask_trajectory_events
@@ -92,6 +93,8 @@ class ArmMetrics:
 
     commit: CommitUnderTest
     per_task: tuple[TaskMeasurement, ...]
+    # What the arm ran under beyond its commit; unrecorded for an older arm.json.
+    variant: ArmVariantRecord = field(default_factory=ArmVariantRecord)
 
     @property
     def trajectories(self) -> int:
@@ -172,6 +175,7 @@ def measure_arm(
     cap = summary.max_agent_turns or max_agent_turns
     return ArmMetrics(
         commit=commit,
+        variant=summary.variant_record(),
         per_task=tuple(
             replace(
                 _measure_task(task, workspace=workspace, prices=prices, max_agent_turns=cap),

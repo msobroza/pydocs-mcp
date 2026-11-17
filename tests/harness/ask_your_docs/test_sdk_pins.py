@@ -22,6 +22,7 @@ openai = pytest.importorskip("openai")
 import openai._base_client as sdk_base
 
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import StripAuthorizationAuth
+from tests._fakes import SleepRecorder
 
 from ._connection_fakes import RecordingTransport, RotatingBearer
 
@@ -66,6 +67,42 @@ def test_async_client_awaits_its_api_key_provider() -> None:
 
     assert asyncio.run(go()) == ["model-a", "model-b"]
     assert recorder.authorizations() == ["Bearer k1", "Bearer k2"]
+
+
+def _list_models_once_on_a_rate_limited_endpoint(client_kind: str, monkeypatch):
+    """One ``models.list()`` against a 429 carrying ``retry-after: 121``, ``max_retries=1``."""
+    recorder = RecordingTransport([(429, {"retry-after": "121"})])
+    sleeps = SleepRecorder()
+    monkeypatch.setattr(sdk_base.time, "sleep", sleeps)
+    monkeypatch.setattr(sdk_base.anyio, "sleep", sleeps.async_sleep)
+    common = {"api_key": "sk-test", "base_url": _URL, "max_retries": 1}
+    if client_kind == "sync":
+        http = openai.DefaultHttpxClient(transport=recorder.transport)
+        with pytest.raises(openai.RateLimitError):
+            openai.OpenAI(http_client=http, **common).models.list()
+    else:
+        http_async = openai.DefaultAsyncHttpxClient(transport=recorder.transport)
+        client = openai.AsyncOpenAI(http_client=http_async, **common)
+
+        async def go() -> None:
+            await client.models.list()
+
+        with pytest.raises(openai.RateLimitError):
+            asyncio.run(go())
+    return recorder, sleeps
+
+
+@pytest.mark.parametrize("client_kind", ["async", "sync"])
+def test_a_retry_after_above_120_seconds_is_not_retried(client_kind: str, monkeypatch) -> None:
+    """openai 2.52+ (locked: 2.54.0) honors a server's Retry-After up to 120 s
+    (``MAX_RETRY_AFTER_DELAY``) and does not retry above it; 1.x — and 2.x before 2.52 —
+    honored only <= 60 s and otherwise backed off and retried. The listing and the probe
+    (an ``AsyncOpenAI``) keep ``max_retries=1`` and ``timeout=10``, which does not cover the
+    sleep, so this ceiling IS the Connection dialog's worst-case stall on a 429 / 503 — a
+    future SDK policy change must fail here, not silently move that stall (Track B D7)."""
+    recorder, sleeps = _list_models_once_on_a_rate_limited_endpoint(client_kind, monkeypatch)
+    assert len(recorder.requests) == 1
+    assert sleeps.delays == []
 
 
 def test_placeholder_key_with_strip_auth_sends_no_header() -> None:
@@ -126,22 +163,29 @@ def test_model_to_dict_keeps_declared_and_extra_fields() -> None:
         assert numeric.to_dict(warnings=False) == {"id": 5, "object": "model"}
 
 
-def test_the_langchain_openai_floor_carries_typed_reasoning_effort() -> None:
-    """D9: typed ``reasoning_effort`` first ships in langchain-openai 0.2.14, so that is the
-    floor; the <2 cap guards reasoning_capture's private overrides."""
+def test_the_langchain_openai_floor_is_the_pysec_2026_76_fix() -> None:
+    """The extra's langchain-openai floor is 1.1.14, the release that fixes PYSEC-2026-76 /
+    GHSA-r7w7-9xr2-qq2r (CVE-2026-41488); the <2 cap guards reasoning_capture's private
+    overrides. Every release >= 1.1.14 needs openai >= 2.26, so the core pin's floor is 2.26
+    (and its <3 cap keeps the 3.x API break out). Both pins are checked in the project metadata
+    AND in the lockfile's requirement metadata, so a relock that drifts from them goes red."""
     import tomllib
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[3]
-    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    extra = pyproject["project"]["optional-dependencies"]["harness-ask-your-docs"]
-    pins = [pin for pin in extra if pin.startswith("langchain-openai")]
-    assert pins == ["langchain-openai>=0.2.14,<2"]
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    extra = project["optional-dependencies"]["harness-ask-your-docs"]
+    assert [pin for pin in extra if pin.startswith("langchain-openai")] == [
+        "langchain-openai>=1.1.14,<2"
+    ]
+    core = [pin for pin in project["dependencies"] if pin.startswith("openai")]
+    assert core == ["openai>=2.26,<3"]
     lock = (root / "uv.lock").read_text(encoding="utf-8")
     assert (
         '{ name = "langchain-openai", marker = "extra == \'harness-ask-your-docs\'", '
-        'specifier = ">=0.2.14,<2" }' in lock
+        'specifier = ">=1.1.14,<2" }' in lock
     )
+    assert '{ name = "openai", specifier = ">=2.26,<3" }' in lock
 
 
 def test_the_installed_chat_openai_exposes_reasoning_effort() -> None:

@@ -10,7 +10,8 @@ the fixture that installs it), spawns nothing, and returns no tools.
 
 FakeReasoningToolLlm replays a scripted ReAct turn with the chunk shapes the
 reasoning-capturing ChatOpenAI yields (reasoning deltas, split tool-call args,
-usage on the last chunk; a round with ``error`` raises like a failed model call);
+usage on the last chunk; a round with ``error`` raises like a failed model call, a
+RuntimeError, and one with ``raises`` raises that exception instead);
 FakeActivityToolset builds MCP-shaped tools (text blocks + a structured_content
 envelope, grep failing like isError=True). ``activity_react_graph`` /
 ``nested_vision_graph`` compose them into real graphs; FakeRecordingGraph records which
@@ -191,6 +192,8 @@ class FakeReasoningToolLlm(BaseChatModel):
         self.cursor["n"] += 1
         if turn.get("error"):  # a model call that fails partway through the turn
             raise RuntimeError(turn["error"])
+        if turn.get("raises") is not None:  # ... with a chosen exception (a timeout, say)
+            raise turn["raises"]
         return turn
 
     def _generate(self, messages: list, stop=None, run_manager=None, **kwargs: Any) -> ChatResult:

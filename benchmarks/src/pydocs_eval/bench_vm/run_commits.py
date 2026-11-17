@@ -9,6 +9,14 @@ remote-tracking branch of the product repository itself (a remote whose URL
 normalises to ``PRODUCT_REPO_URL``), because that is what the VM clones to
 check them out; a fork's branch is not enough. Files are read at the commit,
 never from the working tree, so an uncommitted edit can never reach a VM.
+
+A ref naming a local branch must also be in step with its remote-tracking
+counterpart (its upstream while that exists, else every remote's branch of the
+same name), at one commit: a first launch freezes the commit for every attempt,
+so a local ``main`` behind ``origin/main`` would freeze an old one for good.
+Behind, ahead or diverged, it is refused; a SHA, a tag or a remote-tracking
+name (``origin/main``) is taken as written, and a relaunch never resolves the
+refs again.
 """
 
 from __future__ import annotations
@@ -38,6 +46,21 @@ _GIT_TIMEOUT_S = 60.0
 _GIT_ARCHIVE_TIMEOUT_S = 300.0
 _BLOB = "blob"
 _TREE = "tree"
+_LOCAL_BRANCH_PREFIX = "refs/heads/"
+_REMOTE_TRACKING_PREFIX = "refs/remotes/"
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteTrackingBranch:
+    """A remote-tracking branch, by full name (``refs/remotes/origin/main``), and its commit."""
+
+    name: str
+    commit: str
+
+    @property
+    def short_name(self) -> str:
+        """``origin/main``: the name a run spec can write as a ref."""
+        return self.name.removeprefix(_REMOTE_TRACKING_PREFIX)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,10 +78,75 @@ class GitCheckout:
             return None
         return completed.stdout.strip() or None
 
+    def local_branch_named_by(self, ref: str) -> str | None:
+        """The local branch ``ref`` resolves through, ``None`` when it names no local branch.
+
+        ``main``, ``heads/main`` and a ``HEAD`` attached to ``main`` all name
+        ``main``. A SHA, a tag, a remote-tracking branch (``origin/main``), an
+        expression (``main~1``) and an ambiguous name name none.
+        """
+        if ref.startswith("-"):
+            return None
+        completed = self._git("rev-parse", "--symbolic-full-name", ref)
+        name = completed.stdout.strip()
+        if completed.returncode != 0 or not name.startswith(_LOCAL_BRANCH_PREFIX):
+            return None
+        return name.removeprefix(_LOCAL_BRANCH_PREFIX)
+
+    def remote_tracking_counterparts(self, branch: str) -> tuple[RemoteTrackingBranch, ...]:
+        """The remote-tracking branches local ``branch`` pairs with.
+
+        Its configured upstream while that remote-tracking branch exists;
+        otherwise (no upstream, a local one, or one pruned since, as after the
+        remote renamed the branch) ``refs/remotes/<remote>/<branch>`` of every
+        remote that has one. Never contacts a remote: these are the refs the
+        last ``git fetch`` left.
+        """
+        upstream = self._existing_remote_tracking((self._upstream_of(branch),))
+        if upstream:
+            return upstream
+        names = (f"{_REMOTE_TRACKING_PREFIX}{remote}/{branch}" for remote in self._remote_names())
+        return self._existing_remote_tracking(tuple(names))
+
+    def _upstream_of(self, branch: str) -> str:
+        """``branch``'s configured upstream, by full name; empty when it has none."""
+        listed = self._git(
+            "for-each-ref", "--format=%(upstream)", f"{_LOCAL_BRANCH_PREFIX}{branch}"
+        )
+        return listed.stdout.strip()
+
+    def _existing_remote_tracking(self, names: tuple[str, ...]) -> tuple[RemoteTrackingBranch, ...]:
+        """Those of ``names`` that are remote-tracking branches this repository holds."""
+        wanted = tuple(name for name in names if name.startswith(_REMOTE_TRACKING_PREFIX))
+        if not wanted:
+            return ()
+        listed = self._git("for-each-ref", "--format=%(refname) %(objectname)", *wanted)
+        found = (line.partition(" ") for line in listed.stdout.splitlines())
+        # A pattern also matches refs below it (`origin/main/x`): keep exact names only.
+        return tuple(
+            RemoteTrackingBranch(name=name, commit=commit)
+            for name, _, commit in found
+            if name in wanted
+        )
+
+    def _remote_names(self) -> list[str]:
+        return self._git("remote").stdout.split()
+
+    def commits_ahead_behind(self, local: str, remote: str) -> tuple[int, int]:
+        """Commits ``local`` has that ``remote`` lacks, and commits ``remote`` has that ``local`` lacks."""
+        completed = self._git("rev-list", "--left-right", "--count", f"{local}...{remote}")
+        counts = completed.stdout.split()
+        if completed.returncode != 0 or len(counts) != 2:
+            raise RuntimeError(
+                f"git rev-list --left-right --count {local}...{remote}: got exit "
+                f"{completed.returncode} ({completed.stderr.strip()}), expected two counts"
+            )
+        return int(counts[0]), int(counts[1])
+
     def remote_tracking_refs_containing(self, commit: str) -> tuple[str, ...]:
         """Full names (``refs/remotes/<remote>/<branch>``) of the remote-tracking branches holding ``commit``."""
         completed = self._git(
-            "for-each-ref", "--contains", commit, "--format=%(refname)", "refs/remotes/"
+            "for-each-ref", "--contains", commit, "--format=%(refname)", _REMOTE_TRACKING_PREFIX
         )
         return tuple(line for line in completed.stdout.splitlines() if line.strip())
 
@@ -69,8 +157,10 @@ class GitCheckout:
         rewrite (``git ls-remote --get-url`` never contacts the remote): the
         repository its remote-tracking branches are fetched from.
         """
-        names = self._git("remote").stdout.split()
-        return {name: self._git("ls-remote", "--get-url", name).stdout.strip() for name in names}
+        return {
+            name: self._git("ls-remote", "--get-url", name).stdout.strip()
+            for name in self._remote_names()
+        }
 
     def object_type_at(self, commit: str, path: str) -> str | None:
         """``blob`` or ``tree`` for ``path`` at ``commit``; ``None`` when it is absent."""
@@ -132,8 +222,9 @@ class HostScripts:
 def freeze_commits(git: GitCheckout, spec: RunSpec) -> FrozenCommits:
     """Resolve ``git_ref`` (and the before/after refs); each must be on a remote-tracking branch.
 
-    A before/after baseline and candidate must be on one of the product
-    repository's: the VM clones it to check them out.
+    A ref naming a local branch must be in step with its remote-tracking
+    branch. A before/after baseline and candidate must be on one of the
+    product repository's: the VM clones it to check them out.
     """
     product_urls = git.remote_fetch_urls() if spec.kind is RunKind.BEFORE_AFTER else None
     return FrozenCommits(
@@ -151,22 +242,97 @@ def _optional_product_commit(
         return None
     if remote_urls is None:
         return _pushed_commit(git, field, ref)
-    commit = _resolved_commit(git, field, ref)
+    commit = _commit_to_freeze(git, field, ref)
     _require_on_product_remote(git, remote_urls, f"{field}: got {ref!r} at commit {commit}", commit)
     return commit
 
 
-def _resolved_commit(git: GitCheckout, field: str, ref: str) -> str:
+def _commit_to_freeze(git: GitCheckout, field: str, ref: str) -> str:
+    """``ref``'s commit; a ref naming a local branch must be in step with its remote-tracking one."""
     commit = git.resolve(ref)
     if commit is None:
         raise LaunchRefused(
             f"{field}: got {ref!r}, expected a commit SHA, tag or branch that resolves in {git.root}"
         )
+    _require_branch_in_step(git, field, ref, commit)
     return commit
 
 
+@dataclass(frozen=True, slots=True)
+class _LocalBranch:
+    """A local branch (``main``) and the commit it is at."""
+
+    name: str
+    commit: str
+
+
+def _require_branch_in_step(git: GitCheckout, field: str, ref: str, commit: str) -> None:
+    """Refuse a ref naming a local branch whose remote-tracking counterpart is elsewhere (#434).
+
+    The launch never fetches, so a local ``main`` left behind ``origin/main``
+    would freeze an old commit into the run record, for every attempt.
+    """
+    branch = git.local_branch_named_by(ref)
+    if branch is None:
+        return
+    counterparts = git.remote_tracking_counterparts(branch)
+    out_of_step = [counterpart for counterpart in counterparts if counterpart.commit != commit]
+    if out_of_step:
+        local = _LocalBranch(name=branch, commit=commit)
+        got = f"{field}: got {ref!r}"
+        raise _out_of_step_refusal(git, got, local, out_of_step[0], several=len(counterparts) > 1)
+
+
+def _out_of_step_refusal(
+    git: GitCheckout,
+    got: str,
+    local: _LocalBranch,
+    counterpart: RemoteTrackingBranch,
+    *,
+    several: bool,
+) -> LaunchRefused:
+    """The refusal: both commits, how they stand, the fix; how to pick one of ``several``."""
+    ahead, behind = git.commits_ahead_behind(local.commit, counterpart.commit)
+    short = counterpart.short_name
+    relation, fix = _out_of_step_wording(local.name, short, ahead, behind)
+    pick = _pick_an_upstream_hint(local.name) if several else ""
+    return LaunchRefused(
+        f"{got}, local branch {local.name} at commit {local.commit}, {relation} its "
+        f"remote-tracking branch {short} at commit {counterpart.commit}; expected the two at "
+        f"one commit: {fix}, or write {short} or a commit SHA instead{pick}"
+    )
+
+
+def _out_of_step_wording(branch: str, counterpart: str, ahead: int, behind: int) -> tuple[str, str]:
+    """How local ``branch`` stands against ``counterpart``, and how to bring it in step."""
+    if not ahead:
+        return (
+            f"{_commit_count_text(behind)} behind",
+            f"fast-forward {branch} to {counterpart} (`git pull --ff-only` with it checked out)",
+        )
+    if not behind:
+        return f"{_commit_count_text(ahead)} ahead of", f"push {branch} to {counterpart}"
+    # No pull-then-push advice: after a squash merge it would push a merge commit.
+    return (
+        f"diverged ({_commit_count_text(ahead)} ahead, {behind} behind) from",
+        f"bring {branch} in step with {counterpart}",
+    )
+
+
+def _pick_an_upstream_hint(branch: str) -> str:
+    """Several remotes hold a ``branch`` and none is its upstream: say how to name one."""
+    return (
+        f"; {branch} has no upstream, so every remote's {branch} must agree: "
+        f"`git branch --set-upstream-to=<remote>/{branch} {branch}` names the one it follows"
+    )
+
+
+def _commit_count_text(count: int) -> str:
+    return f"{count} commit" if count == 1 else f"{count} commits"
+
+
 def _pushed_commit(git: GitCheckout, field: str, ref: str) -> str:
-    commit = _resolved_commit(git, field, ref)
+    commit = _commit_to_freeze(git, field, ref)
     if not git.remote_tracking_refs_containing(commit):
         raise LaunchRefused(
             f"{field}: got {ref!r} at commit {commit}, expected a commit reachable from a "

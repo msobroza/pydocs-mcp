@@ -332,6 +332,12 @@ class ReferenceGraphConfig(BaseModel):
 # ``token_budget_formatter`` budgets — that composite is a separate render.
 _DEFAULT_SEARCH_BUDGET_TOKENS = 2000
 
+# Whether a class or module search hit names its immediate children in a
+# ``Members (N): …`` line under its header (issue #393, ADR 0023 (j)). Off: the
+# experiment's arm turns it on by YAML overlay, and only a winning PR flips this
+# default. ``application.multi_project_search`` reads THIS name, not the literal.
+_DEFAULT_SEARCH_MEMBERS_LINE = False
+
 
 class SearchOutputConfig(BaseModel):
     """Per-deployment bounds for the ``search_codebase`` MCP tool's ``limit``.
@@ -350,6 +356,7 @@ class SearchOutputConfig(BaseModel):
     default_limit: int = Field(10, ge=1)
     max_limit: int = Field(1000, ge=1)
     budget_tokens: int = Field(_DEFAULT_SEARCH_BUDGET_TOKENS, ge=1)
+    members_line: bool = Field(_DEFAULT_SEARCH_MEMBERS_LINE)
 
     @model_validator(mode="after")
     def _default_le_max(self) -> SearchOutputConfig:
@@ -529,9 +536,12 @@ class SuggestionsConfig(BaseModel):
 
     Each rule appends a fixed ``[suggestion: …]`` hint (grep rules) or gates
     the zero-hit overview pointer (search/why rule) and mirrors the fired text
-    as ``meta.suggestion``. Per-rule flags exist so the ablation phase can
-    measure each hint's contribution independently; fired rules log one
-    structured line each for machinery-vs-model attribution (R7).
+    as ``meta.suggestion``. ``api_zero_hit_fallback_any`` (ADR 0027) is the one
+    rule that answers instead of hinting: a ``kind="api"`` zero hit serves the
+    same request's ``kind="any"`` results under a fixed label. Per-rule flags
+    exist so the ablation phase can measure each rule's contribution
+    independently; fired rules log one structured line each for
+    machinery-vs-model attribution (R7).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -543,8 +553,15 @@ class SuggestionsConfig(BaseModel):
     # ``search_codebase(kind="any", ...)`` retry hint alongside the generic
     # overview pointer. Independently flaggable so the new rule's contribution
     # is measurable without touching ``search_zero_hit`` (ADR 0007). False ⇒
-    # byte-identical to the pre-change zero-hit body.
+    # byte-identical to the pre-change zero-hit body. Superseded while
+    # ``api_zero_hit_fallback_any`` is on: the zero hits that rule answers have
+    # already run the retry this hint would name.
     api_zero_hit_retry_any: bool = True
+    # ADR 0027: a ``kind="api"`` request whose member lookup returned no row
+    # is answered, in the same response, by the same request at ``kind="any"``
+    # under a fixed label (or a fixed "both empty" line). False ⇒ every
+    # response byte-identical to the pre-change behaviour.
+    api_zero_hit_fallback_any: bool = True
     # #311 (spec §6.11): the default selector answered from the default branch
     # because the checked-out one has no index yet — meta only, never text.
     checkout_not_indexed: bool = True

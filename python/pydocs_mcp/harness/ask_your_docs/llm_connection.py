@@ -37,6 +37,7 @@ from pydocs_mcp.harness.ask_your_docs.chat_request import (
     NO_REQUEST_SETTINGS,
     ChatRequestSettings,
     refuse_provider_routing_off_openrouter,
+    stream_chunk_timeout_kwargs,
 )
 from pydocs_mcp.harness.ask_your_docs.chat_wire import NO_WIRE_PARAMS, WireParams
 from pydocs_mcp.harness.ask_your_docs.connection_auth import (
@@ -382,6 +383,7 @@ def build_chat_model(
     *,
     model: str | None = None,
     timeout_seconds: float | None = None,
+    stream_chunk_timeout_seconds: float | None = None,
     max_retries: int | None = None,
     tolerate_missing_key: bool = False,
     transport: Any = None,
@@ -405,6 +407,8 @@ def build_chat_model(
     ``extra_body`` is merged into the request body: the block's OpenRouter provider
     route, which every model the agent builds passes with the block's timeout and
     retries (``ChatRequestSettings.chat_factory_kwargs``) while a probe passes none.
+    ``stream_chunk_timeout_seconds`` is the same: the block's timeout, which only ever
+    EXTENDS the live stream's silence limit (``stream_chunk_timeout_kwargs``).
     """
     from langchain_openai import ChatOpenAI  # heavy; lazy by contract
 
@@ -428,6 +432,7 @@ def build_chat_model(
     if auth is not None or transport is not None:
         kwargs.update(httpx_clients(auth, transport))
     chat_class = reasoning_chat_model_class(ChatOpenAI) if capture_reasoning else ChatOpenAI
+    kwargs.update(stream_chunk_timeout_kwargs(chat_class, stream_chunk_timeout_seconds))
     return chat_class(**kwargs)
 
 
