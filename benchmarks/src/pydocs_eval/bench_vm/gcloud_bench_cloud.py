@@ -6,12 +6,16 @@ the laptop, or as the VM's service account (from the metadata server) on a
 bench VM — the environment it passes drops every credential-file override,
 and no key file is read, written or referenced. Instance-metadata reads are
 plain ``curl`` requests to the metadata server, under the same timeout and
-bounded retry. Every call has a timeout and a bounded
+bounded retry. So is the self-delete's fallback for a gcloud that cannot
+authenticate: a Compute API delete with the metadata server's token
+(``compute_api_delete``). Every call has a timeout and a bounded
 retry on transient errors (``bounded_command.run_bounded``).
 
-gcloud reports "not found", "precondition failed" and "no capacity" only in
-its stderr, so those three answers are recognised by their documented markers;
-anything else is a ``BenchCloudError`` carrying gcloud's own words.
+gcloud reports "not found" (an rsync source with no objects included: "Did
+not find existing container"), "precondition failed" and "no capacity" only in
+its stderr, so those answers are recognised by their markers
+(``gcloud_stderr``); anything else is a ``BenchCloudError`` carrying gcloud's
+own words.
 
 The image builds (submitted ``--async``, then polled) live in
 ``gcloud_image_builds``, the cache bucket's operations in
@@ -45,12 +49,23 @@ from pydocs_eval.bench_vm.bounded_command import (
     run_bounded,
     run_subprocess,
 )
+from pydocs_eval.bench_vm.compute_api_delete import (
+    COMPUTE_DELETE_TIMEOUT_S,
+    VM_ACCESS_TOKEN_METADATA_PATH,
+    bearer_header_from,
+    compute_delete_argv,
+)
 from pydocs_eval.bench_vm.gcloud_cache_transfers import GcloudCacheTransfers
 from pydocs_eval.bench_vm.gcloud_calls import GCLOUD_READ_TIMEOUT_S
 from pydocs_eval.bench_vm.gcloud_image_builds import GcloudImageBuilds
 from pydocs_eval.bench_vm.gcloud_instance_create import instance_create_argv, write_metadata_files
 from pydocs_eval.bench_vm.gcloud_json import json_list, json_object
-from pydocs_eval.bench_vm.gcloud_stderr import NO_OBJECTS_MATCHED, NOT_FOUND, PRECONDITION_FAILED
+from pydocs_eval.bench_vm.gcloud_stderr import (
+    NO_OBJECTS_MATCHED,
+    NO_RSYNC_SOURCE_OBJECTS,
+    NOT_FOUND,
+    PRECONDITION_FAILED,
+)
 from pydocs_eval.bench_vm.vm_request import VmCreateRequest
 
 _WRITE_TIMEOUT_S = 120.0
@@ -85,7 +100,7 @@ _RANGE_NOT_SATISFIABLE = re.compile(r"(?i)\b416\b|range.*not.*satisf|InvalidRang
 # Only an empty prefix restores nothing. A missing bucket or an object that
 # 404s mid-transfer is a failure: a child started on an empty state would
 # overwrite the synced ledgers at its first sync.
-_NOTHING_TO_RESTORE = NO_OBJECTS_MATCHED
+_NOTHING_TO_RESTORE = (NO_OBJECTS_MATCHED, NO_RSYNC_SOURCE_OBJECTS)
 
 
 @dataclass
@@ -275,7 +290,8 @@ class GcloudBenchCloud(GcloudCacheTransfers, GcloudImageBuilds):
         completed = self._rsync_down(
             source_uri, destination, _RESTORE_TIMEOUT_S, exclude_pattern=exclude_pattern
         )
-        if completed.returncode != 0 and _NOTHING_TO_RESTORE.search(completed.stderr_text):
+        nothing_synced = any(marker.search(completed.stderr_text) for marker in _NOTHING_TO_RESTORE)
+        if completed.returncode != 0 and nothing_synced:
             return  # nothing was ever synced under the prefix
         self._raise_unless_ok(completed, f"restoring {source_uri} into {destination}")
 
@@ -289,14 +305,15 @@ class GcloudBenchCloud(GcloudCacheTransfers, GcloudImageBuilds):
             "Metadata-Flavor: Google",
             _METADATA_SERVER_URL + path,
         )
+        what = f"reading instance metadata {path}"
+        answer = self._curl(argv, _METADATA_TIMEOUT_S, what)
         try:
-            completed = self._bounded(argv, _METADATA_TIMEOUT_S, program="curl")
-        except BenchCloudError as exc:
-            raise BenchCloudError(f"reading instance metadata {path}: {exc}") from None
-        if completed.returncode != 0 and _CURL_HTTP_404.search(completed.stderr_text):
-            return None
-        self._raise_unless_ok(completed, f"reading instance metadata {path}")
-        return completed.stdout.decode("utf-8")
+            return None if answer is None else answer.decode("utf-8")
+        except UnicodeDecodeError:
+            # The decode error would quote the bytes, a token among them.
+            raise BenchCloudError(
+                f"{what}: got bytes that are not UTF-8, expected UTF-8 text"
+            ) from None
 
     def delete_instance(self, project: str, zone: str, name: str) -> None:
         argv = ("compute", "instances", "delete", name, f"--zone={zone}", f"--project={project}")
@@ -307,6 +324,14 @@ class GcloudBenchCloud(GcloudCacheTransfers, GcloudImageBuilds):
         if completed.returncode == 0 or retried_and_gone:
             return
         self._raise_unless_ok(completed, f"deleting {name} in {zone}")
+
+    def delete_instance_with_metadata_token(self, project: str, zone: str, name: str) -> None:
+        what = f"deleting {name} in {zone} with the metadata server's token"
+        token_answer = self.read_instance_metadata(VM_ACCESS_TOKEN_METADATA_PATH)
+        header = bearer_header_from(token_answer, what)
+        argv = compute_delete_argv(project, zone, name)
+        # An answer of None is a 404: the VM is gone already, an earlier delete landed.
+        self._curl(argv, COMPUTE_DELETE_TIMEOUT_S, what, stdin=header)
 
     def access_secret(self, project: str, secret_id: str) -> str:
         argv = (
@@ -365,6 +390,19 @@ class GcloudBenchCloud(GcloudCacheTransfers, GcloudImageBuilds):
     ) -> CompletedCommand:
         argv = ("gcloud", *args, "--quiet")
         return self._bounded(argv, timeout_s, program="gcloud", stdin=stdin, runner=runner)
+
+    def _curl(
+        self, argv: Sequence[str], timeout_s: float, what: str, *, stdin: bytes | None = None
+    ) -> bytes | None:
+        """curl's stdout, ``None`` on an HTTP 404; ``BenchCloudError`` naming ``what`` otherwise."""
+        try:
+            completed = self._bounded(argv, timeout_s, program="curl", stdin=stdin)
+        except BenchCloudError as exc:
+            raise BenchCloudError(f"{what}: {exc}") from None
+        if completed.returncode != 0 and _CURL_HTTP_404.search(completed.stderr_text):
+            return None
+        self._raise_unless_ok(completed, what)
+        return completed.stdout
 
     def _bounded(
         self,

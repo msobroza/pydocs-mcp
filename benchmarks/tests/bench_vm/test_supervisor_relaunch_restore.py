@@ -88,6 +88,39 @@ def test_a_relaunch_restores_the_state_before_the_child_starts(
     assert result.started["env"]["BENCH_ATTEMPT"] == "2"
 
 
+def test_a_relaunch_after_a_lost_attempt_that_never_synced_runs_the_benchmark_fresh(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #434: attempt 1's supervisor never got as far as `running` and its VM went,
+    # so the launcher records it lost; nothing was ever synced under the prefix.
+    # This pins the supervisor's half (a restore that brings nothing starts the
+    # benchmark fresh). The fake restores an empty prefix as the port promises, so
+    # gcloud's own answer for one is pinned by the adapter's test instead
+    # (test_gcloud_bench_cloud_vm_side.py, a prefix nothing was ever synced to).
+    run_id = supervise_harness.launch_run(capsys, "cpu-smoke", retrieval_spec())
+    supervise_harness.launch.cloud.vanish()
+    _relaunch_on_a_fresh_vm(supervise_harness, capsys)
+
+    result = supervise_harness.supervise(
+        capsys, run_id, timing=_TIMING, FIXTURE_TICKS="3", FIXTURE_TICK_S="0"
+    )
+
+    assert result.exit_code == 0, result.err
+    assert supervise_harness.launch.cloud.restores == [
+        (supervise_harness.state_uri(run_id), supervise_harness.state_dir)
+    ]
+    assert result.started["recorded_at_start"] == []
+    assert result.started["env"]["BENCH_ATTEMPT"] == "2"
+    record = supervise_harness.record(run_id)
+    assert [(t.status, t.attempt) for t in record.history] == [
+        (RunStatus.LAUNCHING, 1),
+        (RunStatus.LOST, 1),
+        (RunStatus.LAUNCHING, 2),
+        (RunStatus.RUNNING, 2),
+        (RunStatus.SUCCEEDED, 2),
+    ]
+
+
 def test_the_resumed_child_completes_its_ledger_with_each_task_once(
     supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
 ) -> None:

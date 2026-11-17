@@ -9,9 +9,10 @@
 # account's token from the metadata server, pulls the run's image by digest,
 # and starts ONE detached container whose entrypoint is the supervisor
 # (`python -m pydocs_eval.bench_vm supervise`), with the GPUs exposed on the
-# CUDA flavour and the run's state and cache directories mounted at fixed
-# absolute paths. Everything else (the run record, the child, the syncs, the
-# self-delete) is the supervisor's.
+# CUDA flavour, the run's state and cache directories mounted at fixed
+# absolute paths, and gcloud's user config in a directory no image holds.
+# Everything else (the run record, the child, the syncs, the self-delete) is
+# the supervisor's.
 #
 # Fixed paths are a correctness requirement: the index caches key on absolute
 # paths, so a cache restored on another VM is valid only at the same path.
@@ -27,6 +28,12 @@ readonly BENCH_HOST_DIR=${BENCH_HOST_DIR:-/var/lib/bench}
 # CACHE_DIR (a test pins the two together).
 readonly CONTAINER_STATE_DIR=/bench/state
 readonly CONTAINER_CACHE_DIR=/bench/cache
+# The container's gcloud user config (CLOUDSDK_CONFIG). WHY (#434): an image
+# once held its build's gcloud config, with the on-GCE cache reading "False",
+# and gcloud on a VM booted within ten minutes of the build had no account.
+# Docker creates /bench only to hold the mounts, so no image has this dir. It
+# holds access tokens, so it is neither mount: both reach GCS.
+readonly CONTAINER_GCLOUD_CONFIG_DIR=/bench/gcloud
 readonly CONTAINER_NAME=bench-supervisor
 readonly PULL_ATTEMPTS=3
 # A CUDA image is several GB; a pull that stalls past this is retried.
@@ -110,6 +117,7 @@ main() {
   # Host networking: the supervisor reads the metadata server and calls GCS
   # and the Compute API exactly as the host would.
   docker run --detach --name "$CONTAINER_NAME" --network host "${gpu_flags[@]}" \
+    --env "CLOUDSDK_CONFIG=$CONTAINER_GCLOUD_CONFIG_DIR" \
     --volume "$BENCH_HOST_DIR/state:$CONTAINER_STATE_DIR" \
     --volume "$BENCH_HOST_DIR/cache:$CONTAINER_CACHE_DIR" \
     --entrypoint python "$image" \

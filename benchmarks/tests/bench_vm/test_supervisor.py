@@ -13,6 +13,7 @@ from datetime import timedelta
 
 import pytest
 
+from pydocs_eval.bench_vm.bench_cloud import BenchCloudError
 from pydocs_eval.bench_vm.run_record import RunStatus
 from pydocs_eval.bench_vm.run_spec import RunSpec
 from pydocs_eval.bench_vm.supervisor import SupervisorTiming
@@ -148,6 +149,24 @@ def test_a_finished_run_requests_its_own_vm_delete(
     assert supervise_harness.launch.cloud.deleted == [(vm.project, vm.zone, vm.name)]
     operations = supervise_harness.launch.cloud.operations()
     assert operations[-1] == "delete_instance"
+
+
+def test_a_finished_run_whose_gcloud_delete_fails_deletes_its_vm_with_the_metadata_token(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_id = supervise_harness.launch_run(capsys, "cpu-smoke", retrieval_spec())
+    vm = supervise_harness.vm
+    supervise_harness.launch.cloud.delete_errors[vm.name] = BenchCloudError(
+        f"deleting {vm.name} in {vm.zone} failed (exit 1): ERROR: "
+        "(gcloud.compute.instances.delete) You do not currently have an active account selected."
+    )
+
+    result = supervise_harness.supervise(capsys, run_id)
+
+    assert result.exit_code == 0, result.err
+    assert supervise_harness.record(run_id).status is RunStatus.SUCCEEDED
+    assert supervise_harness.launch.cloud.deleted == [(vm.project, vm.zone, vm.name)]
+    assert supervise_harness.launch.cloud.operations()[-1] == "delete_instance_with_metadata_token"
 
 
 def test_self_delete_false_requests_no_delete(

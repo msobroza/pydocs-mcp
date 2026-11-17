@@ -5,6 +5,7 @@ Nothing here runs ``gcloud`` or ``curl``: a ``ScriptedCommandRunner`` replays th
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -88,6 +89,13 @@ def test_a_metadata_key_the_server_does_not_have_reads_as_none() -> None:
     assert cloud.read_instance_metadata("instance/attributes/absent") is None
 
 
+def test_a_metadata_answer_that_is_not_utf8_is_a_cloud_error_naming_the_key() -> None:
+    cloud, _ = _cloud(CompletedCommand(returncode=0, stdout=b"\xff\xfe", stderr=b""))
+
+    with pytest.raises(BenchCloudError, match="instance/name: got bytes that are not UTF-8"):
+        cloud.read_instance_metadata("instance/name")
+
+
 def test_an_unreachable_metadata_server_is_retried_then_a_cloud_error() -> None:
     unreachable = failed("curl: (7) Failed to connect to metadata.google.internal", returncode=7)
     cloud, runner = _cloud(unreachable)
@@ -140,6 +148,80 @@ def test_a_failed_delete_is_a_cloud_error_naming_the_instance() -> None:
         cloud.delete_instance("bench-project", "europe-west4-b", "bench-cpu-smoke-0123abcd-1")
 
 
+# --- instance delete with the metadata server's token (no gcloud) -------------------
+
+_VM = ("bench-project", "europe-west4-b", "bench-cpu-smoke-0123abcd-1")
+_TOKEN = "ya29.fake-vm-token-5c1e"
+_TOKEN_ANSWER = json.dumps({"access_token": _TOKEN, "expires_in": 3599, "token_type": "Bearer"})
+_COMPUTE_URL = (
+    "https://compute.googleapis.com/compute/v1/projects/bench-project"
+    "/zones/europe-west4-b/instances/bench-cpu-smoke-0123abcd-1"
+)
+
+
+def test_a_token_delete_asks_the_metadata_server_then_the_compute_api() -> None:
+    cloud, runner = _cloud(ok(_TOKEN_ANSWER), ok('{"kind": "compute#operation"}'))
+
+    cloud.delete_instance_with_metadata_token(*_VM)
+
+    token_read, delete = runner.calls
+    assert token_read.argv[-1] == (
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
+    )
+    assert "Metadata-Flavor: Google" in token_read.argv
+    assert delete.argv[0] == "curl"
+    assert delete.argv[delete.argv.index("-X") + 1] == "DELETE"
+    assert delete.argv[-1] == _COMPUTE_URL
+    assert "--max-time" in delete.argv
+    assert delete.stdin == f"Authorization: Bearer {_TOKEN}\n".encode()
+
+
+def test_the_token_reaches_neither_an_argv_nor_an_error() -> None:
+    cloud, runner = _cloud(
+        ok(_TOKEN_ANSWER), failed("curl: (22) The requested URL returned error: 403", 22)
+    )
+
+    with pytest.raises(BenchCloudError, match="bench-cpu-smoke-0123abcd-1") as raised:
+        cloud.delete_instance_with_metadata_token(*_VM)
+
+    assert _TOKEN not in str(raised.value)
+    assert all(_TOKEN not in " ".join(call.argv) for call in runner.calls)
+
+
+def test_a_token_delete_of_a_vm_already_gone_succeeds() -> None:
+    cloud, runner = _cloud(ok(_TOKEN_ANSWER), failed(_CURL_404, returncode=22))
+
+    cloud.delete_instance_with_metadata_token(*_VM)
+
+    assert len(runner.calls) == 2
+
+
+def test_a_token_delete_retries_a_transient_error() -> None:
+    cloud, runner = _cloud(
+        ok(_TOKEN_ANSWER), failed("curl: (22) The requested URL returned error: 503", 22), ok()
+    )
+
+    cloud.delete_instance_with_metadata_token(*_VM)
+
+    assert [call.argv[-1] for call in runner.calls[1:]] == [_COMPUTE_URL, _COMPUTE_URL]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    ['{"error": "no token"}', f'["{_TOKEN}"]', "not json", json.dumps({"access_token": "a b"})],
+    ids=["no-access-token", "a-list", "unreadable", "not-one-header-word"],
+)
+def test_an_unusable_token_answer_is_a_cloud_error_that_quotes_none_of_it(answer: str) -> None:
+    cloud, runner = _cloud(ok(answer))
+
+    with pytest.raises(BenchCloudError, match="access_token") as raised:
+        cloud.delete_instance_with_metadata_token(*_VM)
+
+    assert answer not in str(raised.value)
+    assert _TOKEN not in str(raised.value)
+    assert len(runner.calls) == 1  # no DELETE without a token
+
+
 # --- state restore ---------------------------------------------------------------
 
 
@@ -183,6 +265,23 @@ def test_a_restore_from_a_prefix_with_no_objects_restores_nothing(tmp_path: Path
     cloud.restore_directory(_STATE_URI, tmp_path / "state")
 
     assert len(runner.calls) == 1
+
+
+def test_a_restore_from_a_prefix_nothing_was_ever_synced_to_restores_nothing(
+    tmp_path: Path,
+) -> None:
+    # Cloud SDK 592's own words for an rsync source with no objects under it: the
+    # relaunch of a run whose earlier attempt never synced a file (#434).
+    cloud, runner = _cloud(
+        failed(f"ERROR: (gcloud.storage.rsync) Did not find existing container at: {_STATE_URI}")
+    )
+    destination = tmp_path / "state"
+
+    cloud.restore_directory(_STATE_URI, destination)
+
+    assert len(runner.calls) == 1
+    assert destination.is_dir()
+    assert list(destination.iterdir()) == []
 
 
 @pytest.mark.parametrize(
