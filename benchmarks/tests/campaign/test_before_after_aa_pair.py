@@ -1,16 +1,19 @@
 """``before-after`` with one commit as both arms: the A/A pair the benchmark README documents.
 
 An A/A pair runs the same commit twice, so the difference between its arms is
-noise. Nothing in the harness refuses identical arms today, and the README's
-same-commit invocation depends on that. These tests pin it: a change that
-starts refusing identical arms fails here first and must update the README's
-A/A section in the same change.
+noise. The harness refuses one commit under one setting unless
+``--allow-identical`` marks the run as an A/A pair, and the README's
+same-commit invocation passes that flag. These tests pin both: a change to the
+flag or the refusal fails here first and must update the README's A/A section
+in the same change.
 """
 
 from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+
+import pytest
 
 from pydocs_eval.campaign.__main__ import main
 from pydocs_eval.campaign.before_after_product import product_worktree
@@ -36,7 +39,9 @@ def test_one_commit_runs_as_both_arms_of_a_confirmed_measurement(
 ) -> None:
     repo = git_repo_with_two_descriptions(tmp_path)
     # argparse keeps the last value, so this --baseline overrides the argv's HEAD~1.
-    argv = before_after_argv(tmp_path, repo, "--baseline", "HEAD", "--confirm-spend")
+    argv = before_after_argv(
+        tmp_path, repo, "--baseline", "HEAD", "--allow-identical", "--confirm-spend"
+    )
 
     assert main(argv) == 0
 
@@ -46,6 +51,18 @@ def test_one_commit_runs_as_both_arms_of_a_confirmed_measurement(
     assert _plan_line(plan_text, "baseline").split()[0] == sha12
     assert _plan_line(plan_text, "candidate").split()[0] == sha12
     assert (tmp_path / "out" / "before_after.md").exists()
+
+
+def test_one_commit_as_both_arms_is_refused_without_allow_identical(
+    tmp_path: Path, stub_command: FakeArmRun, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = git_repo_with_two_descriptions(tmp_path)
+    argv = before_after_argv(tmp_path, repo, "--baseline", "HEAD", "--confirm-spend")
+
+    assert main(argv) == 2
+
+    assert stub_command.roles == []
+    assert "--allow-identical" in capsys.readouterr().err
 
 
 def test_one_commits_arm_worktree_can_be_entered_again_after_the_first_arm_left_it(

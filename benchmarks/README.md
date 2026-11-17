@@ -449,11 +449,12 @@ read the interval before the point estimate.
 
 A before/after difference is a finding only when it is larger than what the
 same run shows with nothing changed. To see that, run one commit against
-itself — the same command, the same flags, the same sha twice:
+itself — the same command, the same flags, the same sha twice. One commit under
+one setting is refused unless `--allow-identical` marks the run as an A/A pair:
 
 ```bash
 python -m pydocs_eval.campaign before-after \
-    --baseline <git sha> --candidate <the same git sha> \
+    --baseline <git sha> --candidate <the same git sha> --allow-identical \
     --config <ask-your-docs serving YAML> \
     --llm-block <ask_your_docs.llm block YAML> \
     --split repoqa-qa/small_dev \
