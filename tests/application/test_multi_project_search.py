@@ -51,6 +51,7 @@ from pydocs_mcp.retrieval.config import TargetResolutionConfig
 from pydocs_mcp.retrieval.config.models import _DEFAULT_SEARCH_BUDGET_TOKENS
 
 from .._fakes import FakeTargetResolver, make_fake_uow_factory
+from ._router_fakes import CountingTreeService
 
 
 def _project(name: str, indexed_at: float) -> LoadedProject:
@@ -134,16 +135,6 @@ class _FakeLookup:
 
     async def lookup_rewritten(self, payload, rewrite):
         return f"REWRITTEN {rewrite.canonical}", (), {}
-
-
-class _StubTreeNavigator:
-    """TreeNavigator slice for member-span resolution: (package, module) → tree."""
-
-    def __init__(self, trees: dict[tuple[str, str], DocumentNode]) -> None:
-        self._trees = trees
-
-    async def get_tree(self, package: str, module: str) -> DocumentNode | None:
-        return self._trees.get((package, module))
 
 
 def _svc(
@@ -436,7 +427,7 @@ async def test_union_search_body_resolves_member_spans_per_owning_project() -> N
     a = _svc(
         _project("a", 1.0),
         members=(_member(7, "fastapi", "fastapi.routing", "APIRouter", 0.9),),
-        tree_navigator=_StubTreeNavigator({("fastapi", "fastapi.routing"): _routing_tree()}),
+        tree_navigator=CountingTreeService({("fastapi", "fastapi.routing"): _routing_tree()}),
     )
     b = _svc(_project("b", 2.0), members=(_member(8, "bpkg", "bpkg.mod", "G", 0.3),))
     router = MultiProjectSearch(services=(a, b))

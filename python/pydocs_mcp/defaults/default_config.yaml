@@ -147,6 +147,12 @@ search:
     # context spent is a deployment decision. Raising it shows more hits per
     # search; lowering it shows fewer and names the cut in the footer.
     budget_tokens: 2000
+    # Experiment (issue #393): a class or module hit names its immediate
+    # children in a "Members (N): ..." line under its header, capped by
+    # symbol_card.child_cap — so an agent can pick a member from the search
+    # itself instead of calling get_symbol for it. Off until the experiment
+    # wins; turning it on loads each hit module's document tree once per search.
+    members_line: false
 
 files:                        # filesystem tools grep/glob/read_file (tool-contracts.md §3.7-3.9)
   grep_head_limit: 100        # default cap on grep entries when head_limit is omitted

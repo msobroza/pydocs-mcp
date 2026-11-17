@@ -332,6 +332,12 @@ class ReferenceGraphConfig(BaseModel):
 # ``token_budget_formatter`` budgets — that composite is a separate render.
 _DEFAULT_SEARCH_BUDGET_TOKENS = 2000
 
+# Whether a class or module search hit names its immediate children in a
+# ``Members (N): …`` line under its header (issue #393, ADR 0023 (j)). Off: the
+# experiment's arm turns it on by YAML overlay, and only a winning PR flips this
+# default. ``application.multi_project_search`` reads THIS name, not the literal.
+_DEFAULT_SEARCH_MEMBERS_LINE = False
+
 
 class SearchOutputConfig(BaseModel):
     """Per-deployment bounds for the ``search_codebase`` MCP tool's ``limit``.
@@ -350,6 +356,7 @@ class SearchOutputConfig(BaseModel):
     default_limit: int = Field(10, ge=1)
     max_limit: int = Field(1000, ge=1)
     budget_tokens: int = Field(_DEFAULT_SEARCH_BUDGET_TOKENS, ge=1)
+    members_line: bool = Field(_DEFAULT_SEARCH_MEMBERS_LINE)
 
     @model_validator(mode="after")
     def _default_le_max(self) -> SearchOutputConfig:

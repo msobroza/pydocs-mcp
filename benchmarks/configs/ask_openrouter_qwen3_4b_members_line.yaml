@@ -1,0 +1,39 @@
+# Serving config for the Members-line experiment arm (issue #393): the ladder's
+# serving file, ask_openrouter_qwen3_4b.yaml, byte-for-byte in every key, plus
+# ONE key — search.output.members_line: true — so a class or module search hit
+# names its immediate children ("Members (N): ...", capped by
+# symbol_card.child_cap). The product ships the knob off; this overlay is how
+# the arm turns it on. A test pins the two files together
+# (benchmarks/tests/campaign/test_members_line_arm_config.py): edit both in one
+# change.
+#
+# The arm is one candidate run against the accepted state's recorded arm. The
+# ladder measures on repoqa-qa (owner decision 2026-09-28), and the before/after
+# verb takes one serving file for both arms, so the baseline is REUSED, never
+# re-run: --reuse-baseline (issue #385) refuses a reused arm whose commit,
+# model, turn cap or settings digest differs from the plan's baseline, and
+# --allow-serving-mismatch forces the one serving key that differs here.
+#
+# Plan (free; prints the plan and spends nothing) — the paid run adds
+# --confirm-spend, and only after the owner's go (ledger line 16):
+#   python -m pydocs_eval.campaign before-after \
+#     --baseline <accepted-state sha> --candidate <the experiment PR's head sha> \
+#     --config benchmarks/configs/ask_openrouter_qwen3_4b_members_line.yaml \
+#     --llm-block benchmarks/configs/ask_openrouter_qwen3_8_27b_llm.yaml \
+#     --split repoqa-qa/small_dev --workspace ~/pydocs-index --model qwen/qwen3.8-27b \
+#     --reuse-baseline <the accepted state's arm dir> --allow-serving-mismatch
+embedding:
+  provider: openai
+  model_name: qwen/qwen3-embedding-4b
+  dim: 2560
+  base_url: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  send_dimensions: false
+  batch_size: 32
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_dense.yaml
+search:
+  output:
+    members_line: true
