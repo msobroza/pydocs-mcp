@@ -73,8 +73,8 @@ _METADATA_CURL_MAX_TIME_S = 10
 _METADATA_SERVER_URL = "http://metadata.google.internal/computeMetadata/v1/"
 # `curl -f` exits 22 on an HTTP error status; 404 means the key is unset.
 _CURL_HTTP_404 = re.compile(r"returned error: 404\b")
-# The architecture enum's unset value: the Compute API leaves the field out
-# instead (n2-standard-8, #434), but sending it, or nothing, means the same.
+# The architecture enum's unset value, or an empty one: the Compute API leaves
+# the field out instead (n2-standard-8, #434), and either would mean the same.
 _UNREPORTED_ARCHITECTURES = frozenset({"ARCHITECTURE_UNSPECIFIED", ""})
 
 _NOT_FOUND = NOT_FOUND

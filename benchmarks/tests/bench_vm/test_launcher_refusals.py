@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from pydocs_eval.bench_vm.bench_cloud import MachineTypeFacts
 from pydocs_eval.bench_vm.commit_layout import HOST_STARTUP_SCRIPT, recipe_paths
 from pydocs_eval.bench_vm.vm_request import ImageFlavour
 
@@ -188,10 +187,8 @@ def test_a_machine_type_under_the_floor_or_not_x86_64_is_refused_before_any_writ
 def test_a_classic_x86_type_the_compute_api_reports_no_architecture_for_is_launched(
     harness: LaunchHarness, capsys: Capsys, overrides: dict[str, object], machine_type: str
 ) -> None:
-    # What the live API answers for the N2 and E2 families: no `architecture` key (#434).
-    harness.cloud.machine_types[machine_type] = MachineTypeFacts(
-        name=machine_type, architecture=None, guest_cpus=8, memory_mb=32768
-    )
+    # The fakes answer as the live API does: no architecture for these two (#434).
+    assert harness.cloud.machine_types[machine_type].architecture is None
 
     result = harness.launch(capsys, "cpu-smoke", _spec(**overrides))
 
@@ -202,10 +199,6 @@ def test_a_classic_x86_type_the_compute_api_reports_no_architecture_for_is_launc
 def test_a_refusal_never_blames_an_architecture_the_compute_api_did_not_report(
     harness: LaunchHarness, capsys: Capsys
 ) -> None:
-    harness.cloud.machine_types["n2-standard-4"] = MachineTypeFacts(
-        name="n2-standard-4", architecture=None, guest_cpus=4, memory_mb=16384
-    )
-
     result = harness.launch(capsys, "cpu-smoke", _spec(machine_type="n2-standard-4"))
 
     _assert_refused_before_any_write(harness, result)

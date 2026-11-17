@@ -1,9 +1,10 @@
 """Machine-type facts the fake cloud describes: the shapes the launcher's machine check sees.
 
-Where the live Compute API was asked (``gcloud compute machine-types describe
-… --format=json``, europe-west4-a, 2026-11-17, #434), each fake reports what it
-answered: no ``architecture`` at all for the classic x86 families N2 and E2,
-``X86_64`` for G2 and ``ARM64`` for T2A.
+The live Compute API (``gcloud compute machine-types describe … --format=json``,
+europe-west4-a, 2026-11-17, #434) reports no ``architecture`` for
+``n2-standard-8`` and ``e2-standard-8``, ``X86_64`` for ``g2-standard-8`` and
+``ARM64`` for ``t2a-standard-8``; those fakes answer the same. The other N2
+fakes answer as ``n2-standard-8`` does. ``n1-standard-8`` was not asked.
 """
 
 from __future__ import annotations
@@ -20,7 +21,6 @@ G2_STANDARD_8 = MachineTypeFacts(
     memory_mb=32768,
     bundled_accelerators=(("nvidia-l4", 1),),
 )
-# Not asked live; a reported X86_64 keeps a refusal on memory alone covered.
 N1_STANDARD_8 = MachineTypeFacts(
     name="n1-standard-8", architecture="X86_64", guest_cpus=8, memory_mb=30720
 )
