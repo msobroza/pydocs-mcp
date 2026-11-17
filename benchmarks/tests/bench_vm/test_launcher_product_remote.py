@@ -9,7 +9,6 @@ remote is a second local bare repository.
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -17,7 +16,14 @@ import pytest
 from pydocs_eval.bench_vm.product_repo import PRODUCT_REPO_URL
 from pydocs_eval.bench_vm.run_record import RunStatus, run_record_bytes
 
-from ._git_fixture import FIXTURE_CONFIG, FIXTURE_CORPUS_DIR, FixtureRepo, point_url_at, run_git
+from ._git_fixture import (
+    FIXTURE_CONFIG,
+    FIXTURE_CORPUS_DIR,
+    FixtureRepo,
+    add_bare_remote,
+    point_url_at,
+    run_git,
+)
 from ._launch_harness import LaunchHarness, LaunchResult
 from ._spec_dicts import before_after_spec, retrieval_spec
 
@@ -26,10 +32,7 @@ _FORK_URL = "git@github.com:someone-else/pydocs-mcp.git"
 
 
 def _add_fork(repo: FixtureRepo, root: Path, name: str = "fork") -> None:
-    bare = root / f"{name.replace('/', '-')}.git"
-    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True, capture_output=True)
-    run_git(repo.path, "remote", "add", name, _FORK_URL)
-    point_url_at(repo.path, _FORK_URL, bare)
+    add_bare_remote(repo, root, name, _FORK_URL)
 
 
 def _commit_on_the_fork_only(repo: FixtureRepo, root: Path, name: str = "fork") -> str:
