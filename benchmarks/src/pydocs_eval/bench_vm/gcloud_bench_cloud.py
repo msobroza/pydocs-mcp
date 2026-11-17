@@ -83,9 +83,7 @@ _DOWNLOAD_TIMEOUT_S = 1800.0
 # call's, so curl reports the timeout rather than being killed.
 _METADATA_TIMEOUT_S = 15.0
 _METADATA_CURL_MAX_TIME_S = 10
-# The metadata server's fixed link-local address, as for the container's gcloud
-# (host/startup.sh): a lookup of metadata.google.internal can fail at boot (#434).
-_METADATA_SERVER_URL = "http://169.254.169.254/computeMetadata/v1/"
+_METADATA_SERVER_URL = "http://metadata.google.internal/computeMetadata/v1/"
 # `curl -f` exits 22 on an HTTP error status; 404 means the key is unset.
 _CURL_HTTP_404 = re.compile(r"returned error: 404\b")
 

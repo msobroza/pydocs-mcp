@@ -69,7 +69,7 @@ def test_a_sync_retries_a_transient_error(tmp_path: Path) -> None:
 # --- instance metadata ----------------------------------------------------------
 
 
-def test_a_metadata_read_asks_the_metadata_server_by_its_address_with_its_flavor_header() -> None:
+def test_a_metadata_read_asks_the_metadata_server_with_its_flavor_header() -> None:
     cloud, runner = _cloud(ok("cpu-smoke-0123abcd"))
 
     value = cloud.read_instance_metadata("instance/attributes/bench-run-id")
@@ -78,8 +78,9 @@ def test_a_metadata_read_asks_the_metadata_server_by_its_address_with_its_flavor
     argv = runner.calls[0].argv
     assert argv[0] == "curl"
     assert "Metadata-Flavor: Google" in argv
-    # The address, never the name: a lookup of the name can fail at boot (#434).
-    assert argv[-1] == "http://169.254.169.254/computeMetadata/v1/instance/attributes/bench-run-id"
+    assert argv[-1] == (
+        "http://metadata.google.internal/computeMetadata/v1/instance/attributes/bench-run-id"
+    )
 
 
 def test_a_metadata_key_the_server_does_not_have_reads_as_none() -> None:
@@ -165,7 +166,7 @@ def test_a_token_delete_asks_the_metadata_server_then_the_compute_api() -> None:
 
     token_read, delete = runner.calls
     assert token_read.argv[-1] == (
-        "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token"
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
     )
     assert "Metadata-Flavor: Google" in token_read.argv
     assert delete.argv[0] == "curl"
