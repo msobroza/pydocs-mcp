@@ -18,18 +18,25 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
-# The JSONL tracker's event discriminators (trackers/jsonl_tracker.py).
-EVENT_TASK = "task"
-EVENT_METRIC = "metric"
-EVENT_RESUME = "run_resume"
-EVENT_END = "run_end"
+AggregateBlock = tuple[tuple[str, float], ...]
+
+
+class LegFileEvent(StrEnum):
+    """The ``_event`` discriminator of a leg file's records (``trackers/jsonl_tracker.py``)."""
+
+    RUN_START = "run_start"
+    METRIC = "metric"
+    TASK = "task"
+    RUN_RESUME = "run_resume"
+    RUN_END = "run_end"
 
 
 def task_ids(records: Iterable[Mapping[str, Any]]) -> list[str]:
     """The ``task_id`` of every ``task`` record, in file order."""
-    return [str(r["task_id"]) for r in records if r.get("_event") == EVENT_TASK]
+    return [str(r["task_id"]) for r in records if r.get("_event") == LegFileEvent.TASK]
 
 
 def events_of(records: Iterable[Mapping[str, Any]], kind: str) -> list[Mapping[str, Any]]:
@@ -39,10 +46,10 @@ def events_of(records: Iterable[Mapping[str, Any]], kind: str) -> list[Mapping[s
 def final_aggregate_block(records: Sequence[Mapping[str, Any]]) -> list[tuple[str, float]]:
     """The trailing step-less ``metric`` records (before ``run_end``), in file order."""
     tail = list(records)
-    if tail and tail[-1].get("_event") == EVENT_END:
+    if tail and tail[-1].get("_event") == LegFileEvent.RUN_END:
         tail.pop()
     block: list[tuple[str, float]] = []
-    while tail and tail[-1].get("_event") == EVENT_METRIC and tail[-1].get("step") is None:
+    while tail and tail[-1].get("_event") == LegFileEvent.METRIC and tail[-1].get("step") is None:
         record = tail.pop()
         block.append((str(record["name"]), float(record["value"])))
     return block[::-1]
@@ -103,11 +110,9 @@ def pair_aggregate_blocks(
 
 
 __all__ = (
-    "EVENT_END",
-    "EVENT_METRIC",
-    "EVENT_RESUME",
-    "EVENT_TASK",
+    "AggregateBlock",
     "AggregatePairing",
+    "LegFileEvent",
     "compare_aggregate_blocks",
     "events_of",
     "final_aggregate_block",

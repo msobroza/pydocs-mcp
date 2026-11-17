@@ -45,16 +45,21 @@ def write_leg(
     task_records: bool = False,
     config_name: str = "bm25",
     tags: Mapping[str, str] | None = None,
+    resumed_after: int | None = None,
 ) -> Path:
     """A leg of ``tasks`` scored tasks; ``aggregates=None`` stops it before its final block.
 
     ``tags`` are the header's run tags (default: a fixed commit only).
+    ``resumed_after=k`` writes a ``--run-id`` leg (task records) that a relaunch
+    reopened after its first ``k`` tasks, as a stopped and relaunched run's is.
     """
     header = _header(config_name, tags if tags is not None else {"git_sha": "c" * 40})
     records: list[Mapping[str, object]] = [header]
     for step in range(tasks):
+        if step == resumed_after:
+            records.append({"_event": "run_resume", "run_id": "r", "recorded_tasks": step})
         records.append({"_event": "metric", "name": "mrr", "value": 1.0, "step": step})
-        if task_records:
+        if task_records or resumed_after is not None:
             records.append({"_event": "task", "task_id": f"task-{step}", "step": step})
     if aggregates is not None:
         records += [

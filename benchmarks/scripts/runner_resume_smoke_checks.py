@@ -18,13 +18,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from pydocs_eval.reporting.aggregate_blocks import (
-    EVENT_END,
-    EVENT_METRIC,
-    EVENT_RESUME,
-    events_of,
-    task_ids,
-)
+from pydocs_eval.reporting.aggregate_blocks import LegFileEvent, events_of, task_ids
 
 FIXTURE_LANGUAGE = "python"
 
@@ -98,7 +92,7 @@ def count_task_records(text: str) -> int:
 
 def records_after_last_resume(records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     """What the last resuming invocation wrote: the records after its ``run_resume``."""
-    marks = [i for i, r in enumerate(records) if r.get("_event") == EVENT_RESUME]
+    marks = [i for i, r in enumerate(records) if r.get("_event") == LegFileEvent.RUN_RESUME]
     return list(records[marks[-1] + 1 :]) if marks else []
 
 
@@ -122,7 +116,7 @@ def check_kill(returncode: int | None, leg: LegFile, *, total: int) -> list[str]
         failures.append(
             f"kill landed outside the window: {recorded} task records, expected 1..{total - 1}"
         )
-    if events_of(leg.records, EVENT_END):
+    if events_of(leg.records, LegFileEvent.RUN_END):
         failures.append("killed leg already holds a run_end record; the leg was not cut mid-run")
     return failures
 
@@ -161,19 +155,19 @@ def _check_killed_prefix(killed_ids: Sequence[str], control_ids: Sequence[str]) 
 
 
 def _check_resume_event(records: Sequence[Mapping[str, Any]], recorded: int) -> list[str]:
-    resumes = events_of(records, EVENT_RESUME)
+    resumes = events_of(records, LegFileEvent.RUN_RESUME)
     if len(resumes) != 1:
-        return [f"expected exactly one {EVENT_RESUME} record, got {len(resumes)}"]
+        return [f"expected exactly one {LegFileEvent.RUN_RESUME} record, got {len(resumes)}"]
     got = resumes[0].get("recorded_tasks")
     if got != recorded:
-        return [f"{EVENT_RESUME} recorded_tasks is {got!r}, expected {recorded}"]
+        return [f"{LegFileEvent.RUN_RESUME} recorded_tasks is {got!r}, expected {recorded}"]
     return []
 
 
 def _check_no_rescored_steps(second: Sequence[Mapping[str, Any]], recorded: int) -> list[str]:
     """Recorded tasks hold leg positions 0..recorded-1; none may be scored again."""
     steps = sorted(
-        {s for r in events_of(second, EVENT_METRIC) if isinstance(s := r.get("step"), int)}
+        {s for r in events_of(second, LegFileEvent.METRIC) if isinstance(s := r.get("step"), int)}
     )
     rescored = [s for s in steps if s < recorded]
     if rescored:
@@ -183,6 +177,8 @@ def _check_no_rescored_steps(second: Sequence[Mapping[str, Any]], recorded: int)
 
 def _check_finished(records: Sequence[Mapping[str, Any]]) -> list[str]:
     last = records[-1] if records else {}
-    if last.get("_event") == EVENT_END and last.get("status") == "finished":
+    if last.get("_event") == LegFileEvent.RUN_END and last.get("status") == "finished":
         return []
-    return [f"expected the leg to end with a finished {EVENT_END} record, got {dict(last)!r}"]
+    return [
+        f"expected the leg to end with a finished {LegFileEvent.RUN_END} record, got {dict(last)!r}"
+    ]

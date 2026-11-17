@@ -44,7 +44,9 @@ def _file_lines(
 
 def _file_line(results_dir: Path, reading: LegFileReading, with_task_records: bool) -> str:
     leg = "no run_start header" if reading.key is None else f"leg {reading.key}"
-    records = f", {reading.task_records} task records" if with_task_records else ""
+    records = f", {reading.task_record_count} task records" if with_task_records else ""
+    if reading.resumed_after:
+        records += f", resumed after {', '.join(str(n) for n in reading.resumed_after)}"
     block = "final aggregate block" if reading.block else "no final aggregate block yet"
     return f"  {reading.path.relative_to(results_dir)}: {leg}{records}, {block}"
 

@@ -117,6 +117,11 @@ async def test_a_resumed_run_matches_an_uninterrupted_local_run_and_exits_zero(
     result = _compare(tmp_path, spec, capsys)
 
     assert result.exit_code == 0, result.err
+    assert (
+        f"  {run_id}/{COUNTING_SYSTEM}_bm25_{FAKE_DATASET}.jsonl: leg "
+        f"{COUNTING_SYSTEM} / bm25 / {FAKE_DATASET}@r1, 6 task records, resumed after 3, "
+        "final aggregate block"
+    ) in result.out.splitlines()
     assert result.out.splitlines()[-1] == (
         "identical: 3 aggregates bit-identical across 1 leg; "
         "6 wall-clock aggregates reported, not compared"
@@ -127,7 +132,8 @@ def test_a_differing_aggregate_fails_with_a_got_expected_line(
     tmp_path: Path, capsys: Capsys
 ) -> None:
     spec, run_id = _spec(tmp_path)
-    write_leg(run_leg_path(tmp_path / "pulled", run_id), {"mrr_mean": 0.5, "mrr_ci_low": 0.1})
+    run_leg = run_leg_path(tmp_path / "pulled", run_id)
+    write_leg(run_leg, {"mrr_mean": 0.5, "mrr_ci_low": 0.1}, resumed_after=1)
     write_leg(local_leg_path(tmp_path / "local", run_id), {"mrr_mean": 0.25, "mrr_ci_low": 0.1})
 
     result = _compare(tmp_path, spec, capsys)
@@ -143,9 +149,8 @@ def test_wall_clock_aggregates_are_reported_with_both_values_but_not_compared(
     tmp_path: Path, capsys: Capsys
 ) -> None:
     spec, run_id = _spec(tmp_path)
-    write_leg(
-        run_leg_path(tmp_path / "pulled", run_id), {"mrr_mean": 0.5, "search_seconds_p50": 0.1}
-    )
+    run_leg = run_leg_path(tmp_path / "pulled", run_id)
+    write_leg(run_leg, {"mrr_mean": 0.5, "search_seconds_p50": 0.1}, resumed_after=1)
     write_leg(
         local_leg_path(tmp_path / "local", run_id), {"mrr_mean": 0.5, "search_seconds_p50": 0.25}
     )
@@ -176,7 +181,7 @@ def test_a_run_stopped_before_its_final_block_is_reported_as_partial(
 
 def test_a_local_reference_that_did_not_finish_is_reported(tmp_path: Path, capsys: Capsys) -> None:
     spec, run_id = _spec(tmp_path)
-    write_leg(run_leg_path(tmp_path / "pulled", run_id), {"mrr_mean": 0.5}, task_records=True)
+    write_leg(run_leg_path(tmp_path / "pulled", run_id), {"mrr_mean": 0.5}, resumed_after=1)
     local_leg = write_leg(local_leg_path(tmp_path / "local", run_id), None)
 
     result = _compare(tmp_path, spec, capsys)
@@ -209,7 +214,9 @@ def test_a_leg_on_one_side_only_is_named_with_where_it_was_found(
     tmp_path: Path, capsys: Capsys
 ) -> None:
     spec, run_id = _spec(tmp_path)
-    run_leg = write_leg(run_leg_path(tmp_path / "pulled", run_id), {"mrr_mean": 0.5})
+    run_leg = write_leg(
+        run_leg_path(tmp_path / "pulled", run_id), {"mrr_mean": 0.5}, resumed_after=1
+    )
     local_leg = write_leg(
         local_leg_path(tmp_path / "local", run_id, config_name="dense"),
         {"mrr_mean": 0.5},
@@ -292,7 +299,8 @@ def test_each_leg_names_both_sides_run_tags_and_notes_differing_commits(
     spec, run_id = _spec(tmp_path)
     run_tags = {"git_sha": "a" * 40, "platform": "Linux-x86_64", "python_version": "3.12.9"}
     local_tags = {"git_sha": "b" * 40, "platform": "Linux-x86_64", "python_version": "3.12.9"}
-    write_leg(run_leg_path(tmp_path / "pulled", run_id), {"mrr_mean": 0.5}, tags=run_tags)
+    run_leg = run_leg_path(tmp_path / "pulled", run_id)
+    write_leg(run_leg, {"mrr_mean": 0.5}, tags=run_tags, resumed_after=1)
     write_leg(local_leg_path(tmp_path / "local", run_id), {"mrr_mean": 0.5}, tags=local_tags)
 
     result = _compare(tmp_path, spec, capsys)
@@ -326,7 +334,7 @@ def test_compare_reaches_no_cloud_binary_and_imports_nothing_from_the_product(
     # An empty PATH: a gcloud or terraform call would fail the verb; the leaked
     # modules check keeps the laptop-side floor (the eval base install).
     spec, run_id = _spec(tmp_path)
-    write_leg(run_leg_path(tmp_path / "pulled", run_id), {"mrr_mean": 0.5})
+    write_leg(run_leg_path(tmp_path / "pulled", run_id), {"mrr_mean": 0.5}, resumed_after=1)
     write_leg(local_leg_path(tmp_path / "local", run_id), {"mrr_mean": 0.5})
     script = (
         "import sys\n"
@@ -414,3 +422,20 @@ def test_a_leg_file_that_is_not_utf8_is_refused_naming_it(tmp_path: Path, capsys
     (line,) = result.err.splitlines()
     assert line.startswith(f"{spec}: compare failed: got an unreadable leg file {garbled} (")
     assert line.endswith("), expected a UTF-8 JSONL file the runner wrote")
+
+
+def test_a_run_no_relaunch_resumed_mid_leg_does_not_pass(tmp_path: Path, capsys: Capsys) -> None:
+    # The stop came after the leg finished, or the relaunch started over: equal
+    # aggregates then say nothing about resuming.
+    spec, run_id = _spec(tmp_path)
+    write_leg(run_leg_path(tmp_path / "pulled", run_id), {"mrr_mean": 0.5}, task_records=True)
+    write_leg(local_leg_path(tmp_path / "local", run_id), {"mrr_mean": 0.5})
+
+    result = _compare(tmp_path, spec, capsys)
+
+    assert result.exit_code == 1
+    assert result.err.splitlines() == [
+        f"{spec}: compare: got no leg of the run resumed mid-way, expected a run_resume after "
+        "1 to N-1 of a leg's N task records; the stop came after the leg finished, or the "
+        "relaunch did not restore the run's state"
+    ]

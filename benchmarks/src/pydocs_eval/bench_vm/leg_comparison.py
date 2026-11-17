@@ -17,7 +17,7 @@ compared.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,8 +25,11 @@ from pydocs_eval.bench_vm.kind_flags import RESULTS_DIR_NAME
 from pydocs_eval.bench_vm.local_reference import local_reference_dir
 from pydocs_eval.bench_vm.state_sync import STATE_OBJECT_PREFIX
 from pydocs_eval.reporting.aggregate_blocks import (
+    AggregateBlock,
     AggregatePairing,
+    LegFileEvent,
     compare_aggregate_blocks,
+    events_of,
     final_aggregate_block,
     pair_aggregate_blocks,
     task_ids,
@@ -34,7 +37,6 @@ from pydocs_eval.reporting.aggregate_blocks import (
 from pydocs_eval.sweep import LATENCY_KEYS
 from pydocs_eval.trackers.run_file_lines import read_run_file_lines
 
-AggregateBlock = tuple[tuple[str, float], ...]
 # The ``run_start`` fields that name a leg (``JsonlExperimentTracker``'s header).
 _LEG_HEADER_FIELDS = ("system", "config_name", "dataset")
 
@@ -53,14 +55,21 @@ class LegKey:
 
 @dataclass(frozen=True, slots=True)
 class LegFileReading:
-    """One leg file: its leg, its run tags (commit, platform, Python), its task records and
-    its final aggregate block (empty if none)."""
+    """One leg file: its leg, its run tags (commit, platform, Python), how many task
+    records it holds, after how many recorded tasks each relaunch reopened it, and its
+    final aggregate block (empty if none)."""
 
     path: Path
     key: LegKey | None
     tags: Mapping[str, str]
-    task_records: int
+    task_record_count: int
+    resumed_after: tuple[int, ...]
     block: AggregateBlock
+
+    @property
+    def resumed_mid_leg(self) -> bool:
+        """A relaunch reopened the leg with some of its tasks recorded and some still to run."""
+        return any(1 <= recorded < self.task_record_count for recorded in self.resumed_after)
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,16 +152,25 @@ def _read_leg_file(path: Path) -> LegFileReading:
         ) from None
     # A line that is not a JSON object (a write cut short) is skipped, as the
     # JSONL tracker skips it on resume.
-    records = [line.record for line in lines if line.record is not None]
-    header = next((r for r in records if r.get("_event") == "run_start"), None)
-    tags = header.get("tags") if header is not None else None
+    return _leg_file_reading(path, [line.record for line in lines if line.record is not None])
+
+
+def _leg_file_reading(path: Path, records: Sequence[Mapping[str, object]]) -> LegFileReading:
+    header = next(iter(events_of(records, LegFileEvent.RUN_START)), None)
+    resumes = (r.get("recorded_tasks") for r in events_of(records, LegFileEvent.RUN_RESUME))
     return LegFileReading(
         path=path,
         key=_leg_key(header),
-        tags={str(k): str(v) for k, v in tags.items()} if isinstance(tags, Mapping) else {},
-        task_records=len(task_ids(records)),
+        tags=_run_tags(header),
+        task_record_count=len(task_ids(records)),
+        resumed_after=tuple(recorded for recorded in resumes if isinstance(recorded, int)),
         block=tuple(final_aggregate_block(records)),
     )
+
+
+def _run_tags(header: Mapping[str, object] | None) -> dict[str, str]:
+    tags = header.get("tags") if header is not None else None
+    return {str(k): str(v) for k, v in tags.items()} if isinstance(tags, Mapping) else {}
 
 
 def _leg_key(header: Mapping[str, object] | None) -> LegKey | None:
@@ -231,8 +249,26 @@ def _compare_legs(run: _Side, local: _Side) -> tuple[tuple[LegVerdict, ...], tup
     failures = (
         *(_one_sided(key, run, local) for key in keys if (key in run.legs) != (key in local.legs)),
         *(failure for verdict in verdicts for failure in verdict.failures),
+        *_no_resume(run),
     )
     return verdicts, failures
+
+
+def _no_resume(run: _Side) -> tuple[str, ...]:
+    """A finished run must show the relaunch it is checked for: some leg resumed mid-way.
+
+    A run still cut short is already named as unfinished, so it is not judged here.
+    """
+    readings = [found[0] for found in run.legs.values()]
+    if not all(reading.block for reading in readings):
+        return ()
+    if any(reading.resumed_mid_leg for reading in readings):
+        return ()
+    return (
+        "got no leg of the run resumed mid-way, expected a run_resume after 1 to N-1 of a "
+        "leg's N task records; the stop came after the leg finished, or the relaunch did "
+        "not restore the run's state",
+    )
 
 
 def _one_sided(key: LegKey, run: _Side, local: _Side) -> str:
@@ -262,7 +298,7 @@ def _unfinished(run: LegFileReading, local: LegFileReading) -> list[str]:
     failures = []
     if not run.block:
         failures.append(
-            f"got no final aggregate block in the run's {run.path} ({run.task_records} task "
+            f"got no final aggregate block in the run's {run.path} ({run.task_record_count} task "
             "records), expected a finished leg; relaunch the run with make bench-vm, then pull "
             "it again"
         )
