@@ -36,6 +36,9 @@ REPO_DIR = Path("/opt/pydocs-mcp")
 OPENBLAS_LIBRARY = "/usr/lib/x86_64-linux-gnu/libopenblas.so.0"
 FLAVOUR_ENV_VAR = "BENCH_IMAGE_FLAVOUR"
 NVIDIA_LD_CONF = Path("/etc/ld.so.conf.d/bench-nvidia-wheels.conf")
+# Where gcloud keeps its user config in the image: the containers run as root
+# and the recipes set no CLOUDSDK_CONFIG.
+GCLOUD_USER_CONFIG_DIR = Path("/root/.config/gcloud")
 # Every CLI the run kinds and the supervisor drive must start, the supervisor
 # included: it is the container's entrypoint (infra/bench-vm/host/startup.sh).
 CLI_COMMANDS: tuple[tuple[str, ...], ...] = (
@@ -112,6 +115,24 @@ def check_imports() -> str:
     importlib.import_module("pydocs_mcp.storage.turboquant_uow")
     importlib.import_module("pydocs_eval.runner")
     return f"{Path(native.__file__).name}, {Path(turbovec.__file__).name}"
+
+
+def check_no_gcloud_user_config(config_dir: Path) -> Check:
+    """The image holds no gcloud user config, so nothing its build's gcloud learnt.
+
+    WHY (#434): a build's gcloud, with no metadata server, caches "not on
+    Compute Engine" in ``gce`` there. gcloud trusts that file for ten minutes
+    after its mtime, so on a VM booted that soon after the build every gcloud
+    call had no account.
+    """
+
+    def run() -> str:
+        if config_dir.exists():
+            baked = sorted(path.name for path in config_dir.iterdir())
+            raise SmokeFailure(f"got {config_dir} holding {baked}, expected no gcloud user config")
+        return f"no {config_dir}"
+
+    return run
 
 
 def check_clis() -> str:
@@ -213,6 +234,8 @@ def build_checks(flavour: ImageFlavour, commit: str) -> dict[str, Check]:
         "repository": check_repository,
         "openblas_preloaded": check_openblas_preloaded,
         "imports": check_imports,
+        # Before `clis`: its `gcloud --version` can write that dir in this container.
+        "no_gcloud_user_config": check_no_gcloud_user_config(GCLOUD_USER_CONFIG_DIR),
         "clis": check_clis,
     }
     if flavour is ImageFlavour.CPU:

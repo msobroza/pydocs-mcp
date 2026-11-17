@@ -30,6 +30,13 @@ download() {
 
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
+# WHY a throwaway user config (#434): gcloud keeps one under ~/.config/gcloud,
+# with its on-GCE cache `gce`. A build has no metadata server, so it baked
+# "False" into the image, and gcloud on a VM booted within ten minutes of the
+# build trusted it and had no account. The image must hold no gcloud user
+# config (smoke.py checks it); the --installation property below is stored in
+# the SDK's own directory.
+export CLOUDSDK_CONFIG="$scratch/gcloud-config"
 
 download "$GCLOUD_URL" "$scratch/gcloud.tar.gz" "$GCLOUD_SHA256"
 tar -xzf "$scratch/gcloud.tar.gz" -C /opt
