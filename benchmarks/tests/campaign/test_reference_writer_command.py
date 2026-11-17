@@ -26,7 +26,9 @@ _FIXTURE = Path(__file__).parents[1] / "fixtures" / "repoqa_mini.json"
 _DEPLOYMENT = Path(__file__).parents[2] / "configs" / "judge_openrouter.yaml"
 
 
-async def _fixture_tasks(split_spec: str, *, limit: int | None = None) -> tuple[EvalTask, ...]:
+async def _fixture_tasks(
+    split_spec: str, *, limit: int | None = None, draw: object = None
+) -> tuple[EvalTask, ...]:
     dataset = RepoQaQuestionDataset(source=RepoQADataset(fixture_path=_FIXTURE))
     tasks = tuple([task async for task in dataset.tasks()])
     return tasks[:limit] if limit is not None else tasks

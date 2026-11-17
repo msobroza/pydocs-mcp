@@ -227,7 +227,7 @@ N. **Add capability-aware ingestion (`REQUIRES` declarations + auto-derivation)*
 
     New abstractions added by this PR:
 
-    - `LlmClient` Protocol in `storage/protocols.py` mirroring `Embedder` but exposing BOTH `async chat()` and `chat_sync()` — LLM calls surface in more contexts than embedding calls. First concrete: `OpenAiLlmClient` using `openai>=1.40` (already a required dep, no new dependencies). New providers (Anthropic, Gemini, LiteLLM) land as one-file additions per SOLID open/closed.
+    - `LlmClient` Protocol in `storage/protocols.py` mirroring `Embedder` but exposing BOTH `async chat()` and `chat_sync()` — LLM calls surface in more contexts than embedding calls. First concrete: `OpenAiLlmClient` using the `openai` SDK (already a required dep, no new dependencies). New providers (Anthropic, Gemini, LiteLLM) land as one-file additions per SOLID open/closed.
     - `LlmConfig` sub-model in `retrieval/config/embedder_models.py` mirroring `EmbeddingConfig` (`provider: Literal["openai", ...]`, `model_name`, `temperature`, `max_tokens`).
     - Two Jinja2 prompt templates under `python/pydocs_mcp/retrieval/prompts/`: `tree_reasoning_pageindex_v1.j2` (verbatim PageIndex baseline) and `tree_reasoning_pydocs_v1.j2` (adapted for code-doc queries). Prompts are versioned (`_vN` suffix); selected at runtime via a `prompt_template` dataclass field on the step. Versioned prompts make A/B comparison and rollback a YAML edit instead of a code change.
 

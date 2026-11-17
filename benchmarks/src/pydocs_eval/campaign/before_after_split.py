@@ -12,6 +12,12 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from pydocs_eval.campaign.before_after import MeasurementPlanError, dataset_names_for, parse_split
+from pydocs_eval.campaign.before_after_fresh_draw import (
+    FRESH_DRAW_POOL_SLICE,
+    FreshTestDraw,
+    draw_fresh_test_tasks,
+    refuse_unsupported_fresh_draw,
+)
 from pydocs_eval.datasets._split import VALID_SPLITS
 from pydocs_eval.datasets.base_dataset import Dataset, EvalTask
 from pydocs_eval.datasets.example_needle_chat import ChatSplit
@@ -31,25 +37,45 @@ DATASET_SLICE_NAMES: Mapping[str, tuple[str, ...]] = {
     "example-needle-chat": tuple(split.value for split in ChatSplit),
 }
 
+# Datasets with no ``split`` field at all: their records carry no partition, so
+# the whole corpus is the only slice. ``/all`` builds them with no ``split``
+# kwarg and any other slice name is refused by name (step 7d) — never by the
+# ``TypeError`` a ``split`` kwarg would raise, which read as "no partition"
+# for a name (``all``) the dataset can in fact answer.
+UNPARTITIONED_DATASETS: frozenset[str] = frozenset({"lca-bug-loc", "crosscommitvuln"})
+
+# The one slice an unpartitioned dataset answers: the whole corpus.
+_WHOLE_CORPUS_SLICE = "all"
+_WHOLE_CORPUS_SLICES: tuple[str, ...] = (_WHOLE_CORPUS_SLICE,)
+
 # ``Dataset`` implementations take the slice name as a ``split`` field.
 _SPLIT_FIELD = "split"
 _SOURCE_FIELD = "source"
 
 
-async def load_split_tasks(split_spec: str, *, limit: int | None = None) -> tuple[EvalTask, ...]:
+async def load_split_tasks(
+    split_spec: str, *, limit: int | None = None, draw: FreshTestDraw | None = None
+) -> tuple[EvalTask, ...]:
     """Every task of ``<selector>/<split>``, in dataset order, capped by ``limit``.
+
+    ``draw`` replaces ``repoqa-qa/small_test`` with a fresh redraw from its
+    ``test`` partition (``before_after_fresh_draw``); ``limit`` then takes a
+    prefix of the redraw. None — the default — loads the slice as it always was.
 
     Raises:
         MeasurementPlanError: an unparseable selector, an unknown split name, a
-            dataset the registry does not know, or a slice with no tasks.
+            dataset the registry does not know, a slice with no tasks, or a
+            draw the fresh-draw module refuses.
     """
     selector, split = parse_split(split_spec)
     names = dataset_names_for(selector)
     for name in names:
         _validate_split_name(name, split, split_spec)
+    if draw is not None:
+        refuse_unsupported_fresh_draw(names, split)
     tasks: list[EvalTask] = []
     for name in names:
-        tasks.extend(await _tasks_of_dataset(name, split))
+        tasks.extend(await _tasks_of_dataset(name, split, draw))
     if not tasks:
         raise MeasurementPlanError(
             f"split {split_spec!r} yielded no task; check the selector against the "
@@ -65,6 +91,8 @@ def slice_names_for(dataset_name: str) -> tuple[str, ...]:
         >>> "reserved" in slice_names_for("example-needle-chat")
         True
     """
+    if dataset_name in UNPARTITIONED_DATASETS:
+        return _WHOLE_CORPUS_SLICES
     return DATASET_SLICE_NAMES.get(dataset_name, VALID_SPLITS)
 
 
@@ -77,9 +105,16 @@ def _validate_split_name(dataset_name: str, split: str, split_spec: str) -> None
         )
 
 
-async def _tasks_of_dataset(name: str, split: str) -> list[EvalTask]:
-    """One registered dataset's tasks for ``split`` (the corpora stay unmaterialized)."""
-    return [task async for task in _sliced_dataset(name, split).tasks()]
+async def _tasks_of_dataset(name: str, split: str, draw: FreshTestDraw | None) -> list[EvalTask]:
+    """One registered dataset's tasks for ``split`` (the corpora stay unmaterialized).
+
+    A draw loads the ``test`` partition at the dataset's own split seed and
+    redraws from it, so ``dev`` never reaches the pool.
+    """
+    if draw is None:
+        return [task async for task in _sliced_dataset(name, split).tasks()]
+    pool = [task async for task in _sliced_dataset(name, FRESH_DRAW_POOL_SLICE).tasks()]
+    return list(draw_fresh_test_tasks(pool, draw))
 
 
 def _sliced_dataset(name: str, split: str) -> Dataset:
@@ -87,30 +122,39 @@ def _sliced_dataset(name: str, split: str) -> Dataset:
 
     Raises:
         MeasurementPlanError: the registry does not know ``name``, ``name``
-            has no dev/test partition to cut (``swe-qa`` slices by REPO, so the
-            framing over it answers the whole corpus or nothing), or ``name``
-            refuses ``split`` (a slice name outside its own vocabulary).
+            has no ``split`` field to cut and is not one of
+            ``UNPARTITIONED_DATASETS``, or ``name`` refuses ``split`` (``swe-qa``
+            refuses every dev/test name: it slices by REPO, and only the
+            ``swe-qa-questions`` framing over it is cut into dev/test).
     """
-    source_name = SLICE_ON_SOURCE.get(name)
     try:
-        if source_name is None:
-            return dataset_registry.build(name, **{_SPLIT_FIELD: split})
-        source = dataset_registry.build(source_name, **{_SPLIT_FIELD: split})
-        return dataset_registry.build(name, **{_SOURCE_FIELD: source})
+        return _built_for_slice(name, split)
     except KeyError as exc:
         raise MeasurementPlanError(
             f"no registered dataset named {name!r}; have {sorted(dataset_registry.names())}"
         ) from exc
     except TypeError as exc:
         raise MeasurementPlanError(
-            f"dataset {name!r} takes no {split!r} slice ({exc}); it has no dev/test "
-            f"partition, so name a sliceable dataset such as {sorted(SLICE_ON_SOURCE)} "
-            "instead of a task name that spans it"
+            f"dataset {name!r} takes no {split!r} slice ({exc}): it has no split field "
+            f"and is not one of the whole-corpus datasets {sorted(UNPARTITIONED_DATASETS)}, "
+            "expected a dataset with a split field (repoqa-qa, swe-qa-questions) or "
+            "<whole-corpus dataset>/all"
         ) from exc
     except ValueError as exc:
         raise MeasurementPlanError(
             f"dataset {name!r} could not be built for slice {split!r}: {exc}"
         ) from exc
+
+
+def _built_for_slice(name: str, split: str) -> Dataset:
+    """``name`` built for ``split``: whole, directly, or through its source corpus."""
+    if name in UNPARTITIONED_DATASETS:
+        return dataset_registry.build(name)
+    source_name = SLICE_ON_SOURCE.get(name)
+    if source_name is None:
+        return dataset_registry.build(name, **{_SPLIT_FIELD: split})
+    source = dataset_registry.build(source_name, **{_SPLIT_FIELD: split})
+    return dataset_registry.build(name, **{_SOURCE_FIELD: source})
 
 
 def task_ids_of(tasks: Sequence[EvalTask]) -> tuple[str, ...]:

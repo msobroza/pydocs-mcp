@@ -16,7 +16,12 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_eval.campaign.before_after_arm import ArmSettings, write_arm_settings, write_arm_summary
+from pydocs_eval.campaign.before_after_arm import (
+    ArmSettings,
+    read_arm_summary,
+    write_arm_settings,
+    write_arm_summary,
+)
 from pydocs_eval.trajectory.ask_outcome import TaskOutcome
 
 from ._fakes import COMPARE_TASK_IDS, FakeSplitTasks
@@ -315,3 +320,102 @@ def test_without_stored_answers_there_is_no_verdict(
 
     assert code == 2
     assert _verdict_of(report, legacy) == "no verdict"
+
+
+def test_each_arms_provenance_line_names_its_settings_digest(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], compare_split: FakeSplitTasks
+) -> None:
+    """A variant arm on the baseline's commit is told apart by its digest alone."""
+    baseline = _write_arm(tmp_path, "baseline", _rows())
+    summary = read_arm_summary(baseline)
+    write_arm_summary(baseline, dataclasses.replace(summary, settings_digest="d" * 64))
+
+    _code, report = _run(capsys, baseline, _write_arm(tmp_path, "variant", _rows()))
+
+    assert f"- baseline: `{baseline}` (`{'a' * 12}`, digest `{'d' * 12}`), 10 task(s)" in report
+    assert f"- A/A replicate: `{baseline}` (`{'a' * 12}`, digest `{'d' * 12}`)" in report
+
+
+def test_a_candidate_compared_against_a_forced_reuse_says_so(
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--allow-serving-mismatch`` stamps the candidate; the compare verb prints it."""
+    from pydocs_eval.campaign.before_after_arm_records import ServingMismatchOverride
+
+    baseline = _write_arm(tmp_path, "baseline", _rows())
+    forced = _write_arm(tmp_path, "forced", _rows(turns=(5,) * 10))
+    override = ServingMismatchOverride(
+        reused_baseline=str(baseline), differing_keys=["endpoint"], fingerprint_recorded=True
+    )
+    stamped = dataclasses.replace(read_arm_summary(forced), serving_override=override)
+    write_arm_summary(forced, stamped)
+
+    code, report = _run(capsys, baseline, forced)
+
+    assert code == 0
+    assert (
+        f"- serving, `{forced}`: reuse of `{baseline}` forced by `--allow-serving-mismatch` "
+        "over differing serving key(s): `endpoint`"
+    ) in report
+
+
+def test_an_arm_without_a_forced_reuse_prints_no_serving_line(
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
+) -> None:
+    baseline = _write_arm(tmp_path, "baseline", _rows())
+
+    _code, report = _run(capsys, baseline, _write_arm(tmp_path, "faster", _rows()))
+
+    assert "- serving," not in report
+
+
+# --- review fixes: an unfinished arm, and the A/A twin's settings digest ----
+
+
+def _restamped(arm_dir: Path, **fields: object) -> Path:
+    """``arm_dir`` with its ``arm.json`` rewritten under ``fields``."""
+    write_arm_summary(arm_dir, dataclasses.replace(read_arm_summary(arm_dir), **fields))
+    return arm_dir
+
+
+def test_compare_refuses_an_arm_still_in_progress(
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A killed arm's checkpoint holds k of N rows: a verdict over them reads as finished."""
+    baseline = _write_arm(tmp_path, "baseline", _rows())
+    running = _restamped(_write_arm(tmp_path, "running", _rows()), halt_reason="in_progress")
+
+    code, report = _run(capsys, baseline, running)
+
+    assert code == 2
+    assert f"{running} " in report and "halt_reason in_progress" in report
+    assert "10 task(s)" in report and "--confirm-spend" in report
+
+
+def test_a_same_commit_variant_is_not_accepted_as_the_aa_replicate(
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A variant on the baseline's commit differs by a treatment, not by noise."""
+    baseline = _restamped(_write_arm(tmp_path, "baseline", _rows()), settings_digest="a" * 64)
+    variant = _restamped(_write_arm(tmp_path, "variant", _rows()), settings_digest="b" * 64)
+
+    code, report = _run(capsys, baseline, variant, replicate=variant)
+
+    assert code == 2
+    assert "is not the baseline's A/A twin" in report
+    assert "a" * 64 in report and "b" * 64 in report
+    assert "one settings digest" in report
+
+
+def test_two_arms_that_recorded_no_digest_still_pair(
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Arms written before variant arms both read ``""``: still the A/A twins they were."""
+    baseline = _write_arm(tmp_path, "baseline", _rows())
+    replicate = _write_arm(tmp_path, "replicate", _rows())
+
+    faster = _write_arm(tmp_path, "faster", _rows(turns=(5,) * 10))
+
+    code, report = _run(capsys, baseline, faster, replicate=replicate)
+
+    assert (code, _verdict_of(report, faster)) == (0, "PASS (Q10)")

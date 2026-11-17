@@ -76,6 +76,7 @@ from ._parquet import ParquetPin, download_parquet, read_parquet_rows
 from ._repo_cache import RepoCache, RepoCacheLike, read_checkout_files
 from .base_dataset import EvalTask, GoldAnswer
 from .corpus import materialize_corpus
+from .repo_coordinates import COMMIT_METADATA_KEY, REPO_METADATA_KEY
 from .task_ids import mint_framed_task_id
 
 log = logging.getLogger(__name__)
@@ -261,7 +262,9 @@ class SweBenchVerifiedLocDataset:
                 self.repo_cache, _GITHUB_URL.format(owner=owner, name=repo_name), base_commit
             ),
             metadata={
-                "repo": repo,
+                REPO_METADATA_KEY: repo,
+                # With ``repo``, keys the task's own before/after workspace (#387).
+                COMMIT_METADATA_KEY: base_commit,
                 "version": str(row.get("version") or ""),
                 # 4 classes ("15 min - 1 hour" etc.) — a ready-made per-category
                 # report breakout, the way swe-qa-pro's qa_type is.
@@ -314,6 +317,7 @@ class LcaBugLocDataset:
         # the parse is vocabulary-anchored on the middle segment.
         text_id = str(row["text_id"])
         owner, repo_name = str(row["repo_owner"]), str(row["repo_name"])
+        base_sha = str(row["base_sha"])
         file_set = _require_gold(
             non_test_paths(paths_from_changed_files(row.get("changed_files"))),
             record_id=text_id,
@@ -330,10 +334,11 @@ class LcaBugLocDataset:
             corpus_source=_corpus_source(
                 self.repo_cache,
                 _GITHUB_URL.format(owner=owner, name=repo_name),
-                str(row["base_sha"]),
+                base_sha,
             ),
             metadata={
-                "repo": f"{owner}/{repo_name}",
+                REPO_METADATA_KEY: f"{owner}/{repo_name}",
+                COMMIT_METADATA_KEY: base_sha,
                 "repo_language": str(row.get("repo_language") or ""),
                 "repo_license": str(row.get("repo_license") or ""),
                 "gold_file_count": str(len(file_set)),

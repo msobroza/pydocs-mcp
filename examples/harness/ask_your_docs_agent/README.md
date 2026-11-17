@@ -325,6 +325,16 @@ ask_your_docs:
 Set `live: false` if your server streams tool calls badly: the model is then called
 without streaming, exactly as with the panel off.
 
+A live reply has a silence limit (langchain-openai 1.2 and later): it ends after 120 s
+without a streamed chunk, counted from the response headers; keepalive comments the
+server sends do not reset it. The environment variable
+`LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S` sets that limit in place of 120 s, and `0`
+turns it off. An `ask_your_docs.llm.timeout_seconds` LONGER than the limit extends it to
+the block's value; a shorter one leaves the limit as it is, so a short request timeout
+never cuts off a long, silent reasoning phase sooner than the limit would. With the
+variable at `0`, the limit stays off whatever the block says. `live: false` avoids
+streaming altogether.
+
 ### Graph explorer
 
 <p align="center">
