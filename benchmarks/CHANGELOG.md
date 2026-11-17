@@ -1151,6 +1151,30 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Fixed
 
+- **A bench VM whose gcloud cannot authenticate still deletes itself, and the
+  supervisor's gcloud reaches the metadata server by its address**
+  (`bench_vm/own_vm.py`, `bench_vm/compute_api_delete.py`,
+  `infra/bench-vm/host/startup.sh`). On the live CPU smoke, the supervisor's first
+  gcloud call answered "You do not currently have an active account selected". So
+  did its self-delete, and the VM would have billed until `max_runtime`. When
+  gcloud's delete fails, the self-delete now sends the Compute API's instance
+  DELETE through curl, with the token the metadata server gives the VM's service
+  account. The token goes to curl on stdin, never into argv or a log. A failure of
+  both deletes is logged with both errors (`bench_vm_self_delete_failed`).
+  `BenchCloud` gains `delete_instance_with_metadata_token`. The startup script now
+  starts the supervisor's container with `GCE_METADATA_ROOT` and
+  `GCE_METADATA_HOST` set to `169.254.169.254`. Cloud SDK 592 does not retry a
+  failed lookup of `metadata.google.internal`; it then counts itself off GCE, with
+  no account, for ten minutes. (#434)
+- **A relaunch whose earlier attempts never synced any state starts the benchmark
+  from the beginning** (`bench_vm/gcloud_bench_cloud.py`,
+  `bench_vm/gcloud_stderr.py`). Cloud SDK 592's `gcloud storage rsync` answers a
+  source prefix that holds no object with "Did not find existing container at:
+  gs://…", not the "matched no objects" the adapter recognised. So the relaunch of
+  a run recorded `lost` before it ever synced failed its state restore in seconds,
+  and the attempt was recorded `failed`. That answer now restores nothing, as the
+  `BenchCloud` port promises for an empty prefix. A missing bucket still fails the
+  restore. (#434)
 - **A bench VM boots from a `pd-balanced` disk, so a GPU run is no longer refused
   when its VM is created** (`bench_vm/launch_plan.py`,
   `bench_vm/gcloud_instance_create.py`). The launcher named no boot disk type, so
