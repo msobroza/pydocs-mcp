@@ -21,6 +21,9 @@ from pydocs_eval.bench_vm.run_record import SPEC_COPY_OBJECT_NAME, RunStatus
 from ._spec_dicts import retrieval_spec
 from ._supervise_harness import SuperviseHarness, SuperviseResult
 
+# gcloud's own words when it found no credentials (#434, attempt 1 of the CPU smoke).
+_NO_ACCOUNT = "You do not currently have an active account selected."
+
 
 def _own_vm(harness: SuperviseHarness) -> tuple[str, str, str]:
     vm = harness.vm
@@ -29,6 +32,14 @@ def _own_vm(harness: SuperviseHarness) -> tuple[str, str, str]:
 
 def _record_bytes(harness: SuperviseHarness, run_id: str) -> bytes | None:
     return harness.launch.cloud.object_data(harness.launch.record_uri(run_id))
+
+
+def _spec_copy_uri(harness: SuperviseHarness, run_id: str) -> str:
+    return harness.launch.record_uri(run_id).rsplit("/", 1)[0] + "/" + SPEC_COPY_OBJECT_NAME
+
+
+def _events(result: SuperviseResult) -> list[dict[str, object]]:
+    return [json.loads(line) for line in result.err.strip().splitlines()]
 
 
 def _with_record_status(harness: SuperviseHarness, run_id: str, status: RunStatus) -> None:
@@ -81,8 +92,7 @@ def test_a_refusal_whose_spec_copy_is_unreadable_deletes_the_vm(
     supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
 ) -> None:
     run_id = supervise_harness.launch_run(capsys, "cpu-smoke", retrieval_spec(self_delete=False))
-    spec_uri = supervise_harness.launch.record_uri(run_id).rsplit("/", 1)[0] + "/"
-    spec_uri += SPEC_COPY_OBJECT_NAME
+    spec_uri = _spec_copy_uri(supervise_harness, run_id)
     supervise_harness.launch.cloud.read_errors[spec_uri] = BenchCloudError("503 (scripted)")
 
     result = supervise_harness.supervise(capsys, run_id)
@@ -162,16 +172,14 @@ def test_a_stale_running_write_is_refused_before_the_child_starts(
 def _gcloud_has_no_credentials(harness: SuperviseHarness, run_id: str) -> None:
     """Every gcloud call fails as attempt 1 of the #434 CPU smoke did; the metadata server works."""
     cloud, vm = harness.launch.cloud, harness.vm
-    no_account = "You do not currently have an active account selected."
-    record_uri = harness.launch.record_uri(run_id)
-    for uri in (record_uri, record_uri.rsplit("/", 1)[0] + "/" + SPEC_COPY_OBJECT_NAME):
+    for uri in (harness.launch.record_uri(run_id), _spec_copy_uri(harness, run_id)):
         cloud.read_errors[uri] = BenchCloudError(
-            f"describing {uri} failed (exit 1): ERROR: (gcloud.storage.objects.describe) "
-            + no_account
+            f"describing {uri} failed (exit 1): "
+            f"ERROR: (gcloud.storage.objects.describe) {_NO_ACCOUNT}"
         )
     cloud.delete_errors[vm.name] = BenchCloudError(
         f"deleting {vm.name} in {vm.zone} failed (exit 1): "
-        f"ERROR: (gcloud.compute.instances.delete) {no_account}"
+        f"ERROR: (gcloud.compute.instances.delete) {_NO_ACCOUNT}"
     )
 
 
@@ -188,13 +196,12 @@ def test_a_supervisor_whose_gcloud_has_no_credentials_deletes_its_vm_with_the_me
     cloud = supervise_harness.launch.cloud
     assert cloud.deleted == [_own_vm(supervise_harness)]
     assert cloud.operations()[-2:] == ["delete_instance", "delete_instance_with_metadata_token"]
-    events = [json.loads(line) for line in result.err.strip().splitlines()]
-    retried = [
+    events = _events(result)
+    (retried,) = [
         e for e in events if e["event"] == "bench_vm_self_delete_retried_with_metadata_token"
     ]
-    assert len(retried) == 1
     # gcloud's own words, verbatim: the log is the only record of why it failed.
-    assert "You do not currently have an active account selected." in retried[0]["detail"]
+    assert _NO_ACCOUNT in str(retried["detail"])
     # Nothing could be written: the launcher records the attempt lost on the next launch.
     assert _record_bytes(supervise_harness, run_id) == before
 
@@ -214,10 +221,10 @@ def test_a_vm_whose_two_deletes_both_fail_logs_both_errors_and_still_ends(
 
     _assert_nothing_ran(result)
     assert supervise_harness.launch.cloud.deleted == []
-    events = [json.loads(line) for line in result.err.strip().splitlines()]
+    events = _events(result)
     (failed,) = [e for e in events if e["event"] == "bench_vm_self_delete_failed"]
-    assert "You do not currently have an active account selected." in failed["detail"]
-    assert "returned error: 403" in failed["detail"]
+    assert _NO_ACCOUNT in str(failed["gcloud_detail"])
+    assert "returned error: 403" in str(failed["detail"])
     assert events[-1]["event"] == "bench_vm_supervisor_failed"
 
 

@@ -1,6 +1,7 @@
 """What gcloud's stderr says when a call answered "no", recognised by its documented markers.
 
-gcloud reports "not found", "no objects matched" and "precondition failed"
+gcloud reports "not found", "no objects matched", "precondition failed" and,
+for an rsync whose source holds no object, "did not find existing container"
 only in its stderr; every ``GcloudBenchCloud`` call that tells those answers
 apart from a failure reads them here, so the patterns cannot drift apart.
 """

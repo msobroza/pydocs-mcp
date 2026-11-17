@@ -10,8 +10,8 @@ lookup and an image build, VM creation, and VM listing by label across zones
 (the relaunch's live-VM check). The supervisor adds the ones it drives from
 inside the run's container: directory syncs, the state restore on a relaunch
 (a directory pull that finds an empty prefix fine), instance-metadata reads,
-deleting its own VM (through gcloud, or with the metadata server's token
-when gcloud cannot authenticate), and reading the provider keys its kind declares from
+deleting its own VM (and deleting it again with the metadata server's token
+when that fails), and reading the provider keys its kind declares from
 Secret Manager (``access_secret``, whose value only ever reaches the child's
 environment). The owner's run-control verbs (``status``, ``stop``, ``pull``)
 add an object's tail (the synced log), a prefix download and the listing of
@@ -213,12 +213,13 @@ class BenchCloud(Protocol):
         ...
 
     def delete_instance_with_metadata_token(self, project: str, zone: str, name: str) -> None:
-        """Delete the VM ``name`` in ``zone`` as the VM's service account, without gcloud.
+        """Delete the VM ``name`` in ``zone`` with the metadata server's token, on a bench VM only.
 
-        On a bench VM only: the Compute API is called with the access token
-        the metadata server gives the VM's attached service account. It is the
-        self-delete's fallback when gcloud cannot authenticate (``own_vm``). A
-        VM already gone is not an error.
+        The Compute API is called with the access token the metadata server
+        gives the VM's attached service account, not with the credentials the
+        other calls use. It is the self-delete's fallback when
+        ``delete_instance`` fails, as it does when those credentials are
+        missing (``own_vm``). A VM already gone is not an error.
         """
         ...
 

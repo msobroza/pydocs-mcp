@@ -93,6 +93,10 @@ def test_a_relaunch_after_a_lost_attempt_that_never_synced_runs_the_benchmark_fr
 ) -> None:
     # #434: attempt 1's supervisor never got as far as `running` and its VM went,
     # so the launcher records it lost; nothing was ever synced under the prefix.
+    # This pins the supervisor's half (a restore that brings nothing starts the
+    # benchmark fresh). The fake restores an empty prefix as the port promises, so
+    # gcloud's own answer for one is pinned by the adapter's test instead
+    # (test_gcloud_bench_cloud_vm_side.py, a prefix nothing was ever synced to).
     run_id = supervise_harness.launch_run(capsys, "cpu-smoke", retrieval_spec())
     supervise_harness.launch.cloud.vanish()
     _relaunch_on_a_fresh_vm(supervise_harness, capsys)

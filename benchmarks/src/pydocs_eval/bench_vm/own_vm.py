@@ -58,7 +58,8 @@ def _delete_own_vm_with_metadata_token(
             "bench_vm_self_delete_failed",
             run_id=facts.run_id,
             instance=facts.instance,
-            detail=f"through gcloud: {gcloud_error}; with the metadata token: {exc}",
+            detail=str(exc),
+            gcloud_detail=gcloud_error,
         )
 
 

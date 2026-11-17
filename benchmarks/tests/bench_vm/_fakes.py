@@ -354,13 +354,13 @@ class FakeBenchCloud:
 
     def delete_instance(self, project: str, zone: str, name: str) -> None:
         self._record("delete_instance", project=project, zone=zone, name=name)
-        self._delete(self.delete_errors, project, zone, name)
+        self._delete_vm(self.delete_errors, project, zone, name)
 
     def delete_instance_with_metadata_token(self, project: str, zone: str, name: str) -> None:
         self._record("delete_instance_with_metadata_token", project=project, zone=zone, name=name)
-        self._delete(self.token_delete_errors, project, zone, name)
+        self._delete_vm(self.token_delete_errors, project, zone, name)
 
-    def _delete(self, errors: dict[str, Exception], project: str, zone: str, name: str) -> None:
+    def _delete_vm(self, errors: dict[str, Exception], project: str, zone: str, name: str) -> None:
         if name in errors:
             raise errors[name]
         self.deleted.append((project, zone, name))
