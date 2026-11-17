@@ -689,7 +689,16 @@ ask_your_docs:
   #   timeout_seconds: null              # the chat model's request timeout, in seconds;
   #                                      # null = the client's own. The models the agent
   #                                      # builds (main, vision) carry it; the Test button
-  #                                      # and the image probe keep their own short bounds
+  #                                      # and the image probe keep their own short bounds.
+  #                                      # A live (streamed) reply also has a silence
+  #                                      # limit (langchain-openai 1.2+): it ends after
+  #                                      # 120 s without a streamed chunk, counted from
+  #                                      # the response headers; server keepalive
+  #                                      # comments do not reset it. A value LONGER than
+  #                                      # that limit extends it; a shorter one leaves it.
+  #                                      # LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S sets the
+  #                                      # limit in place of 120 s (0 keeps it off), and
+  #                                      # ui.activity.live: false avoids streaming
   #   max_retries: null                  # retries of a failed request; null = the client's own
   #   provider_routing: null             # OpenRouter only — refused under any other provider
   #                                      # profile. Pins the upstream(s) serving the model,
