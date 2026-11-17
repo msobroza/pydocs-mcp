@@ -1,0 +1,178 @@
+{
+  "spec_version": 1,
+  "title": "ask-your-docs agent activity panel",
+  "winner": "progressive-disclosure",
+  "grafts": {
+    "inline-steps": ["redact accumulated buffer at repaint/save, never per delta", "collapsed label grammar", "pinned_args shared with _intercept", "no answer streaming in v1"],
+    "timeline-panel": ["plain-text rendering of all untrusted output", "danger/warn theme tokens with 4.5:1 contrast test", "asyncio.shield around in-flight MCP tool call on cancel", "Answered-without-searching one-liner", "CLI equivalent in L2 (phase 1.1)"]
+  },
+  "theme_tokens": {
+    "existing": ["bg", "surface", "recessed", "border", "text", "muted", "accent", "wash"],
+    "new": {
+      "danger": {"dark": "#FF7B72", "light": "#B42318"},
+      "warn": {"dark": "#E3B341", "light": "#8A5A00"}
+    },
+    "contrast_rule": "danger and warn >= 4.5:1 against bg and surface in both palettes"
+  },
+  "glyphs": {"running": "●", "ok": "✓", "failed": "✗", "note": "ⓘ", "assistant_avatar": "◆", "collapsed": "▸", "expanded": "▾"},
+  "glyph_rule": "decorative only; every state is also spelled in words",
+  "levels": {
+    "L0": "st.status label, always visible (one line)",
+    "L1": "status body: plain-language steps, outcomes, up to 3 citation chips per step, notes",
+    "L2": "per-step Details expander, rendered only when sidebar 'Show technical details' is on: tool name, model-sent args, actually-sent args, meta, raw preview, full reasoning"
+  },
+  "states": [
+    {
+      "id": "running",
+      "status_state": "running",
+      "expanded": true,
+      "label": "Finding callers of BaseIndexStore.append … · 3.2 s",
+      "label_update_rule": "changes only on step start/end; elapsed refreshed at most 1/s",
+      "body": [
+        {"type": "note_step", "status": "ok", "text": "Rephrased your question as \"callers of BaseIndexStore.append\"", "condition": "only when reformulation differs after normalization"},
+        {"type": "scope_note", "text": "Scope: project \"example_needle\" (pinned by you)", "condition": "only when a pin applies"},
+        {"type": "thinking", "live": true, "title": "Thinking (live) · 1,204 chars", "text": "The user wants call sites. First confirm the symbol exists, then ask the reference graph for callers…", "render": "st.text, muted, 3px left border, last ~12 lines, repaint <= 10/s"},
+        {"type": "tool_step", "status": "ok", "label": "Looked up BaseIndexStore.append", "duration": "0.3 s", "outcome": "1 match", "citations": ["src/store/base.py:39"]},
+        {"type": "tool_step", "status": "running", "label": "Finding callers of BaseIndexStore.append …", "duration": "1.1 s"}
+      ],
+      "below_status": {"type": "placeholder", "text": "Writing the answer…", "condition": "shown once the final (no-tool-call) round starts; answer text itself rendered at turn end in v1"}
+    },
+    {
+      "id": "finished_collapsed",
+      "status_state": "complete",
+      "expanded": false,
+      "label": "Done in 6.4 s · 4 steps · 3 files · reasoning shown",
+      "answer": "BaseIndexStore.append is called from two places: IndexRunner.flush (src/indexer/run.py:112) and …",
+      "sources_row": {"cited": ["src/store/base.py:39", "src/indexer/run.py:112"], "also_looked_at_count": 1, "cited_rule": "path or qualified_name substring appears in answer text; answer markdown never rewritten"}
+    },
+    {
+      "id": "finished_expanded",
+      "status_state": "complete",
+      "expanded": true,
+      "label": "Done in 6.4 s · 4 steps · 3 files · reasoning shown",
+      "body": [
+        {"type": "disclaimer", "text": "Model's working notes. They may be incomplete or differ from what it actually did.", "condition": "once per turn, above first thinking block"},
+        {"type": "thinking", "live": false, "collapsed_teaser": "Thinking · 1.4 s · \"The user wants call sites. First confirm the symbol…\""},
+        {"type": "tool_step", "status": "ok", "label": "Looked up BaseIndexStore.append", "duration": "0.3 s", "outcome": "1 match", "citations": ["src/store/base.py:39"]},
+        {"type": "thinking", "live": false, "collapsed_teaser": "Thinking · 0.6 s · \"Found it. Now callers…\""},
+        {"type": "tool_step", "status": "ok", "label": "Found callers of BaseIndexStore.append", "duration": "1.1 s", "outcome": "2 callers", "citations": ["src/indexer/run.py:112", "tests/test_store.py:20"], "notes": ["Reference graph matches by name (syntactic), so some calls may be missed"]},
+        {"type": "tool_step", "status": "error", "label": "Searched file text for /\\.append\\(/ in *.py", "duration": "0.2 s", "outcome": "failed", "error_line": "The tool reported: invalid pattern at position 3"},
+        {"type": "usage_footer", "text": "Tokens: 3.1k in · 612 out (412 reasoning) · qwen/qwen3.8-27b", "condition": "only when the provider sent usage"}
+      ],
+      "label_variant_with_failed_tool": "Done in 6.4 s · 4 steps · 1 failed · 3 files · reasoning shown"
+    },
+    {
+      "id": "finished_expanded_technical",
+      "status_state": "complete",
+      "expanded": true,
+      "condition": "sidebar toggle 'Show technical details' on",
+      "step_details_example": {
+        "tool": "get_references",
+        "model_sent": {"target": "BaseIndexStore.append", "direction": "callers"},
+        "actually_sent": {"target": "BaseIndexStore.append", "direction": "callers", "project": "example_needle"},
+        "pinned_keys_note": "project added by your scope pin",
+        "meta": "project example_needle · branch main · index up to date · truncated no · resolution syntactic",
+        "result_preview": {"render": "st.code (plain text)", "shown_chars": 600, "total_chars": 2431},
+        "cli_equivalent": {"phase": "1.1", "text": "pydocs-mcp refs BaseIndexStore.append --direction callers --project example_needle"}
+      }
+    },
+    {
+      "id": "reasoning_hidden_by_provider",
+      "status_state": "complete",
+      "label": "Done in 5.0 s · 3 steps · 2 files · reasoning hidden",
+      "body_last_line": "The model reasoned (412 tokens), but openrouter.ai doesn't return the text.",
+      "detection": "usage reasoning_tokens > 0 or reasoning.encrypted detail, and no reasoning text"
+    },
+    {
+      "id": "reasoning_not_shared",
+      "status_state": "complete",
+      "label": "Done in 4.2 s · 3 steps · 2 files",
+      "body_last_line": "This model didn't share any reasoning for this answer.",
+      "detection": "usage reported with 0 reasoning tokens and no text"
+    },
+    {
+      "id": "reasoning_unknown",
+      "status_state": "complete",
+      "label": "Done in 4.2 s · 3 steps · 2 files",
+      "body_last_line": "This endpoint doesn't report whether the model reasoned.",
+      "detection": "no usage and no text"
+    },
+    {
+      "id": "answered_directly",
+      "status_state": "complete",
+      "expanded": false,
+      "label": "Answered without searching · 1.1 s",
+      "condition": "zero tool calls; reasoning block inside if any was returned",
+      "rationale": "an ungrounded answer is itself information the user needs"
+    },
+    {
+      "id": "tool_error",
+      "status_state": "complete",
+      "expanded": false,
+      "label": "Done in 3.9 s · 3 steps · 1 failed · 2 files",
+      "failed_step": {"status": "error", "label": "Opened src/app/.env:1–40", "outcome": "failed", "error_line": "failed: path outside root boundary", "color": "danger left border + word 'failed'"}
+    },
+    {
+      "id": "turn_failed",
+      "status_state": "error",
+      "expanded": true,
+      "label": "Stopped after 3 steps · 4.0 s · the model endpoint rejected the request",
+      "body": [
+        {"type": "note_step", "status": "ok", "text": "Rephrased your question as …"},
+        {"type": "tool_step", "status": "ok", "label": "Looked up BaseIndexStore.append", "duration": "0.3 s", "outcome": "1 match"},
+        {"type": "failure_step", "status": "error", "label": "Model call failed", "error_line": "BearerRejectedError: 401 from llm.internal (token …a1b2)"}
+      ],
+      "below_status": [
+        {"type": "st.error", "text": "BearerRejectedError: 401 from llm.internal (token …a1b2)"},
+        {"type": "caption", "text": "Your question was not answered: \"who calls BaseIndexStore.append?\""}
+      ],
+      "persistence": "stored as ('assistant', '') + trace state=failed; survives rerun (owner approval required)",
+      "label_variants": {"GraphRecursionError": "Stopped after 25 steps · the agent hit its step limit"}
+    },
+    {
+      "id": "stopped_by_user",
+      "status_state": "error",
+      "expanded": false,
+      "label": "Stopped by you after 2 steps · 2.7 s",
+      "persistence": "partial trace stored with state=stopped; history unchanged"
+    },
+    {
+      "id": "replay",
+      "note": "on every rerun each past assistant turn draws its stored trace as a collapsed st.status in its final state, then the answer, then Sources; no network, no placeholders"
+    }
+  ],
+  "sidebar": {
+    "placement": "separate st.caption directly under the existing connection status line (NOT a fifth cell: test_app_connection_dialog asserts that line with == and endswith)",
+    "must_not_contain": [" · ", "vision:"],
+    "states": [
+      {"id": "shown", "text": "Reasoning: shown (seen in answers)"},
+      {"id": "hidden", "text": "Reasoning: hidden by provider"},
+      {"id": "not_shared", "text": "Reasoning: not shared by this model", "rule": "two consecutive turns with usage and 0 reasoning tokens"},
+      {"id": "supported_unseen", "text": "Reasoning: supported, not seen yet", "rule": "supported_parameters contains reasoning or include_reasoning (positive-only)"},
+      {"id": "unknown", "text": "Reasoning: unknown until the first answer"},
+      {"id": "off", "text": "Reasoning: display off (config)"}
+    ],
+    "toggles": [{"label": "Show technical details", "default_from": "ask_your_docs.ui.activity.technical_details", "scope": "session-only"}]
+  },
+  "tool_labels": {
+    "search_codebase": {"done": "Searched {project code|dependencies|all code} for \"{query}\"[ in {package}]", "running": "Searching … for \"{query}\" …", "outcome": "{n} matches in {k} files"},
+    "get_symbol": {"done": {"summary": "Looked up {target}", "tree": "Outlined {target}", "source": "Read the source of {target}"}, "outcome": "{path}:{start}–{end}"},
+    "get_context": {"done": "Gathered context for {A}, {B} (+{n} more)", "outcome": "{n} symbols"},
+    "get_references": {"done": {"callers": "Found callers of {target}", "callees": "Found what {target} calls", "inherits": "Checked the class hierarchy of {target}", "impact": "Estimated what changing {target} affects", "governed_by": "Found decisions governing {target}"}, "outcome": "{n} {noun}", "notes": {"syntactic": "matched by name, may miss some", "unavailable": "Reference graph not available for this language"}},
+    "get_why": {"done": "Looked for design decisions about \"{query}\"", "outcome": "{n} decisions"},
+    "get_overview": {"done": "Got an overview of {package|the workspace}", "outcome": "{project} · {branch}"},
+    "grep": {"done": "Searched file text for /{pattern}/ in {glob|path|the project}", "outcome": "{n} matching lines in {k} files"},
+    "glob": {"done": "Listed files matching {pattern}", "outcome": "{n} files"},
+    "read_file": {"done": "Opened {file_path}:{offset}–{end}", "outcome": "{n} lines"},
+    "reinspect_images": {"done": "Looked at image {name} again", "outcome": "done|budget used up"},
+    "vision_extract": {"done": "Analyzed {n} attached image(s)", "outcome": "first facts line"},
+    "unknown": {"done": "Called {name}", "outcome": "first line of text"}
+  },
+  "meta_notes": {
+    "truncated": "Results were cut off at the limit",
+    "index_stale": "The index is older than your checkout",
+    "suggestion": "Tool hint: {suggestion}",
+    "branch_differs": "Answered from branch {branch}",
+    "status_error": "failed: {first line, redacted}"
+  }
+}
