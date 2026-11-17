@@ -14,6 +14,7 @@ Subcommands::
         [--pass pilot|pass_1|pass_2] [--dry-run | --confirm-spend]
     python -m pydocs_eval.campaign report-alignment --labels FILE [--escalation-pass] [--sweep] \
         [--confirm-spend]
+    python -m pydocs_eval.campaign annotate-alignment --labels FILE [--read-only]
 
 ``prebuild-index`` builds the canonical-checkout index cache over an instance
 manifest (host-side; hits git + the index CLI). ``aggregate`` is pure and
@@ -32,7 +33,9 @@ from stored arms and has the two blind labellers label them, a plan unless
 ``--dry-run`` (offline, $0) or ``--confirm-spend`` (``alignment_label_command.py``);
 ``report-alignment`` reports a label file, and runs the escalation judge's
 agreement pass or the threshold sweep on ``--confirm-spend``
-(``alignment_report_command.py``).
+(``alignment_report_command.py``). ``annotate-alignment`` opens the Streamlit
+page where the owner rules on a label file's queue, writing only the owner's
+fields; ``--read-only`` writes nothing (``alignment_annotate_command.py``).
 """
 
 from __future__ import annotations
@@ -46,6 +49,7 @@ from pydocs_eval.campaign.aggregator import (
     campaign_report,
     load_cell_aggregate,
 )
+from pydocs_eval.campaign.alignment_annotate_command import add_annotate_alignment_command
 from pydocs_eval.campaign.alignment_label_command import add_label_alignment_command
 from pydocs_eval.campaign.alignment_report_command import add_report_alignment_command
 from pydocs_eval.campaign.before_after_command import add_before_after_commands
@@ -174,6 +178,7 @@ def _build_parser() -> argparse.ArgumentParser:
     add_write_references_command(sub)
     add_label_alignment_command(sub)
     add_report_alignment_command(sub)
+    add_annotate_alignment_command(sub)
     return parser
 
 
