@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -169,6 +169,23 @@ def test_a_cuda_boot_exposes_the_gpus(tmp_path: Path) -> None:
 
     (run,) = boot.docker("run")
     assert run[run.index("--gpus") + 1] == "all"
+
+
+def test_the_supervisors_gcloud_reads_no_config_an_image_holds_nor_syncs_its_own(
+    tmp_path: Path,
+) -> None:
+    # An image once held gcloud's on-GCE cache, "False" for ten minutes after the
+    # build, and gcloud on a VM booted that soon had no account (#434). The config
+    # dir holds access tokens, so it is never one the run syncs to GCS either.
+    boot = _boot(tmp_path, _image("cpu"))
+
+    (run,) = boot.docker("run")
+    options = run[: run.index(_image("cpu"))]
+    env = dict(options[i + 1].split("=", 1) for i, arg in enumerate(options) if arg == "--env")
+    config_dir = PurePosixPath(env["CLOUDSDK_CONFIG"])
+    # The parent of the run's mounts: Docker creates it at start, so no image holds it.
+    assert config_dir.parent == PurePosixPath(STATE_DIR).parent == PurePosixPath(CACHE_DIR).parent
+    assert config_dir not in (PurePosixPath(STATE_DIR), PurePosixPath(CACHE_DIR))
 
 
 def test_the_script_reads_the_launchers_metadata_keys(tmp_path: Path) -> None:
