@@ -36,8 +36,9 @@ REPO_DIR = Path("/opt/pydocs-mcp")
 OPENBLAS_LIBRARY = "/usr/lib/x86_64-linux-gnu/libopenblas.so.0"
 FLAVOUR_ENV_VAR = "BENCH_IMAGE_FLAVOUR"
 NVIDIA_LD_CONF = Path("/etc/ld.so.conf.d/bench-nvidia-wheels.conf")
-# Where gcloud keeps its user config in the image: the containers run as root
-# and the recipes set no CLOUDSDK_CONFIG.
+# Where gcloud keeps its user config by default in the image: the containers
+# run as root, and the recipes' ENV sets no CLOUDSDK_CONFIG (only the build's
+# install_cli_tools.sh exports a throwaway one, for its own gcloud calls).
 GCLOUD_USER_CONFIG_DIR = Path("/root/.config/gcloud")
 # Every CLI the run kinds and the supervisor drive must start, the supervisor
 # included: it is the container's entrypoint (infra/bench-vm/host/startup.sh).

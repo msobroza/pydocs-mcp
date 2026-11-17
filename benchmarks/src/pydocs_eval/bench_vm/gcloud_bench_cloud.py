@@ -11,9 +11,11 @@ authenticate: a Compute API delete with the metadata server's token
 (``compute_api_delete``). Every call has a timeout and a bounded
 retry on transient errors (``bounded_command.run_bounded``).
 
-gcloud reports "not found", "precondition failed" and "no capacity" only in
-its stderr, so those three answers are recognised by their documented markers;
-anything else is a ``BenchCloudError`` carrying gcloud's own words.
+gcloud reports "not found" (an rsync source with no objects included: "Did
+not find existing container"), "precondition failed" and "no capacity" only in
+its stderr, so those answers are recognised by their markers
+(``gcloud_stderr``); anything else is a ``BenchCloudError`` carrying gcloud's
+own words.
 
 The image builds (submitted ``--async``, then polled) live in
 ``gcloud_image_builds``, the cache bucket's operations in

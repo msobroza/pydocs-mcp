@@ -7,7 +7,8 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
-DOCKER_DIR = Path(__file__).resolve().parents[3] / "infra" / "bench-vm" / "docker"
+BENCH_VM_DIR = Path(__file__).resolve().parents[3] / "infra" / "bench-vm"
+DOCKER_DIR = BENCH_VM_DIR / "docker"
 
 
 def load_image_script(name: str) -> ModuleType:

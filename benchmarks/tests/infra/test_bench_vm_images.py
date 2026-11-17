@@ -33,10 +33,9 @@ import yaml
 from pydocs_eval.bench_vm.container_paths import REPO_DIR
 from pydocs_eval.sweep_support import COMMIT_SHA_ENV_VAR
 
-from ._image_scripts import DOCKER_DIR, load_image_script
+from ._image_scripts import BENCH_VM_DIR, DOCKER_DIR, load_image_script
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_BENCH_VM_DIR = _REPO_ROOT / "infra" / "bench-vm"
 _FLAVOURS = ("cpu", "cuda")
 
 
@@ -385,7 +384,7 @@ def test_cuda_recipe_bakes_in_the_nvidia_library_path():
 
 
 def _cloudbuild() -> dict:
-    return yaml.safe_load((_BENCH_VM_DIR / "cloudbuild.yaml").read_text())
+    return yaml.safe_load((BENCH_VM_DIR / "cloudbuild.yaml").read_text())
 
 
 _TAG = "${_REPOSITORY}/bench-${_FLAVOUR}:${_COMMIT}"
