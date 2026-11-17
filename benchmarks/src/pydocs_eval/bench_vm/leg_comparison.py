@@ -74,10 +74,16 @@ class LegVerdict:
 
 @dataclass(frozen=True, slots=True)
 class RunComparison:
-    """Every leg of a run against the local reference; identical when nothing failed."""
+    """Every leg of a run against the local reference; identical when nothing failed.
+
+    ``run_files`` and ``local_files`` are every leg file read on each side,
+    paired or not, so a pull taken mid-run still shows how far the run got.
+    """
 
     run_results_dir: Path
     local_results_dir: Path
+    run_files: tuple[LegFileReading, ...]
+    local_files: tuple[LegFileReading, ...]
     legs: tuple[LegVerdict, ...]
     failures: tuple[str, ...]
 
@@ -105,9 +111,15 @@ def compare_with_local_reference(run_id: str, pulled_dir: Path, local_dir: Path)
     run = _read_side(pulled_results_dir(pulled_dir, run_id), _RUN_SIDE)
     local = _read_side(local_results_dir(local_dir, run_id), _LOCAL_SIDE)
     problems = (*_side_problems(run), *_side_problems(local))
-    if problems:
-        return RunComparison(run.results_dir, local.results_dir, (), problems)
-    return _compare_legs(run, local)
+    legs, failures = ((), problems) if problems else _compare_legs(run, local)
+    return RunComparison(
+        run_results_dir=run.results_dir,
+        local_results_dir=local.results_dir,
+        run_files=run.readings,
+        local_files=local.readings,
+        legs=legs,
+        failures=failures,
+    )
 
 
 def read_leg_files(results_dir: Path) -> tuple[LegFileReading, ...]:
@@ -190,7 +202,8 @@ def _side_problems(side: _Side) -> tuple[str, ...]:
     return (*headerless, *ambiguous)
 
 
-def _compare_legs(run: _Side, local: _Side) -> RunComparison:
+def _compare_legs(run: _Side, local: _Side) -> tuple[tuple[LegVerdict, ...], tuple[str, ...]]:
+    """Each leg found on both sides judged, and every failure: one-sided legs first."""
     keys = sorted(run.legs.keys() | local.legs.keys(), key=str)
     verdicts = tuple(
         _judge_leg(key, run.legs[key][0], local.legs[key][0])
@@ -201,7 +214,7 @@ def _compare_legs(run: _Side, local: _Side) -> RunComparison:
         *(_one_sided(key, run, local) for key in keys if (key in run.legs) != (key in local.legs)),
         *(failure for verdict in verdicts for failure in verdict.failures),
     )
-    return RunComparison(run.results_dir, local.results_dir, verdicts, failures)
+    return verdicts, failures
 
 
 def _one_sided(key: LegKey, run: _Side, local: _Side) -> str:

@@ -369,3 +369,24 @@ def test_compare_reaches_no_cloud_binary_and_imports_nothing_from_the_product(
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines()[-1].startswith("identical: 1 aggregates")
+
+
+def test_it_lists_each_sides_leg_files_with_progress_even_with_nothing_to_compare_yet(
+    tmp_path: Path, capsys: Capsys
+) -> None:
+    # A mid-run pull, before the local reference exists: the owner's progress check.
+    spec, run_id = _spec(tmp_path)
+    write_leg(run_leg_path(tmp_path / "pulled", run_id), None, tasks=8, task_records=True)
+
+    result = _compare(tmp_path, spec, capsys)
+
+    run_results = tmp_path / "pulled" / run_id / "state" / "results"
+    local_results = tmp_path / "local" / run_id / "results"
+    assert result.exit_code == 1
+    assert result.out.splitlines()[:4] == [
+        f"run:   {run_results}",
+        f"  {run_id}/pydocs-mcp_bm25_repoqa_at_2024-06-23.jsonl: leg {LEG_NAME}, "
+        "8 task records, no final aggregate block yet",
+        f"local: {local_results}",
+        "  (no leg files)",
+    ]
