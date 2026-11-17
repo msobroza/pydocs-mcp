@@ -168,11 +168,14 @@ disagrees on whether such images can boot G2 machine types, which
 `gpu-smoke.yaml` uses: Google Cloud's page on creating a G2 instance says they
 cannot, while the Deep Learning VM pages list L4 GPUs as supported. The
 first GPU run settles it, and if the image does not qualify, it fails in one of
-two ways:
+three ways:
 
 - Compute Engine refuses the image when it creates the VM. The launch records
   `failed`, with Compute Engine's error in `make bench-vm-status`, and no VM
   bills.
+- The container starts, but CUDA does not reach torch or onnxruntime. The GPU
+  pre-flight ends the run `failed`, naming what is missing, before the benchmark
+  starts, and the VM deletes itself.
 - The VM boots, but its host cannot start the GPU container (no working driver
   or container toolkit). The supervisor never starts, so the record stays
   `launching`, no log appears, and the VM bills until `max_runtime` (2 hours for
@@ -313,7 +316,8 @@ image is missing, Cloud NAT egress and bucket storage. Model-provider spend
    deleted with it. A VM whose supervisor refuses its run deletes itself too,
    writing nothing: its record has moved on, as when the launcher recorded a
    create as `failed` that came up anyway, or a second launch of the same run
-   took over. Only a VM that cannot read its own metadata stays up until
+   took over. Only a VM that cannot read its own metadata, or whose host fails
+   to log in, pull or start the image so that no supervisor runs, stays up until
    `max_runtime`.
 2. **The platform deletes it at `max_runtime`** (default 6 hours): Compute
    Engine's maximum run duration with the DELETE action. It is the backstop for

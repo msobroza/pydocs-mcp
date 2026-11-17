@@ -24,6 +24,7 @@ from pydocs_eval.bench_vm.vm_request import (
     METADATA_RUNS_BUCKET,
     METADATA_SHUTDOWN_SCRIPT,
     METADATA_STARTUP_SCRIPT,
+    BootDiskType,
     GpuAttachment,
     ProvisioningModel,
     TerminationAction,
@@ -191,8 +192,8 @@ def test_every_vm_boots_from_a_pd_balanced_disk_never_the_pd_standard_default(
 
     assert result.exit_code == 0, result.err
     (request,) = harness.cloud.created
-    # gcloud and the Compute API default a boot disk to pd-standard, which G2 refuses.
-    assert request.boot_disk_type == "pd-balanced"
+    # gcloud and the Compute API default a boot disk to pd-standard, which G2 refuses (#434).
+    assert request.boot_disk_type is BootDiskType.PD_BALANCED
 
 
 def test_a_gpu_on_a_machine_type_without_bundled_gpus_is_attached_explicitly(

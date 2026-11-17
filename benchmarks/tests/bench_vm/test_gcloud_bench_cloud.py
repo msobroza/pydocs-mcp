@@ -201,7 +201,7 @@ def test_the_create_argv_names_the_boot_disk_type_rather_than_take_gclouds_defau
 
     cloud.create_instance(_request(boot_disk_type=BootDiskType.PD_BALANCED))
 
-    # Unnamed, gcloud creates pd-standard, which G2 machine types refuse.
+    # Unnamed, gcloud creates pd-standard, which G2 machine types refuse (#434).
     assert "--boot-disk-type=pd-balanced" in runner.calls[0].argv
 
 
