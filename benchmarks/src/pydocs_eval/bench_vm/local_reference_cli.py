@@ -3,9 +3,9 @@
 ``local-command`` prints the runner command for an uninterrupted local run of
 a retrieval spec (``local_reference``); ``compare`` (``make bench-vm-compare``)
 reads the pulled run's leg files and the local run's, and exits 0 only when
-every leg's deterministic aggregates are bit-identical (``leg_comparison``).
-Both read the spec and the local disk only: no ``gcloud``, no ``terraform``,
-no credentials.
+every leg's deterministic aggregates are bit-identical and some leg of the run
+was resumed mid-way (``leg_comparison``). Both read the spec and the local disk
+only: no ``gcloud``, no ``terraform``, no credentials.
 """
 
 from __future__ import annotations
@@ -41,9 +41,17 @@ LOCAL_REFERENCE_VERBS = frozenset(LocalReferenceVerb)
 _EXIT_OK = 0
 _EXIT_REFUSED = 1
 _SPEC_HELP = "the run spec, e.g. infra/bench-vm/runs/x.yaml"
+# What a verb may fail with that is the owner's to read, not a traceback.
+_VERB_ERRORS = (LocalReferenceRefused, LegFileUnreadable)
 
 
 def add_local_reference_verbs(verbs: argparse._SubParsersAction) -> None:
+    """Add ``local-command`` and ``compare`` to the ``python -m pydocs_eval.bench_vm`` parser."""
+    _add_local_command_verb(verbs)
+    _add_compare_verb(verbs)
+
+
+def _add_local_command_verb(verbs: argparse._SubParsersAction) -> None:
     local = verbs.add_parser(
         LocalReferenceVerb.LOCAL_COMMAND,
         help="print the runner command for an uninterrupted local run of a retrieval spec",
@@ -55,9 +63,12 @@ def add_local_reference_verbs(verbs: argparse._SubParsersAction) -> None:
         default=LOCAL_REFERENCE_RESULTS_DIR,
         help=f"where <run id>/ lands (default {LOCAL_REFERENCE_RESULTS_DIR}, git-ignored)",
     )
+
+
+def _add_compare_verb(verbs: argparse._SubParsersAction) -> None:
     compare = verbs.add_parser(
         LocalReferenceVerb.COMPARE,
-        help="compare a pulled run's final aggregates with the local reference run's",
+        help="compare a stopped and relaunched run's final aggregates with the local reference's",
     )
     compare.add_argument("spec", type=Path, help=_SPEC_HELP)
     compare.add_argument(
@@ -82,20 +93,18 @@ def local_reference_verb(args: argparse.Namespace) -> int:
         for error in exc.errors:
             print(f"{args.spec}: {error.render()}", file=sys.stderr)
         return _EXIT_REFUSED
-    except LocalReferenceRefused as exc:
-        print(f"{args.spec}: {args.verb} refused: {exc}", file=sys.stderr)
-        return _EXIT_REFUSED
-    except LegFileUnreadable as exc:
-        print(f"{args.spec}: {args.verb} failed: {exc}", file=sys.stderr)
+    except _VERB_ERRORS as exc:
+        outcome = "refused" if isinstance(exc, LocalReferenceRefused) else "failed"
+        print(f"{args.spec}: {args.verb} {outcome}: {exc}", file=sys.stderr)
         return _EXIT_REFUSED
 
 
-def _local_command(args: argparse.Namespace) -> int:
+def _print_local_reference_command(args: argparse.Namespace) -> int:
     print(shlex.join(local_reference_argv(load_run_spec(args.spec), args.results_dir)))
     return _EXIT_OK
 
 
-def _compare(args: argparse.Namespace) -> int:
+def _compare_run_with_local_reference(args: argparse.Namespace) -> int:
     spec_file = load_run_spec(args.spec)
     require_local_reference_kind(spec_file)
     comparison = compare_with_local_reference(
@@ -108,6 +117,6 @@ def _compare(args: argparse.Namespace) -> int:
 
 
 _VERB_HANDLERS: dict[LocalReferenceVerb, Callable[[argparse.Namespace], int]] = {
-    LocalReferenceVerb.LOCAL_COMMAND: _local_command,
-    LocalReferenceVerb.COMPARE: _compare,
+    LocalReferenceVerb.LOCAL_COMMAND: _print_local_reference_command,
+    LocalReferenceVerb.COMPARE: _compare_run_with_local_reference,
 }

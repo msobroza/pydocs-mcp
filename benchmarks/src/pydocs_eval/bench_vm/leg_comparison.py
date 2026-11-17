@@ -12,7 +12,8 @@ file name, since the two layouts name files differently. Each pair's final
 aggregate blocks (``reporting.aggregate_blocks``, the reading the resume smoke
 uses) must name the same metrics and agree bit for bit on every value except
 the wall-clock latencies (``sweep.LATENCY_KEYS``), which are reported but not
-compared.
+compared. A finished run must also show what it is checked for: some leg that
+a relaunch reopened mid-way.
 """
 
 from __future__ import annotations
@@ -39,6 +40,8 @@ from pydocs_eval.trackers.run_file_lines import read_run_file_lines
 
 # The ``run_start`` fields that name a leg (``JsonlExperimentTracker``'s header).
 _LEG_HEADER_FIELDS = ("system", "config_name", "dataset")
+# The run tag naming the product commit (``sweep_support``: git, else the image's variable).
+_COMMIT_TAG = "git_sha"
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,9 +70,50 @@ class LegFileReading:
     block: AggregateBlock
 
     @property
+    def commit(self) -> str | None:
+        return self.tags.get(_COMMIT_TAG)
+
+    @property
     def resumed_mid_leg(self) -> bool:
         """A relaunch reopened the leg with some of its tasks recorded and some still to run."""
         return any(1 <= recorded < self.task_record_count for recorded in self.resumed_after)
+
+
+@dataclass(frozen=True, slots=True)
+class SideRole:
+    """What one side of the comparison is, as its messages and listing say it."""
+
+    possessive: str
+    when_empty: str
+    when_unfinished: str
+    # Only the run's ``--run-id`` legs hold task records; the plain local leg never does.
+    lists_task_records: bool
+
+
+RUN_SIDE = SideRole(
+    possessive="the run's",
+    when_empty="pull it first with make bench-vm-pull",
+    when_unfinished="relaunch the run with make bench-vm, then pull it again",
+    lists_task_records=True,
+)
+LOCAL_SIDE = SideRole(
+    possessive="the local reference's",
+    when_empty="run the command local-command prints first",
+    when_unfinished=(
+        "run the command local-command prints to the end, into an empty results directory"
+    ),
+    lists_task_records=False,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ComparedSide:
+    """One side's leg files: every file read, and the readings of each leg."""
+
+    role: SideRole
+    results_dir: Path
+    readings: tuple[LegFileReading, ...]
+    legs: Mapping[LegKey, tuple[LegFileReading, ...]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,19 +126,22 @@ class LegVerdict:
     pairing: AggregatePairing
     failures: tuple[str, ...]
 
+    @property
+    def ran_one_commit(self) -> bool:
+        """Both sides ran the same commit; otherwise the comparison is not only about the resume."""
+        return self.run.commit == self.local.commit
+
 
 @dataclass(frozen=True, slots=True)
 class RunComparison:
     """Every leg of a run against the local reference; identical when nothing failed.
 
-    ``run_files`` and ``local_files`` are every leg file read on each side,
-    paired or not, so a pull taken mid-run still shows how far the run got.
+    ``run`` and ``local`` hold every leg file read on each side, paired or not,
+    so a pull taken mid-run still shows how far the run got.
     """
 
-    run_results_dir: Path
-    local_results_dir: Path
-    run_files: tuple[LegFileReading, ...]
-    local_files: tuple[LegFileReading, ...]
+    run: ComparedSide
+    local: ComparedSide
     legs: tuple[LegVerdict, ...]
     failures: tuple[str, ...]
 
@@ -116,30 +163,28 @@ def local_results_dir(local_dir: Path, run_id: str) -> Path:
 def compare_with_local_reference(run_id: str, pulled_dir: Path, local_dir: Path) -> RunComparison:
     """Read both sides' leg files and judge every leg.
 
-    A side with no leg files, or with two files for one leg, is reported on
-    its own and nothing is paired: its layout is fixed first.
+    A side with no leg files, a headerless file, or two files for one leg is
+    reported on its own and nothing is paired: its layout is fixed first.
     """
-    run = _read_side(pulled_results_dir(pulled_dir, run_id), _RUN_SIDE)
-    local = _read_side(local_results_dir(local_dir, run_id), _LOCAL_SIDE)
+    run = read_compared_side(pulled_results_dir(pulled_dir, run_id), RUN_SIDE)
+    local = read_compared_side(local_results_dir(local_dir, run_id), LOCAL_SIDE)
     problems = (*_side_problems(run), *_side_problems(local))
     legs, failures = ((), problems) if problems else _compare_legs(run, local)
-    return RunComparison(
-        run_results_dir=run.results_dir,
-        local_results_dir=local.results_dir,
-        run_files=run.readings,
-        local_files=local.readings,
-        legs=legs,
-        failures=failures,
-    )
-
-
-def read_leg_files(results_dir: Path) -> tuple[LegFileReading, ...]:
-    """Every ``*.jsonl`` under ``results_dir``, in path order."""
-    return tuple(_read_leg_file(path) for path in sorted(results_dir.rglob("*.jsonl")))
+    return RunComparison(run=run, local=local, legs=legs, failures=failures)
 
 
 class LegFileUnreadable(ValueError):
     """A ``*.jsonl`` under a results directory that cannot be read as UTF-8 text."""
+
+
+def read_compared_side(results_dir: Path, role: SideRole) -> ComparedSide:
+    """Every ``*.jsonl`` under ``results_dir``, in path order, grouped by the leg it names."""
+    readings = tuple(_read_leg_file(path) for path in sorted(results_dir.rglob("*.jsonl")))
+    legs: dict[LegKey, tuple[LegFileReading, ...]] = {}
+    for reading in readings:
+        if reading.key is not None:
+            legs[reading.key] = (*legs.get(reading.key, ()), reading)
+    return ComparedSide(role=role, results_dir=results_dir, readings=readings, legs=legs)
 
 
 def _read_leg_file(path: Path) -> LegFileReading:
@@ -183,68 +228,49 @@ def _leg_key(header: Mapping[str, object] | None) -> LegKey | None:
     return LegKey(system, config_name, dataset)
 
 
-@dataclass(frozen=True, slots=True)
-class _SideRole:
-    """How messages name a side, and what to do when it has no leg files."""
-
-    owner: str
-    when_empty: str
+# --- problems with a side's layout, reported before anything is paired ----------
 
 
-_RUN_SIDE = _SideRole("the run's", "pull it first with make bench-vm-pull")
-_LOCAL_SIDE = _SideRole("the local reference's", "run the command local-command prints first")
-
-
-@dataclass(frozen=True, slots=True)
-class _Side:
-    """One side's leg files, grouped by leg."""
-
-    role: _SideRole
-    results_dir: Path
-    readings: tuple[LegFileReading, ...]
-    legs: Mapping[LegKey, tuple[LegFileReading, ...]]
-
-
-def _read_side(results_dir: Path, role: _SideRole) -> _Side:
-    readings = read_leg_files(results_dir)
-    legs: dict[LegKey, tuple[LegFileReading, ...]] = {}
-    for reading in readings:
-        if reading.key is not None:
-            legs[reading.key] = (*legs.get(reading.key, ()), reading)
-    return _Side(role, results_dir, readings, legs)
-
-
-def _side_problems(side: _Side) -> tuple[str, ...]:
+def _side_problems(side: ComparedSide) -> tuple[str, ...]:
     """Nothing to compare on a side is a failure, never a vacuous pass; nor is an ambiguous leg."""
     if not side.readings:
         return (
-            f"got no leg files under {side.results_dir}, expected {side.role.owner}; "
+            f"got no leg files under {side.results_dir}, expected {side.role.possessive}; "
             f"{side.role.when_empty}",
         )
-    headerless = tuple(
-        f"got no run_start header naming {', '.join(_LEG_HEADER_FIELDS[:-1])} and "
-        f"{_LEG_HEADER_FIELDS[-1]} in {reading.path}, expected a leg file the runner wrote; "
-        "a runner stopped before its first line leaves one empty"
+    return (*_headerless_files(side), *_legs_with_two_files(side))
+
+
+def _headerless_files(side: ComparedSide) -> tuple[str, ...]:
+    fields = f"{', '.join(_LEG_HEADER_FIELDS[:-1])} and {_LEG_HEADER_FIELDS[-1]}"
+    return tuple(
+        f"got no run_start header naming {fields} in {reading.path}, expected a leg file "
+        "the runner wrote; a runner stopped before its first line leaves one empty"
         for reading in side.readings
         if reading.key is None
     )
-    ambiguous = tuple(
+
+
+def _legs_with_two_files(side: ComparedSide) -> tuple[str, ...]:
+    return tuple(
         f"leg {key}: got {len(found)} leg files under {side.results_dir} "
         f"({', '.join(str(reading.path) for reading in found)}), expected one; "
         "move the extra aside"
         for key, found in side.legs.items()
         if len(found) > 1
     )
-    return (*headerless, *ambiguous)
 
 
-def _compare_legs(run: _Side, local: _Side) -> tuple[tuple[LegVerdict, ...], tuple[str, ...]]:
+# --- pairing and judging the legs ----------------------------------------------
+
+
+def _compare_legs(
+    run: ComparedSide, local: ComparedSide
+) -> tuple[tuple[LegVerdict, ...], tuple[str, ...]]:
     """Each leg found on both sides judged, and every failure: one-sided legs first."""
     keys = sorted(run.legs.keys() | local.legs.keys(), key=str)
     verdicts = tuple(
-        _judge_leg(key, run.legs[key][0], local.legs[key][0])
-        for key in keys
-        if key in run.legs and key in local.legs
+        _judge_leg(key, run, local) for key in keys if key in run.legs and key in local.legs
     )
     failures = (
         *(_one_sided(key, run, local) for key in keys if (key in run.legs) != (key in local.legs)),
@@ -254,7 +280,41 @@ def _compare_legs(run: _Side, local: _Side) -> tuple[tuple[LegVerdict, ...], tup
     return verdicts, failures
 
 
-def _no_resume(run: _Side) -> tuple[str, ...]:
+def _one_sided(key: LegKey, run: ComparedSide, local: ComparedSide) -> str:
+    found, missing = (run, local) if key in run.legs else (local, run)
+    return (
+        f"leg {key}: got no leg file under {missing.results_dir}, "
+        f"expected one to match {found.role.possessive} {found.legs[key][0].path}"
+    )
+
+
+def _judge_leg(key: LegKey, run: ComparedSide, local: ComparedSide) -> LegVerdict:
+    run_leg, local_leg = run.legs[key][0], local.legs[key][0]
+    unfinished = (*_unfinished(run, run_leg), *_unfinished(local, local_leg))
+    failures = unfinished or compare_aggregate_blocks(run_leg.block, local_leg.block, LATENCY_KEYS)
+    return LegVerdict(
+        key=key,
+        run=run_leg,
+        local=local_leg,
+        pairing=pair_aggregate_blocks(run_leg.block, local_leg.block, LATENCY_KEYS),
+        failures=tuple(f"leg {key}: {failure}" for failure in failures),
+    )
+
+
+def _unfinished(side: ComparedSide, reading: LegFileReading) -> tuple[str, ...]:
+    """A leg cut short has no final block yet: a run stopped, preempted or still running when
+    pulled, or a local reference that crashed or was interrupted."""
+    if reading.block:
+        return ()
+    role = side.role
+    records = f" ({reading.task_record_count} task records)" if role.lists_task_records else ""
+    return (
+        f"got no final aggregate block in {role.possessive} {reading.path}{records}, "
+        f"expected a finished leg; {role.when_unfinished}",
+    )
+
+
+def _no_resume(run: ComparedSide) -> tuple[str, ...]:
     """A finished run must show the relaunch it is checked for: some leg resumed mid-way.
 
     A run still cut short is already named as unfinished, so it is not judged here.
@@ -269,43 +329,3 @@ def _no_resume(run: _Side) -> tuple[str, ...]:
         "leg's N task records; the stop came after the leg finished, or the relaunch did "
         "not restore the run's state",
     )
-
-
-def _one_sided(key: LegKey, run: _Side, local: _Side) -> str:
-    found, missing = (run, local) if key in run.legs else (local, run)
-    return (
-        f"leg {key}: got no leg file under {missing.results_dir}, "
-        f"expected one to match {found.role.owner} {found.legs[key][0].path}"
-    )
-
-
-def _judge_leg(key: LegKey, run: LegFileReading, local: LegFileReading) -> LegVerdict:
-    failures = _unfinished(run, local) or compare_aggregate_blocks(
-        run.block, local.block, LATENCY_KEYS
-    )
-    return LegVerdict(
-        key=key,
-        run=run,
-        local=local,
-        pairing=pair_aggregate_blocks(run.block, local.block, LATENCY_KEYS),
-        failures=tuple(f"leg {key}: {failure}" for failure in failures),
-    )
-
-
-def _unfinished(run: LegFileReading, local: LegFileReading) -> list[str]:
-    """A leg cut short has no final block yet: a run stopped, preempted or still running when
-    pulled, or a local reference that crashed or was interrupted."""
-    failures = []
-    if not run.block:
-        failures.append(
-            f"got no final aggregate block in the run's {run.path} ({run.task_record_count} task "
-            "records), expected a finished leg; relaunch the run with make bench-vm, then pull "
-            "it again"
-        )
-    if not local.block:
-        failures.append(
-            f"got no final aggregate block in the local reference's {local.path}, expected a "
-            "finished leg; run the command local-command prints to the end, into an empty "
-            "results directory"
-        )
-    return failures

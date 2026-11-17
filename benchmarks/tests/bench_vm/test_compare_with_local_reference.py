@@ -20,18 +20,10 @@ import pytest
 
 from pydocs_eval.bench_vm import load_run_spec
 from pydocs_eval.bench_vm.__main__ import main
-from pydocs_eval.sweep import run_sweep_detailed
 from pydocs_eval.sweep_support import COMMIT_SHA_ENV_VAR
 
-from ..core.runner_resume._resume_fakes import (
-    COUNTING_SYSTEM,
-    FAKE_DATASET,
-    TASK_SCORE_METRIC,
-    CountingFakeSystem,
-    InjectedTaskFailure,
-    fake_query,
-    reset_resume_fakes,
-)
+from ..core.runner_resume._resume_fakes import COUNTING_SYSTEM, FAKE_DATASET, reset_resume_fakes
+from ..core.runner_resume._resume_sweep import interrupted, sweep
 from ._leg_files import LEG_NAME, leg_name, local_leg_path, run_leg_path, write_leg
 from ._spec_dicts import REPO_ROOT, agent_track_spec, retrieval_spec, write_spec
 
@@ -85,25 +77,14 @@ def _overlay(tmp_path: Path) -> Path:
     return path
 
 
-async def _sweep(results_dir: Path, overlay: Path, **overrides: object) -> None:
-    await run_sweep_detailed(
-        systems=(COUNTING_SYSTEM,),
-        config_paths=(overlay,),
-        dataset_name=FAKE_DATASET,
-        tracker_kwargs={"jsonl": {"output_dir": results_dir}},
-        metric_specs=(TASK_SCORE_METRIC,),
-        bench_cache=False,
-        **overrides,
-    )
+async def _stopped_then_resumed(state_dir: Path, overlay: Path, run_id: str) -> None:
+    """The run side: interrupted on task 3, then relaunched under the same run id.
 
-
-async def _stopped_then_resumed(results_dir: Path, overlay: Path, run_id: str) -> None:
-    """The run side: interrupted on task 3, then relaunched under the same run id."""
-    CountingFakeSystem.fail_on_query = fake_query(3)
-    with pytest.raises(InjectedTaskFailure):
-        await _sweep(results_dir, overlay, run_id=run_id)
-    reset_resume_fakes()
-    await _sweep(results_dir, overlay, run_id=run_id)
+    The runner-resume drivers write under ``<dir>/results``, the layout of a
+    run's state directory.
+    """
+    await interrupted(state_dir, overlay, fail_at=3, run_id=run_id)
+    await sweep(state_dir, overlay, run_id=run_id)
 
 
 async def test_a_resumed_run_matches_an_uninterrupted_local_run_and_exits_zero(
@@ -111,8 +92,8 @@ async def test_a_resumed_run_matches_an_uninterrupted_local_run_and_exits_zero(
 ) -> None:
     spec, run_id = _spec(tmp_path)
     overlay = _overlay(tmp_path)
-    await _stopped_then_resumed(tmp_path / "pulled" / run_id / "state" / "results", overlay, run_id)
-    await _sweep(tmp_path / "local" / run_id / "results", overlay)
+    await _stopped_then_resumed(tmp_path / "pulled" / run_id / "state", overlay, run_id)
+    await sweep(tmp_path / "local" / run_id, overlay)
 
     result = _compare(tmp_path, spec, capsys)
 

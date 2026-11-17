@@ -14,6 +14,12 @@
   (``make bench-vm-stop``) deletes the run's live VM, whose supervisor then
   records it ``stopped``; ``pull SPEC`` (``make bench-vm-pull``) downloads the
   run's prefix into a git-ignored results directory (``run_control``).
+- ``local-command SPEC`` prints the runner command a retrieval spec's VM runs,
+  pointed at a local directory and without ``--run-id``: the uninterrupted
+  local reference. ``compare SPEC`` (``make bench-vm-compare``) checks a pulled,
+  stopped and relaunched run against it, from the local disk only: exit 0
+  when every deterministic aggregate is bit-identical and the run resumed
+  mid-way (``local_reference_cli``).
 - ``supervise`` runs on the bench VM, as its container's entrypoint (the host
   startup script starts it): it reads the run from the instance metadata and
   GCS, runs the kind's CLI, syncs the state and ends the run. Exit 0 when the
