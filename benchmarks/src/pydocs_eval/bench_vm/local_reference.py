@@ -38,14 +38,20 @@ def local_reference_dir(results_dir: Path, run_id: str) -> Path:
     return results_dir / run_id
 
 
-def local_reference_argv(spec_file: RunSpecFile, results_dir: Path) -> tuple[str, ...]:
-    """The runner argv for an uninterrupted local run of ``spec_file``, under ``results_dir``."""
-    spec = spec_file.spec
-    if spec.kind is not RunKind.RETRIEVAL:
+def require_local_reference_kind(spec_file: RunSpecFile) -> None:
+    """Refuse a spec whose kind has no local reference run (every kind but retrieval)."""
+    kind = spec_file.spec.kind
+    if kind is not RunKind.RETRIEVAL:
         raise LocalReferenceRefused(
-            f"got kind {spec.kind}, expected kind {RunKind.RETRIEVAL}: only the retrieval "
+            f"got kind {kind}, expected kind {RunKind.RETRIEVAL}: only the retrieval "
             "runner's leg files have a local reference to compare with"
         )
+
+
+def local_reference_argv(spec_file: RunSpecFile, results_dir: Path) -> tuple[str, ...]:
+    """The runner argv for an uninterrupted local run of ``spec_file``, under ``results_dir``."""
+    require_local_reference_kind(spec_file)
+    spec = spec_file.spec
     state_dir = local_reference_dir(results_dir, spec_file.run_id)
     dirs = RunDirectories(state_dir=state_dir, cache_dir=state_dir / "cache")
     invocation = spec_invocation(spec, dirs, run_id=None)
