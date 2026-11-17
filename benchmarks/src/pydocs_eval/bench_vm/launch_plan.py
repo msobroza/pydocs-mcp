@@ -47,6 +47,7 @@ from pydocs_eval.bench_vm.vm_request import (
     METADATA_RUNS_BUCKET,
     METADATA_SHUTDOWN_SCRIPT,
     METADATA_STARTUP_SCRIPT,
+    BootDiskType,
     GpuAttachment,
     ImageFlavour,
     ProvisioningModel,
@@ -288,6 +289,11 @@ def _vm_request(
         subnetwork=names.subnetwork,
         boot_image=names.boot_image(checks.flavour),
         boot_disk_gb=spec.disk_gb,
+        # Never left to the default: gcloud and the Compute API create pd-standard,
+        # which G2 machine types refuse (the GPU smoke would fail at create, #434),
+        # and which puts an N2's index builds on an HDD. N2 and G2 both take
+        # pd-balanced, so every bench VM boots from one.
+        boot_disk_type=BootDiskType.PD_BALANCED,
         boot_disk_auto_delete=True,
         gpu=inputs.gpu,
         labels=vm_labels(spec_file.run_id, attempt),

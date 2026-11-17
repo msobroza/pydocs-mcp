@@ -19,6 +19,7 @@ from pydocs_eval.bench_vm.bench_cloud import (
 )
 from pydocs_eval.bench_vm.gcloud_bench_cloud import GcloudBenchCloud
 from pydocs_eval.bench_vm.vm_request import (
+    BootDiskType,
     GpuAttachment,
     ProvisioningModel,
     TerminationAction,
@@ -50,6 +51,7 @@ def _request(**overrides: object) -> VmCreateRequest:
         subnetwork="projects/bench-project/regions/europe-west4/subnetworks/bench",
         boot_image="projects/cos-cloud/global/images/cos-stable-1",
         boot_disk_gb=250,
+        boot_disk_type=BootDiskType.PD_BALANCED,
         boot_disk_auto_delete=True,
         gpu=None,
         labels={"bench-run-id": "cpu-smoke-0123abcd", "bench-attempt": "1"},

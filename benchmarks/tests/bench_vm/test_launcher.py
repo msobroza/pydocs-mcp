@@ -179,6 +179,22 @@ def test_a_gpu_run_boots_the_gpu_image_with_the_cuda_flavour_and_its_gpu(
     assert "/bench-cuda:" in harness.record(result.run_id).image
 
 
+@pytest.mark.parametrize(
+    ("stem", "spec"),
+    [("cpu-smoke", _spec()), ("gpu-smoke", retrieval_spec(configs=[FIXTURE_CONFIG], gpu={}))],
+    ids=["n2-standard-8", "g2-standard-8"],
+)
+def test_every_vm_boots_from_a_pd_balanced_disk_never_the_pd_standard_default(
+    harness: LaunchHarness, capsys: Capsys, stem: str, spec: dict[str, object]
+) -> None:
+    result = harness.launch(capsys, stem, spec)
+
+    assert result.exit_code == 0, result.err
+    (request,) = harness.cloud.created
+    # gcloud and the Compute API default a boot disk to pd-standard, which G2 refuses.
+    assert request.boot_disk_type == "pd-balanced"
+
+
 def test_a_gpu_on_a_machine_type_without_bundled_gpus_is_attached_explicitly(
     harness: LaunchHarness, capsys: Capsys
 ) -> None:
