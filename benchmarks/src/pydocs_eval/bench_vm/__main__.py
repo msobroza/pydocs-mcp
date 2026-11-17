@@ -38,6 +38,11 @@ from pydocs_eval.bench_vm.gcloud_bench_cloud import GcloudBenchCloud
 from pydocs_eval.bench_vm.launch_plan import LaunchPlan
 from pydocs_eval.bench_vm.launch_refusal import LaunchRefused
 from pydocs_eval.bench_vm.launcher import LaunchPorts, launch_or_relaunch
+from pydocs_eval.bench_vm.local_reference_cli import (
+    LOCAL_REFERENCE_VERBS,
+    add_local_reference_verbs,
+    local_reference_verb,
+)
 from pydocs_eval.bench_vm.run_commits import GitCheckout
 from pydocs_eval.bench_vm.run_control import RunControlPorts
 from pydocs_eval.bench_vm.run_control_cli import (
@@ -86,6 +91,7 @@ def build_bench_vm_parser() -> argparse.ArgumentParser:
         help="run the laptop-only checks and print the plan; no gcloud, terraform or writes",
     )
     add_run_control_verbs(verbs)
+    add_local_reference_verbs(verbs)
     _add_supervise_verb(verbs)
     return parser
 
@@ -208,6 +214,8 @@ def main(
         return supervise(args, supervisor_ports)
     if args.verb in RUN_CONTROL_VERBS:
         return run_control_verb(args, run_control_ports)
+    if args.verb in LOCAL_REFERENCE_VERBS:
+        return local_reference_verb(args)
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
     return launch_run(args, launch_ports)
 

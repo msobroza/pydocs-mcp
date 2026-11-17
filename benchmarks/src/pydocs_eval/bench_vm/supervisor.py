@@ -55,7 +55,7 @@ from pydocs_eval.bench_vm.cache_layout import child_cache_environment
 from pydocs_eval.bench_vm.child_process import RunningChild, start_child
 from pydocs_eval.bench_vm.container_paths import RunDirectories
 from pydocs_eval.bench_vm.host_facts import HostFacts, read_host_facts
-from pydocs_eval.bench_vm.kind_command import kind_invocation, with_interpreter
+from pydocs_eval.bench_vm.kind_command import kind_argv, kind_invocation
 from pydocs_eval.bench_vm.own_vm import delete_refused_vm
 from pydocs_eval.bench_vm.persisted_caches import PersistedCaches
 from pydocs_eval.bench_vm.run_ending import FinalStatePush, RunEnding
@@ -200,9 +200,7 @@ def child_argv(
     run: SupervisedRun, dirs: RunDirectories, python: tuple[str, ...]
 ) -> tuple[str, ...]:
     """The kind's CLI, its owned flags for this run, then the spec's passthrough ``args``."""
-    spec = run.spec
-    owned = spec.row.owned_flag_values(kind_invocation(run, dirs))
-    return (*with_interpreter(spec.row.cli, python), *owned, *spec.args)
+    return kind_argv(run.spec, kind_invocation(run, dirs), python)
 
 
 def child_environment(run: SupervisedRun, dirs: RunDirectories) -> Mapping[str, str]:
