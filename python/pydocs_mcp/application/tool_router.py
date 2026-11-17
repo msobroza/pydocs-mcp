@@ -19,6 +19,7 @@ from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import Any, Literal, Protocol
 
+from pydocs_mcp.application.api_zero_hit_fallback import SearchZeroHitResponder
 from pydocs_mcp.application.branch_resolution import (
     ResolvedBranch,
     refuse_landing_unit,
@@ -46,7 +47,6 @@ from pydocs_mcp.application.mcp_inputs import (
 )
 from pydocs_mcp.application.multi_project_search import (
     ANSWERING_BUNDLE_EXTRA,
-    EMPTY_SEARCH_MESSAGES,
     MultiProjectLookup,
     MultiProjectSearch,
     ProjectServices,
@@ -57,19 +57,12 @@ from pydocs_mcp.application.overview_service import (
     OverviewService,
     WorkspaceProjectEntry,
 )
-from pydocs_mcp.application.pointer_bundles import render_pointer_bundle
 from pydocs_mcp.application.reference_resolution import declared_reference_resolution
-from pydocs_mcp.application.suggestions import (
-    API_ZERO_HIT_RETRY_ANY_RULE,
-    SEARCH_ZERO_HIT_SUGGESTION,
-    api_zero_hit_retry_any_suggestion,
-    log_suggestion_fired,
-)
 from pydocs_mcp.application.target_resolution import TargetRewrite, with_target_fallback
 from pydocs_mcp.application.tool_response import ToolResponse
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 from pydocs_mcp.multirepo import current_metadata
-from pydocs_mcp.pointer_table import PointerTableConfig, ResponseKind
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.retrieval.config import SuggestionsConfig
 from pydocs_mcp.storage.index_metadata import IndexMetadata
 
@@ -135,8 +128,10 @@ class ToolRouter:
     # "" (single project / not composed) renders nothing — byte-identical.
     cross_link_status: str = ""
     # ADR 0007 per-rule flags; the router owns only the search_codebase
-    # zero-hit rule (grep rules live in FileToolsService, the get_why one in
-    # DecisionService — one flag, both zero-hit producer sites).
+    # zero-hit rules, composed by SearchZeroHitResponder (search_zero_hit,
+    # api_zero_hit_retry_any, api_zero_hit_fallback_any — ADR 0027); grep
+    # rules live in FileToolsService, the get_why one in DecisionService (one
+    # search_zero_hit flag, both zero-hit producer sites).
     suggestions: SuggestionsConfig = field(default_factory=SuggestionsConfig)
     # The deployment's pointer table — the only source of the follow-up calls
     # every response renders; the default is the shipped table.
@@ -251,47 +246,16 @@ class ToolRouter:
         # body answered under — otherwise a CLI --branch flag would reach the
         # envelope but silently disappear from the rendered retry call.
         selector = branch or _branch_selector(payload)
+        # Zero hits still return success (search never raises, spec §D1 empty
+        # contract); what a zero hit carries — the overview pointer, the
+        # kind="api" retry hint, or the kind="api" zero-hit fallback (ADR 0027)
+        # — is composed in ONE place, over the same pinned search body.
+        responder = SearchZeroHitResponder(self.suggestions, self.pointers)
 
         async def _body(resolved: ResolvedBranch) -> BodyResult:
             pins = self._branch_pins(payload.project, resolved)
-            body, items, extras = await self.search_router._search_body(payload, branch_pins=pins)
-            # Zero hits still return success (search never raises); steer the
-            # agent to an orientation card via the overview pointer (spec §D1
-            # empty contract). The envelope resolves the token per surface.
-            # Flag-gated per ADR 0007 (independent ablation of the shipped
-            # hint); the fired text is mirrored machine-readably in
-            # meta.suggestion (§2.3). A kind="api"-only retry hint layers on
-            # top: when the member path returns zero rows AND the request's
-            # kind=="api", one new [suggestion: line names the kind="any"
-            # retry with the preserved query VALUE and non-default selectors;
-            # precedence rule — meta.suggestion carries the kind-aware string,
-            # the body carries both lines, the structured log records both
-            # fires (ADR 0007 amendment 2026-11-08).
-            if body not in EMPTY_SEARCH_MESSAGES:
-                return body, items, extras
-            fire_generic = self.suggestions.search_zero_hit
-            fire_api = payload.kind == "api" and self.suggestions.api_zero_hit_retry_any
-            if not fire_generic and not fire_api:
-                return body, items, extras
-            text = body
-            meta_suggestion = None
-            if fire_generic:
-                log_suggestion_fired("search_codebase", "search_zero_hit")
-                zero_hit = self.pointers.row_for(ResponseKind.ZERO_HIT)
-                text = f"{text}\n{render_pointer_bundle(zero_hit, '')}"
-                meta_suggestion = SEARCH_ZERO_HIT_SUGGESTION
-            if fire_api:
-                log_suggestion_fired("search_codebase", API_ZERO_HIT_RETRY_ANY_RULE)
-                retry = api_zero_hit_retry_any_suggestion(
-                    payload.query,
-                    scope=payload.scope,
-                    package=payload.package,
-                    branch=selector,
-                    project=payload.project,
-                )
-                text = f"{text}\n{retry}"
-                meta_suggestion = retry  # precedence over the generic string
-            return text, items, {**extras, "suggestion": meta_suggestion}
+            run_body = partial(self.search_router._search_body, branch_pins=pins)
+            return await responder.respond(payload, run_body, selector=selector)
 
         return await self._enveloped("search_codebase", payload, _body, selector)
 

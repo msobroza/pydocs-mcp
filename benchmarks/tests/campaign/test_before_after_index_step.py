@@ -230,7 +230,7 @@ def test_the_default_step_is_the_shipped_incremental_index_into_the_bundle(
 def test_both_arms_are_handed_every_bundle_and_its_source(tmp_path: Path) -> None:
     import argparse
 
-    from pydocs_eval.campaign import before_after_command
+    from pydocs_eval.campaign import before_after_arm_launch
     from pydocs_eval.campaign.before_after import (
         ArmRole,
         CommitUnderTest,
@@ -265,8 +265,8 @@ def test_both_arms_are_handed_every_bundle_and_its_source(tmp_path: Path) -> Non
     args = argparse.Namespace(base_url=None, config=tmp_path / "serve.yaml", max_usd=1.0)
 
     for role in ArmRole:
-        settings = before_after_command._arm_settings(
-            args, plan, role=role, commit="c" * 40, arm_dir=tmp_path / role
+        settings = before_after_arm_launch.arm_settings_for(
+            args, plan, role=role, arm_dir=tmp_path / role
         )
         assert settings.bundle_sources == {str(corpus.bundle_dir): str(corpus.source_dir)}
 

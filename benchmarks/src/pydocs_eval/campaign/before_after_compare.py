@@ -73,11 +73,18 @@ class PairedTest(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ArmIdentity:
-    """What an A/A pair must share: one commit, answered by one model under one turn cap."""
+    """What an A/A pair must share: one commit, one model, one turn cap, one settings digest.
+
+    The digest is ``""`` for an arm written before variant arms: two such arms
+    still pair, and one against a recorded digest is refused, since its settings
+    were never written down and twinship cannot be shown.
+    """
 
     commit: str
     model: str
     max_agent_turns: int
+    # A same-commit variant arm (an overlay) differs from its baseline only here.
+    settings_digest: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,7 +174,8 @@ def check_aa_pair(baseline: LabelledArm, replicate: LabelledArm) -> None:
     raise ComparisonInputError(
         f"the A/A replicate {replicate.label} is not the baseline's A/A twin: it is "
         f"{replicate.identity}, the baseline {baseline.label} is {baseline.identity}; "
-        "an A/A pair runs one commit twice, under one model and one turn cap"
+        "an A/A pair runs one commit twice, under one model, one turn cap and one "
+        "settings digest"
     )
 
 

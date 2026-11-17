@@ -24,13 +24,19 @@ from ..registries import dataset_registry
 from ._citations import extract_path_citations, resolve_bare_filenames
 from ._download import check_content_length
 from ._repo_cache import RepoCache, RepoCacheLike, read_checkout_files
-from .base_dataset import EvalTask, GoldAnswer
+from .base_dataset import REFERENCE_ANSWER_KEY, EvalTask, GoldAnswer, ReferenceAnswer
 from .corpus import materialize_corpus
+from .repo_coordinates import corpus_coordinates
 
 log = logging.getLogger(__name__)
 
 # WHY: pinned HF revision of the ``question``/``answer`` release.
 _PINNED_REVISION = "07e206aa29fdad0cf3f1d532ff077f9705387348"
+
+# The registered name. It is also the ``model_id`` of every reference answer
+# this dataset carries: the SWE-QA answer text is human-written, so the
+# "writer" a reference names is the dataset itself (spec Q24).
+_DATASET_NAME = "swe-qa"
 
 # The whole-corpus split (all 15 per-repo splits concatenated).
 _DEFAULT_SPLIT = "default"
@@ -68,12 +74,12 @@ _RELEASE_URL = (
 )
 
 
-@dataset_registry.register("swe-qa")
+@dataset_registry.register(_DATASET_NAME)
 @dataclass
 class SweQaDataset:
     """SWE-QA (Apache-2.0). Split-inferred repo + companion-repo commit pins."""
 
-    name: str = "swe-qa"
+    name: str = _DATASET_NAME
     revision: str = _PINNED_REVISION
     # ``default`` iterates all 15 repos; a repo name selects one per-repo split.
     split: str = _DEFAULT_SPLIT
@@ -189,12 +195,27 @@ class SweQaDataset:
         return EvalTask(
             task_id=f"swe_qa/{repo}/{index}",
             query=row.get("question", ""),
-            gold=GoldAnswer(file_set=file_set),
+            gold=GoldAnswer(file_set=file_set, extra=_reference_extra(row)),
             corpus_source=lambda u=url, s=sha: materialize_corpus(
                 read_checkout_files(self.repo_cache.checkout(u, s))
             ),
-            metadata={"repo": repo},
+            # ``repo`` is the pinned clone's ``owner/name`` (the split key alone,
+            # ``matplotlib``, cannot name a per-corpus workspace) and ``commit``
+            # its short pin: together they key the before/after workspace (#387).
+            metadata=corpus_coordinates(url, sha),
         )
+
+
+def _reference_extra(row: dict[str, Any]) -> dict[str, object]:
+    """The answer text as the gold's ``ReferenceAnswer`` — for the judge, never the agent.
+
+    A value object, never a bare string, so the rubric gates do not read it as
+    text an answer must contain; the file-set gold beside it is unchanged
+    (spec Q24). Only rows with a resolved citation reach here, so the answer
+    text is non-empty.
+    """
+    reference = ReferenceAnswer(text=row["answer"], model_id=_DATASET_NAME, prompt_hash="")
+    return {REFERENCE_ANSWER_KEY: reference}
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:

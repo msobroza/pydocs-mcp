@@ -47,6 +47,7 @@ from .base_dataset import (
     ReferenceAnswer,
 )
 from .corpus import materialize_corpus
+from .repo_coordinates import owner_name_of_repo_url
 
 _DATASET_NAME = "example-needle-chat"
 _REVISION = "1.0"
@@ -360,10 +361,10 @@ def _repo_slug(task_id: str, url: str) -> str:
     The trailing slash goes before the ``.git`` suffix, the crosscommitvuln rule,
     so ``.../o/n.git/`` and ``.../o/n`` name the same repository.
     """
-    parts = url.rstrip("/").removesuffix(".git").split("/")
-    if len(parts) < 2 or not all(parts[-2:]):
-        raise ChatDatasetError(f"{task_id}: repo_url = {url!r}, expected .../<owner>/<name>")
-    return f"{parts[-2]}/{parts[-1]}"
+    try:
+        return owner_name_of_repo_url(url)
+    except ValueError as exc:
+        raise ChatDatasetError(f"{task_id}: {exc}") from None
 
 
 def _values(vocabulary: type[StrEnum]) -> list[str]:

@@ -76,7 +76,10 @@ class ModelListing:
 
 
 def _async_key(api_key: Any) -> Any:
-    """The async SDK client AWAITS its api_key provider (openai/_client.py:649-651)."""
+    """The async SDK client AWAITS its api_key provider.
+
+    Verified in ``AsyncOpenAI._refresh_api_key`` (openai 2.54.0).
+    """
     if not callable(api_key):
         return api_key
 

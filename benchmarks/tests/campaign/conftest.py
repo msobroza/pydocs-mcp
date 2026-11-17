@@ -12,10 +12,21 @@ from __future__ import annotations
 
 import pytest
 
-from pydocs_eval.campaign import before_after_command, before_after_compare_command
-from pydocs_eval.campaign.before_after_corpora import IndexIdentity
+from pydocs_eval.campaign import (
+    before_after_arm_launch,
+    before_after_command,
+    before_after_compare_command,
+)
 
-from ._fakes import COMPARE_TASK_IDS, FakeArmRun, FakeSplitTasks
+from ._fakes import (
+    COMPARE_TASK_IDS,
+    FakeArmBlockProbe,
+    FakeArmRun,
+    FakeSplitTasks,
+    no_worktree,
+    stub_serving_settings,
+    write_finished_summary_from_settings,
+)
 from ._outcome_fixtures import GOLD
 
 
@@ -31,23 +42,27 @@ def before_after_split(monkeypatch: pytest.MonkeyPatch) -> FakeSplitTasks:
 def stub_command(monkeypatch: pytest.MonkeyPatch, before_after_split: FakeSplitTasks) -> FakeArmRun:
     """Plan inputs resolved offline, the split from ``before_after_split``; arms replaced by a recorder."""
     fake = FakeArmRun()
-    monkeypatch.setattr(before_after_command, "_run_one_arm", fake)
+    monkeypatch.setattr(before_after_command, "run_one_arm", fake)
+    # Overlays reach the probe; the live one checks each commit out (its own tests).
+    monkeypatch.setattr(before_after_command, "probe_arm_block", FakeArmBlockProbe())
     # The two plan inputs that read the serving YAML; the arm block has its own
     # tests (test_before_after_llm_block.py) and no bearing on the spend gate.
     monkeypatch.setattr(before_after_command, "_arm_llm_block", lambda args: None)
     monkeypatch.setattr(
-        before_after_command,
-        "_serving_settings",
-        lambda args, block: before_after_command.ServingSettings(
-            endpoint="http://e",
-            max_agent_turns=4,
-            identity=IndexIdentity(embedder_model="m", embedder_dim=8, scope_id="scope"),
-        ),
+        before_after_command, "_serving_settings", lambda args, block: stub_serving_settings(4)
     )
     monkeypatch.setattr(
         before_after_command, "_description_token_counter", lambda model: lambda text: 10
     )
     return fake
+
+
+@pytest.fixture
+def real_launch(stub_command: FakeArmRun, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real ``run_one_arm`` (settings, fingerprint, forced-reuse record) over a fake child."""
+    monkeypatch.setattr(before_after_command, "run_one_arm", before_after_arm_launch.run_one_arm)
+    monkeypatch.setattr(before_after_arm_launch, "product_worktree", no_worktree)
+    monkeypatch.setattr(before_after_arm_launch, "_spawn_arm", write_finished_summary_from_settings)
 
 
 @pytest.fixture

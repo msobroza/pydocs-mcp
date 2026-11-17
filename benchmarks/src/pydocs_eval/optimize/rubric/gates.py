@@ -23,7 +23,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Protocol
 
 from pydocs_eval.datasets.base_dataset import EvalTask
-from pydocs_eval.optimize.rubric.model import GateCheck
+from pydocs_eval.optimize.rubric.model import (
+    GOLD_KEYS_PARAM,
+    GateCheck,
+    refuse_reference_answer_keys,
+)
 from pydocs_eval.registries import (
     _Registry,  # WHY: same in-repo registry mechanic as the optimize axes; a second copy would drift
 )
@@ -158,12 +162,18 @@ class GoldSubstringAll:
     def __call__(
         self, task: EvalTask, trajectory: Trajectory, params: Mapping[str, object]
     ) -> bool:
-        candidates = _all_gate_candidates(task, params.get("keys"))
+        candidates = _all_gate_candidates(task, params.get(GOLD_KEYS_PARAM))
         return all(candidate in trajectory.answer for candidate in candidates)
 
 
 def _all_gate_candidates(task: EvalTask, keys: object) -> list[str]:
-    """Resolve the gold_substring_all candidate list, honoring the keys filter."""
+    """Resolve the gold_substring_all candidate list, honoring the keys filter.
+
+    Raises:
+        TypeError: ``keys`` is not a list.
+        ValueError: ``keys`` names the reference answer (the judge's, never a candidate).
+    """
+    refuse_reference_answer_keys(keys)
     if keys is None:
         candidates = list(task.gold.file_set)
         candidates += [v for v in task.gold.extra.values() if isinstance(v, str)]

@@ -51,10 +51,13 @@ _TRACE_FIELD_PREFIX = f"{_TRACE_SECTION_ENV_VAR}__"
 # is a location, not configuration (db.py sandbox channel). OPENAI_BASE_URL /
 # LLM_MODEL are the pair `binding._llm_connection_for_run` already blocks for the
 # chat endpoint. The child's OpenAI SDK falls back to OPENAI_BASE_URL when YAML
-# leaves base_url null.
+# leaves base_url null. OPENAI_CUSTOM_HEADERS joins them: openai 2.34+ parses it into
+# every client's default headers, sent to every base URL, and an Authorization
+# line there replaces the configured bearer — a shell value would reach the
+# child's embedder and LLM calls with no trace in the arm's hash.
 _CONFIG_TIER_PREFIX = "PYDOCS_"  # == AppConfig env_prefix (parity test)
 _SEALED_TIER_KEEPS = frozenset({CACHE_DIR_ENV_VAR})
-_ENDPOINT_TIER_ENV_VARS = frozenset({"OPENAI_BASE_URL", "LLM_MODEL"})
+_ENDPOINT_TIER_ENV_VARS = frozenset({"OPENAI_BASE_URL", "LLM_MODEL", "OPENAI_CUSTOM_HEADERS"})
 
 # Mirrors langchain_mcp_adapters.sessions._BRACED_VAR_RE (0.3.x; pinned by
 # test_adapter_brace_pattern_matches_ours). The adapter rewrites ${VAR} in every
@@ -94,7 +97,8 @@ def serve_child_env(
     the MCP adapter would expand (``${...}``) and any inherited spelling of an
     overlay name. ``seal_config_tier`` (the eval binding) also withholds
     ``PYDOCS_*`` except ``PYDOCS_CACHE_DIR``, and ``OPENAI_BASE_URL`` /
-    ``LLM_MODEL``. One names-only JSON log line lists what was withheld.
+    ``LLM_MODEL`` / ``OPENAI_CUSTOM_HEADERS``. One names-only JSON log line
+    lists what was withheld.
 
     Example:
         >>> serve_child_env({"PYDOCS_TRACE__DIR": "/t"},
@@ -139,7 +143,7 @@ def _is_shell_function(upper: str, value: str) -> bool:
 
 
 def _sealed_tier_reason(upper: str) -> str | None:
-    """The sealed-tier verdict for an upper-cased name: endpoint pair, then ``PYDOCS_*``."""
+    """The sealed-tier verdict for an upper-cased name: endpoint variables, then ``PYDOCS_*``."""
     if upper in _ENDPOINT_TIER_ENV_VARS:
         return _REASON_ENDPOINT_SEALED
     if upper.startswith(_CONFIG_TIER_PREFIX) and upper not in _SEALED_TIER_KEEPS:
