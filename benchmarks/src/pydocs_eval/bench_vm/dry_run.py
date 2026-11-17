@@ -5,11 +5,11 @@ nothing. It loads the spec, derives the run id, resolves the refs, checks that
 a ref naming a local branch sits where its remote-tracking branch does and
 that each commit is on a remote-tracking branch, and checks the recipe, the
 configs, ``corpus_dir`` and the host scripts at the commit — the same code a
-real launch runs. What only the cloud knows (the deployment's names, the image digest, the
-machine-type facts, whether the image tag exists, an existing record, a live
-VM) is shown as a marked placeholder or listed as not checked. So the plan shows
-the build a missing tag would submit without saying whether it will run, and
-shows a first launch while saying a relaunch was not ruled out.
+real launch runs. What only the cloud knows (the deployment's names, the image
+digest, the machine-type facts, whether the image tag exists, an existing
+record, a live VM) is shown as a marked placeholder or listed as not checked.
+So the plan shows the build a missing tag would submit without saying whether
+it will run, and shows a first launch while saying a relaunch was not ruled out.
 """
 
 from __future__ import annotations
