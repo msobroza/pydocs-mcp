@@ -71,6 +71,7 @@ def _boot_disk_flags(request: VmCreateRequest) -> tuple[str, ...]:
     return (
         f"--image={request.boot_image}",
         f"--boot-disk-size={request.boot_disk_gb}GB",
+        f"--boot-disk-type={request.boot_disk_type}",
         auto_delete,
     )
 

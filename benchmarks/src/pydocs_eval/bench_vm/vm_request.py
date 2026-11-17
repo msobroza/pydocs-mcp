@@ -47,6 +47,12 @@ class TerminationAction(StrEnum):
     DELETE = "DELETE"
 
 
+class BootDiskType(StrEnum):
+    """The persistent disk type a bench VM boots from, in Compute Engine's spelling."""
+
+    PD_BALANCED = "pd-balanced"
+
+
 @dataclass(frozen=True, slots=True)
 class GpuAttachment:
     """The run's GPUs. ``attached_by_machine_type``: the type (``g2-…``) carries them itself."""
@@ -73,6 +79,7 @@ class VmCreateRequest:
     subnetwork: str
     boot_image: str
     boot_disk_gb: int
+    boot_disk_type: BootDiskType
     boot_disk_auto_delete: bool
     gpu: GpuAttachment | None
     labels: Mapping[str, str]

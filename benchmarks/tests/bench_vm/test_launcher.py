@@ -24,6 +24,7 @@ from pydocs_eval.bench_vm.vm_request import (
     METADATA_RUNS_BUCKET,
     METADATA_SHUTDOWN_SCRIPT,
     METADATA_STARTUP_SCRIPT,
+    BootDiskType,
     GpuAttachment,
     ProvisioningModel,
     TerminationAction,
@@ -177,6 +178,22 @@ def test_a_gpu_run_boots_the_gpu_image_with_the_cuda_flavour_and_its_gpu(
         accelerator_type="nvidia-l4", count=1, attached_by_machine_type=True
     )
     assert "/bench-cuda:" in harness.record(result.run_id).image
+
+
+@pytest.mark.parametrize(
+    ("stem", "spec"),
+    [("cpu-smoke", _spec()), ("gpu-smoke", retrieval_spec(configs=[FIXTURE_CONFIG], gpu={}))],
+    ids=["n2-standard-8", "g2-standard-8"],
+)
+def test_every_vm_boots_from_a_pd_balanced_disk_never_the_pd_standard_default(
+    harness: LaunchHarness, capsys: Capsys, stem: str, spec: dict[str, object]
+) -> None:
+    result = harness.launch(capsys, stem, spec)
+
+    assert result.exit_code == 0, result.err
+    (request,) = harness.cloud.created
+    # gcloud and the Compute API default a boot disk to pd-standard, which G2 refuses (#434).
+    assert request.boot_disk_type is BootDiskType.PD_BALANCED
 
 
 def test_a_gpu_on_a_machine_type_without_bundled_gpus_is_attached_explicitly(

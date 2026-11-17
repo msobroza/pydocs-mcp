@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 from pydocs_eval.bench_vm.deployment import DeploymentNames
 from pydocs_eval.bench_vm.vm_request import (
+    BootDiskType,
     ProvisioningModel,
     TerminationAction,
     VmCreateRequest,
@@ -29,6 +30,7 @@ def fake_vm_request(run_id: str, *, attempt: int, zone: str) -> VmCreateRequest:
         subnetwork="projects/bench-project/regions/europe-west4/subnetworks/bench",
         boot_image="projects/cos-cloud/global/images/cos-stable-1",
         boot_disk_gb=100,
+        boot_disk_type=BootDiskType.PD_BALANCED,
         boot_disk_auto_delete=True,
         gpu=None,
         labels=vm_labels(run_id, attempt),
