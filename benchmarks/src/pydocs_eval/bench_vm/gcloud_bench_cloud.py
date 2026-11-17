@@ -50,7 +50,12 @@ from pydocs_eval.bench_vm.gcloud_calls import GCLOUD_READ_TIMEOUT_S
 from pydocs_eval.bench_vm.gcloud_image_builds import GcloudImageBuilds
 from pydocs_eval.bench_vm.gcloud_instance_create import instance_create_argv, write_metadata_files
 from pydocs_eval.bench_vm.gcloud_json import json_list, json_object
-from pydocs_eval.bench_vm.gcloud_stderr import NO_OBJECTS_MATCHED, NOT_FOUND, PRECONDITION_FAILED
+from pydocs_eval.bench_vm.gcloud_stderr import (
+    NO_OBJECTS_MATCHED,
+    NO_RSYNC_SOURCE_OBJECTS,
+    NOT_FOUND,
+    PRECONDITION_FAILED,
+)
 from pydocs_eval.bench_vm.vm_request import VmCreateRequest
 
 _WRITE_TIMEOUT_S = 120.0
@@ -85,7 +90,7 @@ _RANGE_NOT_SATISFIABLE = re.compile(r"(?i)\b416\b|range.*not.*satisf|InvalidRang
 # Only an empty prefix restores nothing. A missing bucket or an object that
 # 404s mid-transfer is a failure: a child started on an empty state would
 # overwrite the synced ledgers at its first sync.
-_NOTHING_TO_RESTORE = NO_OBJECTS_MATCHED
+_NOTHING_TO_RESTORE = (NO_OBJECTS_MATCHED, NO_RSYNC_SOURCE_OBJECTS)
 
 
 @dataclass
@@ -275,7 +280,8 @@ class GcloudBenchCloud(GcloudCacheTransfers, GcloudImageBuilds):
         completed = self._rsync_down(
             source_uri, destination, _RESTORE_TIMEOUT_S, exclude_pattern=exclude_pattern
         )
-        if completed.returncode != 0 and _NOTHING_TO_RESTORE.search(completed.stderr_text):
+        nothing_synced = any(marker.search(completed.stderr_text) for marker in _NOTHING_TO_RESTORE)
+        if completed.returncode != 0 and nothing_synced:
             return  # nothing was ever synced under the prefix
         self._raise_unless_ok(completed, f"restoring {source_uri} into {destination}")
 

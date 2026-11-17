@@ -185,6 +185,23 @@ def test_a_restore_from_a_prefix_with_no_objects_restores_nothing(tmp_path: Path
     assert len(runner.calls) == 1
 
 
+def test_a_restore_from_a_prefix_nothing_was_ever_synced_to_restores_nothing(
+    tmp_path: Path,
+) -> None:
+    # Cloud SDK 592's own words for an rsync source with no objects under it: the
+    # relaunch of a run whose earlier attempt never synced a file (#434).
+    cloud, runner = _cloud(
+        failed(f"ERROR: (gcloud.storage.rsync) Did not find existing container at: {_STATE_URI}")
+    )
+    destination = tmp_path / "state"
+
+    cloud.restore_directory(_STATE_URI, destination)
+
+    assert len(runner.calls) == 1
+    assert destination.is_dir()
+    assert list(destination.iterdir()) == []
+
+
 @pytest.mark.parametrize(
     "stderr",
     [
