@@ -173,7 +173,7 @@ def _vm_request(request: VmCreateRequest, plan: LaunchPlan) -> list[str]:
         f"  service account: {request.service_account}",
         f"  subnetwork: {request.subnetwork}",
         f"  boot image: {request.boot_image}",
-        f"  boot disk: {request.boot_disk_gb} GB, deleted with the VM",
+        f"  boot disk: {request.boot_disk_gb} GB {request.boot_disk_type}, deleted with the VM",
         f"  gpu: {_gpu_text(request.gpu)}",
         f"  labels: {labels}",
         "  metadata:",

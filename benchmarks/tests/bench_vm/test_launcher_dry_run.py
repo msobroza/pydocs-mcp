@@ -63,6 +63,20 @@ def test_a_dry_run_of_a_valid_spec_prints_the_plan_and_exits_zero(
     assert '"status": "launching"' in out
 
 
+def test_a_dry_run_shows_the_type_of_the_boot_disk_a_gpu_vm_gets(
+    tmp_path: Path, capsys: Capsys
+) -> None:
+    repo = make_fixture_repo(tmp_path / "git")
+    spec_path = write_spec(
+        tmp_path / "runs", "gpu-smoke", retrieval_spec(configs=[FIXTURE_CONFIG], gpu={})
+    )
+
+    exit_code, out, err = _dry_run(capsys, spec_path, repo.path)
+
+    assert exit_code == 0, err
+    assert "boot disk: 250 GB pd-balanced, deleted with the VM" in out
+
+
 def test_a_dry_run_marks_deployment_names_as_placeholders_and_lists_unchecked_cloud_facts(
     tmp_path: Path, capsys: Capsys
 ) -> None:
