@@ -1,0 +1,26 @@
+# CPU resume smoke: the stop-and-resume check. BM25-only retrieval
+# (bm25.yaml) over RepoQA's small_test split, 30 needles from the pinned
+# 2024-06-23 release (3 from each of its 10 Python repositories), on a spot VM
+# at the default CPU shape (n2-standard-8). The VM downloads the release
+# (about 12 MB) and the FastEmbed model; no provider key, no paid API.
+#
+# Long enough to stop by hand mid-leg: each needle re-indexes its whole
+# repository, so the 30 tasks take an estimated 10 to 25 minutes on
+# n2-standard-8 (dataset order puts the three largest repositories' needles
+# last). BM25 scores every query without an embedder or a model, so a run
+# stopped and relaunched must end with the same aggregates, bit for bit, as an
+# uninterrupted local run of this spec; see "Stop and resume" in the runbook:
+#
+#   make bench-vm RUN=runs/cpu-resume-smoke.yaml
+#   make bench-vm-stop RUN=runs/cpu-resume-smoke.yaml        # mid-run
+#   make bench-vm RUN=runs/cpu-resume-smoke.yaml             # relaunch: resumes
+#   make bench-vm-compare RUN=runs/cpu-resume-smoke.yaml     # after pull + local run
+#
+# A 2-minute sync keeps a mid-run pull close to the run's progress.
+git_ref: main
+kind: retrieval
+dataset: repoqa
+split: small_test
+configs: [benchmarks/configs/bm25.yaml]
+max_runtime: 2h
+sync_interval: 2m

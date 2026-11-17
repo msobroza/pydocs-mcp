@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -48,3 +49,17 @@ def test_the_gpu_smoke_asks_for_one_l4() -> None:
     assert spec.gpu is not None
     assert (spec.gpu.type, spec.gpu.count) == (GpuType.NVIDIA_L4, 1)
     assert spec.resolved_machine_type == "g2-standard-8"
+
+
+def test_the_resume_smoke_is_a_long_deterministic_cpu_retrieval_run_on_spot() -> None:
+    spec = load_run_spec(COMMITTED_RUNS_DIR / "cpu-resume-smoke.yaml").spec
+
+    assert (spec.kind, spec.gpu, spec.spot, spec.git_ref) == (RunKind.RETRIEVAL, None, True, "main")
+    assert spec.max_runtime <= timedelta(hours=2)
+    # BM25-only search: no embedder or LLM scores a query, so the aggregates of a
+    # resumed run and of an uninterrupted local run can agree bit for bit.
+    assert spec.configs == ("benchmarks/configs/bm25.yaml",)
+    # The pinned RepoQA release's 30-needle stratified split, not the 5-needle fixture:
+    # long enough to stop by hand mid-leg.
+    assert (spec.dataset, spec.split, spec.args) == ("repoqa", "small_test", ())
+    assert spec.row.provider_keys == ()
