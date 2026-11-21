@@ -132,6 +132,25 @@ def test_machine_type_facts_are_read_from_the_compute_api_answer() -> None:
     assert "--project=bench-project" in argv
 
 
+@pytest.mark.parametrize(
+    "architecture_field",
+    [{}, {"architecture": "ARCHITECTURE_UNSPECIFIED"}, {"architecture": ""}],
+    ids=["absent", "the-enum-unset-value", "empty"],
+)
+def test_an_answer_reporting_no_architecture_has_none_in_its_facts(
+    architecture_field: dict[str, str],
+) -> None:
+    # The live answer for n2-standard-8 carries no `architecture` key (#434).
+    answer = {"name": "n2-standard-8", "guestCpus": 8, "memoryMb": 32768, **architecture_field}
+    cloud, _ = _cloud(ok(json.dumps(answer)))
+
+    facts = cloud.describe_machine_type("bench-project", "europe-west4-a", "n2-standard-8")
+
+    assert facts == MachineTypeFacts(
+        name="n2-standard-8", architecture=None, guest_cpus=8, memory_mb=32768
+    )
+
+
 def test_an_unknown_machine_type_has_no_facts() -> None:
     cloud, _ = _cloud(
         failed(

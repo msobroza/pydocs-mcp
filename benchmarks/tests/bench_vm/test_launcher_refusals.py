@@ -166,7 +166,6 @@ def test_before_after_refuses_an_unreachable_baseline(
         ("n2-standard-4", "4 vCPU"),
         ("n1-standard-8", "30720 MB"),
         ("t2a-standard-8", "ARM64"),
-        ("e2-standard-8", "no architecture"),
         ("z9-standard-8", "no such machine type"),
     ],
 )
@@ -178,6 +177,35 @@ def test_a_machine_type_under_the_floor_or_not_x86_64_is_refused_before_any_writ
     _assert_refused_before_any_write(harness, result)
     assert machine_type in result.err
     assert named in result.err
+
+
+@pytest.mark.parametrize(
+    ("overrides", "machine_type"),
+    [({}, "n2-standard-8"), ({"machine_type": "e2-standard-8"}, "e2-standard-8")],
+    ids=["the-default-cpu-type", "e2-standard-8"],
+)
+def test_a_classic_x86_type_the_compute_api_reports_no_architecture_for_is_launched(
+    harness: LaunchHarness, capsys: Capsys, overrides: dict[str, object], machine_type: str
+) -> None:
+    # The fakes answer as the live API does: no architecture for these two (#434).
+    assert harness.cloud.machine_types[machine_type].architecture is None
+
+    result = harness.launch(capsys, "cpu-smoke", _spec(**overrides))
+
+    assert result.exit_code == 0, result.err
+    assert [request.machine_type for request in harness.cloud.created] == [machine_type]
+
+
+def test_a_refusal_never_blames_an_architecture_the_compute_api_did_not_report(
+    harness: LaunchHarness, capsys: Capsys
+) -> None:
+    result = harness.launch(capsys, "cpu-smoke", _spec(machine_type="n2-standard-4"))
+
+    _assert_refused_before_any_write(harness, result)
+    assert (
+        "got 'n2-standard-4' (4 vCPU, 16384 MB, no architecture reported, read as X86_64)"
+        in result.err
+    )
 
 
 def test_a_machine_type_above_the_floor_is_accepted(harness: LaunchHarness, capsys: Capsys) -> None:
