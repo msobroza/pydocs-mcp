@@ -52,12 +52,12 @@ from ._fake_deployment import (
 from ._fake_gpu_probe import CPU_ONLY_PROBE, CUDA_READY_PROBE, FakeGpuProbe
 from ._fake_machine_types import (
     DEFAULT_MACHINE_TYPES,
+    E2_STANDARD_8,
     G2_STANDARD_8,
     N1_STANDARD_8,
     N2_HIGHMEM_8,
     N2_STANDARD_4,
     N2_STANDARD_8,
-    NO_ARCHITECTURE_8,
     T2A_STANDARD_8,
 )
 
@@ -464,13 +464,13 @@ __all__ = (
     "CPU_ONLY_PROBE",
     "CUDA_READY_PROBE",
     "DEFAULT_MACHINE_TYPES",
+    "E2_STANDARD_8",
     "FAKE_IMAGE_DIGEST",
     "G2_STANDARD_8",
     "N1_STANDARD_8",
     "N2_HIGHMEM_8",
     "N2_STANDARD_4",
     "N2_STANDARD_8",
-    "NO_ARCHITECTURE_8",
     "T2A_STANDARD_8",
     "CommandCall",
     "FakeBenchCloud",
