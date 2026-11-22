@@ -37,8 +37,8 @@ from ._guidance_task_fakes import (
 
 _CATALOG = {"demo": ["pkg_a", "pkg_b"]}
 _PACK = "SESSION-START-PACK"
-_V3_GOLDEN = Path(__file__).resolve().parents[2] / "fixtures" / "goldens"
-_V3_GOLDEN = _V3_GOLDEN / "ask_your_docs_system_v3.txt"
+_GOLDENS = Path(__file__).resolve().parents[2] / "fixtures" / "goldens"
+_V3_GOLDEN = _GOLDENS / "ask_your_docs_system_v3.txt"
 _SYNTHETIC_KEY = "sk-test-synthetic"
 
 
@@ -102,6 +102,14 @@ class TestNoneIsTodaysPrompt:
     def test_the_key_absent_serves_the_committed_v3_golden(self, chat_model) -> None:
         assert _served(chat_model, AskYourDocsConfig()) == _todays_prompt()
         assert _served(chat_model, None) == _todays_prompt()
+
+    def test_none_loads_no_skill_document(
+        self, chat_model, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """An over-cap seed that would stop any guided build is never read under none."""
+        FakeOverCapPackagedSeed(tmp_path / "seed").install(monkeypatch)
+        config = AskYourDocsConfig(guidance_task=GuidanceTask.NONE)
+        assert _served(chat_model, config) == _todays_prompt()
 
 
 class TestATaskFoldsThePackagedSeed:
