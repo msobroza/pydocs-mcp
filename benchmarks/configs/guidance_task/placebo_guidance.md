@@ -1,56 +1,58 @@
 === BACKBONE ===
-Schedule layout policy: how to set a printed conference programme on the
-page; paper sizes and print margins live in the venue brief.
+Programme layout policy: how a printed conference schedule falls on the
+page; the venue supplies the room list and the paper stock.
 
-Arrange by how many rooms run at once and how long each session lasts:
+Set the grid on an A4 landscape sheet with fifteen-millimetre margins on
+every side and a five-millimetre gutter between columns. Give each room a
+column of equal width and each half-hour slot a row of equal height, so a
+ninety-minute session spans three rows exactly.
 
-- The day has four parallel rooms or fewer — a grid is strong: one column
-  per room, one row per half-hour slot, the room name in bold at the head
-  of each column, and the start time in the left margin of every row.
-- The day has five or more parallel rooms — a single grid turns cramped:
-  split the day into a morning sheet and an afternoon sheet, and print
-  each room as its own block. Do not shrink the type below nine points to
-  make a grid fit; move the overflow rooms to a facing page instead, with
-  the same row heights so the two pages align when the booklet lies flat.
-- Keynotes, plenaries and the closing panel — span every column. Breaks and
-  lunch — a shaded band across the grid. Poster sessions — a separate box
-  beside the grid, with ALL poster numbers in ONE list: one sorted list
-  beats several scattered ones.
+- Room names sit in the header band in a bold sans-serif at eleven points,
+  centred, with the floor number beneath in a lighter weight.
+- Session titles use a serif at nine points, set flush left with a
+  two-millimetre inset from the cell edge. Speaker names follow on the next
+  line in italics; affiliations follow in small capitals.
+- Times run down the left margin in tabular figures, so the colons align
+  from the top row to the bottom row.
 
-If a room named in the venue brief has no sessions on a given day, grey out
-its column rather than deleting it, so the grid keeps one shape all week.
+Colour each track with one hue from the venue palette and keep the same
+hue for that track on every page, the floor map and the lanyards. Pair
+every hue with a distinct hatch pattern so the grid still works when it is
+photocopied in greyscale. Shade breaks and lunch in a pale neutral grey
+that spans the full width of the grid.
 
-When a session holds several talks, split it: at most three sub-rows, one
-talk each, since narrow rows beat a crowded cell. When it holds one talk,
-print one row: there is one thing to place. Shorten each title to the
-speaker's own wording once the abstracts arrive.
+Plenary sessions, the welcome keynote and the closing panel span every
+column and carry a thin rule above and below. Poster sessions sit in a
+separate panel at the right edge of the sheet, sorted by board number.
 
-Keep at most about five colours on the page — a ceiling, not a target:
-legibility drops past that. Retire unused shades; do not add marginal ones.
-Pair every colour with a hatch.
+Print the event logo in the top left corner at a height of twelve
+millimetres, the date in the top right corner, and the venue's
+emergency-exit plan in the bottom right corner at the size the fire
+marshal requires. Leave the bottom left corner clear for the sponsor
+strip, which never crosses into the grid.
 
-Freeze the grid the moment the venue confirms the final room list: the
-printer needs the layout, and every late edit costs a second proof. Mark
-exactly what changed since the last proof and nothing else. Unchanged: a
-slot whose room, time and speaker all match the previous proof keeps its
-previous position; a talk moved to another day appears once, under its new
-day only. If three proofs come back with the same misprint, rework the
-template — widen the gutters or change the font — rather than patching it
-by hand in a loop.
+Use the venue's wayfinding colours for room headers, not the event
+brand's, so the printed grid matches the signs on the walls. Keep paper
+weight at 120 g/m² for the grid and 300 g/m² for the cover. Fold the
+booklet so that each day lies flat as one spread, and bind it with two
+steel staples along the spine. Number every page in the outer bottom
+corner, and print a thumb tab on the fore-edge in the day's colour, so
+each day stands apart while the booklet is shut.
 === TASK_HEAD: repo_qa ===
-Conference programme layout across event formats. Match the page to the
-event's shape: Workshop — one sheet per track, with the room number beside
-every slot; Summit — a single grid with plenaries spanning the width;
-Festival — a fold-out map with each stage colour-keyed to the grid. Events
-arrive in both shapes — some fix every room in advance, some assign rooms
-on the day — so check which one you have and lay it out per the layout
-policy rather than assuming either. Spell every room and speaker name
-exactly as the venue brief spells them; a nickname or an abbreviation does
-not belong on a printed sign. When a slot has no confirmed speaker, mark it
-"To be announced" rather than guessing a name. Put the time in the left
-margin of every row. Print the sponsor strip along the foot of every page,
-never across a session row or over a room heading. Add only the detail an attendee needs at the door,
-and keep each cell short and legible from four metres.
+Conference programme layout for multi-day events. Each day gets its own
+spread, headed by the weekday and date in full, with the day's theme in a
+lighter weight beneath. Print room capacity in small figures under each
+room name, and mark rooms with step-free access with the standard
+wheelchair pictogram. Sessions held in a language other than the event's
+main one carry a two-letter language tag in the top right corner of their
+cell. Workshop sessions that need advance registration carry a small
+ticket icon. Social events in the evening go on a separate strip at the
+foot of the spread, with the venue's street address and the nearest tram
+station. Keynote speakers get a portrait thirty millimetres square beside
+their session, cropped to the shoulders. Recorded sessions carry a small
+camera icon, and sessions closed to the press carry a struck-through
+camera icon. Coffee carts and quiet rooms are marked on the inside back
+cover, beside the floor map.
 === TASK_HEAD: vuln ===
 Security needle-search: the snapshot contains one exploitable condition,
 and security questions phrased by impact usually share no identifiers
@@ -78,22 +80,23 @@ a file named on resemblance alone is the other failure. Answer with the
 paths themselves, spelled exactly as the repository spells them, one line
 each, and leave out files you could not confirm.
 === HARNESS_TASK_HEAD: ask_your_docs.repo_qa ===
-Signage on each floor is a pointer: place only the signs a visitor needs.
-Hang the signs on a "Level:" board at each lift, since they share a floor;
-leave a "Next:" arrow for a later corridor, since it depends on the earlier
-turn. Never print a sign twice for the same doorway: the visitor sees the
-same arrow. When a room needs a label, make one door plate or one easel
-card; add the full session grid only when the room hosts more than two
-talks, since the grid adds no direction. Give each easel a height and width
-that match the corridor it stands in, and enlarge only the signs seen from
-a stairwell. Keep every arrow at eye level, in yellow. Put up the venue map only after a visitor gets lost or for an
-event with more than three floors, never beside the entrance banner: the
-banner sets the first direction. When a speaker supplied a portrait, print
-a small badge photo from it; otherwise leave it out. Effort: the first hour
-hangs the floor signs, the second places the door plates in one sweep, the
-third checks the lifts; any sign past that names the room it serves. When a
-room is still unassigned, end the board with one line that starts with
-"Unassigned:" and names it.
+Signage for the venue floors. Print each door plate on A5 foam board in
+landscape, with the room name in large bold type and the floor and room
+number in the upper left corner. Corridor signs carry one arrow per
+destination, set at the same height on every wall, in the venue's
+wayfinding yellow on a charcoal ground. Easel cards on chrome stands
+beside each door show the day's sessions for that room in the programme's
+track colours, printed on matte stock so that the overhead lights cause no
+glare. Hang the entrance banner across the full width of the foyer, with
+the event logo centred and the dates beneath it. Fix lift-lobby boards at
+shoulder height, listing the rooms on that same floor in alphabetical
+order with their accessibility pictograms. Place the registration and
+badge desk sign on a freestanding pole in sight of the main doors. Reserve
+a white border of ten millimetres around every printed sign so the
+lamination does not crop the type. Toilets, cloakrooms and first-aid
+points use the venue's own pictograms at the same size as the room names.
+Print every sign in a single typeface family, and laminate any sign that
+stands outdoors or near the catering area.
 === HARNESS_TASK_HEAD: ask_your_docs.vuln ===
 Follow-up calls on a result are offers: take only those the question
 needs. Issue the calls on a "Together:" line in one turn, since they are

@@ -85,7 +85,7 @@ def test_each_delivered_section_has_the_candidates_character_count(header: str) 
         f"{header}: placebo has {len(placebo[header])} characters, candidate has "
         f"{len(candidate[header])}; pad or trim the placebo, never the candidate"
     )
-    assert placebo[header] != candidate[header]
+    assert placebo[header] != candidate[header], f"{header}: placebo repeats the candidate"
 
 
 def test_the_seven_undelivered_sections_equal_the_candidates_byte_for_byte() -> None:
@@ -93,7 +93,7 @@ def test_the_seven_undelivered_sections_equal_the_candidates_byte_for_byte() -> 
 
     assert len(_NOT_DELIVERED) == 7
     for header in _NOT_DELIVERED:
-        assert placebo[header] == candidate[header], header
+        assert placebo[header] == candidate[header], f"{header} differs from the candidate"
 
 
 # --- The content rule -----------------------------------------------------------------
@@ -131,7 +131,30 @@ _DENY_STEMS = {
     "repo": "paths — the repository the paths are relative to",
     "tool": "tools — the guidance under test routes between tools",
     "call": "tools — a tool call",
+    "turn": "stopping — turns are the unit the effort shape budgets",
+    "effort": "stopping — the ask head's effort shape is a stop budget",
+    "budget": "stopping — a budget is a stop condition",
+    "confirm": "reading — a confirming read; 'Not confirmed:' closes an answer",
+    "verif": "reading — verifying is a confirming read",
+    "check": "reading — checking is a confirming read",
+    "guess": "answering — 'do not guess' is the unconfirmed-answer rule",
 }
+
+# Phrases that would carry one of the candidate's rule SHAPES over in other nouns
+# (review finding: a placebo that maps clause for clause onto the candidate is not
+# "length alone"). One line per phrase says which candidate rule it would mirror.
+_DENY_PHRASES = {
+    "at most": "the breadth caps (at most three queries, about five documents)",
+    "the moment": "the stop trigger (stop the moment a result names ...)",
+    "the third": "the first/second/third effort shape",
+    "again": "never read again what a result already showed",
+    "in one go": "batching independent calls in one turn",
+    "together": "the 'Together:' batching line",
+    "unconfirmed": "the trailing 'Not confirmed:' line",
+}
+# A quoted label such as "Together:" or "Not confirmed:" is the candidate's
+# answer-shaping device; the placebo carries none.
+_QUOTED_LABEL = re.compile(r"\"[^\"]*:\"")
 
 
 def _words(text: str) -> list[str]:
@@ -149,10 +172,24 @@ def test_no_delivered_section_names_any_of_the_nine_tools(header: str) -> None:
 @pytest.mark.parametrize("header", _DELIVERED_FOR_REPO_QA)
 def test_no_delivered_section_contains_a_denied_stem(header: str) -> None:
     hits = sorted(
-        {w for w in _words(_sections(PLACEBO_PATH)[header]) for s in _DENY_STEMS if w.startswith(s)}
+        {
+            (w, _DENY_STEMS[s])
+            for w in _words(_sections(PLACEBO_PATH)[header])
+            for s in _DENY_STEMS
+            if w.startswith(s)
+        }
     )
 
-    assert hits == [], f"{header} contains denied words {hits}"
+    assert hits == [], f"{header} contains denied words (word, why denied): {hits}"
+
+
+@pytest.mark.parametrize("header", _DELIVERED_FOR_REPO_QA)
+def test_no_delivered_section_carries_a_rule_shape_of_the_candidate(header: str) -> None:
+    body = " ".join(_sections(PLACEBO_PATH)[header].lower().split())
+    hits = [(p, why) for p, why in _DENY_PHRASES.items() if re.search(rf"\b{p}\b", body)]
+
+    assert hits == [], f"{header} mirrors candidate rules (phrase, rule): {hits}"
+    assert _QUOTED_LABEL.findall(body) == [], header
 
 
 def _sentences(text: str) -> list[str]:
@@ -166,8 +203,18 @@ def test_the_delivered_sections_repeat_no_sentence_and_no_line() -> None:
     lines = [ln.strip() for h in _DELIVERED_FOR_REPO_QA for ln in placebo[h].splitlines()]
     lines = [ln for ln in lines if ln]
 
-    assert len(sentences) == len(set(sentences))
-    assert len(lines) == len(set(lines))
+    repeated = sorted({s for s in sentences if sentences.count(s) > 1})
+    repeated_lines = sorted({ln for ln in lines if lines.count(ln) > 1})
+
+    assert repeated == [], f"repeated sentences: {repeated}"
+    assert repeated_lines == [], f"repeated lines: {repeated_lines}"
+
+
+# Floors for "rules, not filler". The smallest delivered section of the candidate
+# holds eight sentences; five leaves room for longer placebo sentences. A
+# distinct-word ratio under 0.4 means the text recycles its own vocabulary.
+_MIN_SENTENCES = 5
+_MIN_DISTINCT_WORD_RATIO = 0.4
 
 
 @pytest.mark.parametrize("header", _DELIVERED_FOR_REPO_QA)
@@ -176,8 +223,8 @@ def test_each_delivered_section_reads_as_rules_not_padding(header: str) -> None:
     words = _words(body)
 
     # Rules, not filler: several sentences, a varied vocabulary, no padding runs.
-    assert len(_sentences(body)) >= 5
-    assert len(set(words)) / len(words) > 0.4
+    assert len(_sentences(body)) >= _MIN_SENTENCES, header
+    assert len(set(words)) / len(words) > _MIN_DISTINCT_WORD_RATIO, header
     assert not re.search(r"(.)\1{3,}", body)
     assert not re.search(r"\b(\w+) \1\b", body)
 
