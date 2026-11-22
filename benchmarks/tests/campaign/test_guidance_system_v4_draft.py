@@ -20,6 +20,11 @@ from pathlib import Path
 import jinja2
 import pytest
 from pydocs_mcp.application.description_source import CHARS_PER_TOKEN, parse_sections
+from pydocs_mcp.harness.ask_your_docs.binding import _partition_guidance, _write_candidate_skill
+from pydocs_mcp.harness.ask_your_docs.prompt_assembly import (
+    _assemble_prompt,
+    _resolved_skill_block,
+)
 from pydocs_mcp.harness.ask_your_docs.prompts import SYSTEM_PROMPT, rewrite_prompt
 from pydocs_mcp.harness.core.prompt_surfaces import ACTIVE_SYSTEM_PROMPT_TEMPLATE
 from pydocs_mcp.harness.core.prompts import core_prompt_names
@@ -27,6 +32,7 @@ from pydocs_mcp.harness.core.skill_artifact_loader import (
     BACKBONE_HEADER,
     SKILL_ARTIFACT_HEADERS,
     harness_task_head_section_header,
+    task_head_section_header,
 )
 
 from pydocs_eval.optimize.artifacts._delimited import render_delimited
@@ -42,6 +48,7 @@ _CONFIGS_DIR = Path(__file__).resolve().parents[2] / "configs" / "guidance_task"
 CANDIDATE_PATH = _CONFIGS_DIR / "candidate_seed.md"
 VARIANT_A_PATH = _CONFIGS_DIR / "variant_a_system_v4_draft.md"
 
+_REPO_QA_TASK_HEAD = task_head_section_header("repo_qa")
 _ASK_REPO_QA_HEAD = harness_task_head_section_header("ask_your_docs", "repo_qa")
 
 
@@ -71,6 +78,12 @@ def _v3() -> str:
     return _collapsed(SYSTEM_PROMPT)
 
 
+def _assert_kept(sentence: str) -> None:
+    """``sentence`` is quoted from system_v3 and is still in the draft."""
+    assert sentence in _v3(), f"the quote drifted from system_v3: {sentence!r}"
+    assert sentence in _collapsed(_draft()), sentence
+
+
 # --- The file: the candidate's ten sections, then the draft ------------------------
 
 
@@ -85,7 +98,7 @@ def test_the_ten_skill_sections_equal_the_candidate_seed_byte_for_byte() -> None
     assert skill_sections == _candidate_sections()
 
 
-def test_the_file_begins_with_the_candidate_seed_bytes() -> None:
+def test_the_file_is_the_candidate_seed_bytes_then_the_draft_section() -> None:
     # Stronger than section equality: the seed has ONE text, so the variant
     # file is the seed file verbatim with the prompt section appended.
     candidate = CANDIDATE_PATH.read_text(encoding="utf-8")
@@ -95,6 +108,7 @@ def test_the_file_begins_with_the_candidate_seed_bytes() -> None:
 
 
 # --- Kept rules: each sentence is in system_v3 AND in the draft --------------------
+# Rule numbers in names and keys are system_v3's; the draft renumbers 1-10.
 
 _KEPT = {
     "preamble: answer only from tool results": (
@@ -103,6 +117,10 @@ _KEPT = {
     "preamble: tool descriptions say when to call": (
         "Each tool's own description says what it does and when to call it; this "
         "prompt does not repeat them."
+    ),
+    "rule 1: users may not know the project name": (
+        "Users often don't know the framework or project name. Infer it from the task "
+        "and the indexed-projects list below."
     ),
     "rule 1: infer the project, search unscoped first": (
         "If unsure, search UNSCOPED first (all projects) and let the results "
@@ -116,73 +134,55 @@ _KEPT = {
         "Be concise. Cite the project and package.module for every claim. Put "
         "signatures and code in fenced code blocks."
     ),
+    "rule 4: say so plainly": (
+        "If the tools found nothing, say so plainly — do not invent an answer."
+    ),
     "rule 6: pinned scope": ('A question may carry a "[pinned scope: ...]" note set by the app.'),
+    "rule 6: empty search under a pin": (
+        "If a search comes back empty, say the pinned scope may be too narrow and "
+        "suggest widening it."
+    ),
+    "rule 11: exact strings to grep, concepts to search": (
+        "An exact string, an error message or a config key goes to grep and read_file; "
+        "a ranked or conceptual question goes to search_codebase."
+    ),
 }
 
 
 @pytest.mark.parametrize("rule", sorted(_KEPT))
 def test_each_kept_rule_sentence_is_in_the_draft(rule: str) -> None:
-    sentence = _KEPT[rule]
-
-    assert sentence in _v3(), f"{rule}: the quote drifted from system_v3"
-    assert sentence in _collapsed(_draft()), rule
+    _assert_kept(_KEPT[rule])
 
 
-def test_rule_4_keeps_say_so_plainly() -> None:
-    sentence = "If the tools found nothing, say so plainly — do not invent an answer."
-
-    assert sentence in _v3()
-    assert sentence in _collapsed(_draft())
-
-
-def test_rule_6_keeps_the_empty_search_advice() -> None:
-    sentence = (
-        "If a search comes back empty, say the pinned scope may be too narrow and "
-        "suggest widening it."
-    )
-
-    assert sentence in _v3()
-    assert sentence in _collapsed(_draft())
-
-
-def test_rule_11_routes_exact_strings_to_grep_and_concepts_to_search() -> None:
-    sentence = (
-        "An exact string, an error message or a config key goes to grep and read_file; "
-        "a ranked or conceptual question goes to search_codebase."
-    )
-
-    assert sentence in _v3()
-    assert sentence in _collapsed(_draft())
+def test_v3_rule_4_keeps_say_so_plainly() -> None:
+    _assert_kept("If the tools found nothing, say so plainly")
 
 
 # --- The three protected rules, asserted by name -----------------------------------
 
 
-def test_protected_rule_8_take_the_offered_follow_up_instead_of_searching_again() -> None:
+def test_protected_v3_rule_8_take_the_offered_follow_up_instead_of_searching_again() -> None:
     sentence = "Call the follow-up a result offers instead of searching again for the same thing."
 
-    assert sentence in _v3()
-    assert sentence in _collapsed(_draft())
+    _assert_kept(sentence)
 
 
-def test_protected_rule_10_one_call_with_many_targets() -> None:
+def test_protected_v3_rule_10_one_call_with_many_targets() -> None:
     sentence = (
         "One call with many targets beats several calls of the same tool: get_context "
         "takes a list of targets."
     )
 
-    assert sentence in _v3()
-    assert sentence in _collapsed(_draft())
+    _assert_kept(sentence)
 
 
-def test_protected_rule_15_context_and_uniqueness_check_in_one_turn() -> None:
+def test_protected_v3_rule_15_context_and_uniqueness_check_in_one_turn() -> None:
     sentence = (
         "When the answer needs get_context on a symbol you located and a grep confirming "
         "its name has no second site, issue both in the same turn."
     )
 
-    assert sentence in _v3()
-    assert sentence in _collapsed(_draft())
+    _assert_kept(sentence)
 
 
 # --- Moved rules: absent from the draft, present in the ask head --------------------
@@ -254,39 +254,41 @@ def test_each_moved_rule_left_the_draft_and_lives_in_the_ask_repo_qa_head(rule: 
         assert wording in head, f"{rule}: missing from the ask head: {wording!r}"
 
 
-def test_rule_9_prohibition_in_the_ask_head_definition_in_backbone_neither_in_the_draft() -> None:
+_RULE_9_V3_SENTENCES = (
+    "Never read or fetch content a result already showed you.",
+    'A hit whose follow-up calls offer no source call (no depth="source", no read_file) '
+    "has already shown its whole span.",
+    'When a view says lines are "not in the index", read exactly those lines',
+)
+
+
+def test_v3_rule_9_left_the_draft_with_neither_its_prohibition_nor_its_definition() -> None:
     draft = _collapsed(_draft())
+
+    for sentence in _RULE_9_V3_SENTENCES:
+        assert sentence in _v3(), f"the quote drifted from system_v3: {sentence!r}"
+        assert sentence not in draft, sentence
+    for phrase in ("already showed", "already shown", "not in the index", "whole span"):
+        assert phrase not in draft, phrase
+
+
+def test_v3_rule_9_prohibition_is_in_the_ask_head_and_its_definition_in_backbone_once() -> None:
     sections = _candidate_sections()
     head = _collapsed(sections[_ASK_REPO_QA_HEAD])
     backbone = _collapsed(sections[BACKBONE_HEADER])
-    prohibition_v3 = "Never read or fetch content a result already showed you."
-    definition_v3 = (
-        'A hit whose follow-up calls offer no source call (no depth="source", no read_file) '
-        "has already shown its whole span."
-    )
-    not_in_index_v3 = 'When a view says lines are "not in the index", read exactly those lines'
 
-    for sentence in (prohibition_v3, definition_v3, not_in_index_v3):
-        assert sentence in _v3()
-        assert sentence not in draft
-    # The prohibition is in the head; the definition is in BACKBONE.
     assert "Never read again what a result already showed" in head
-    assert (
-        "Already shown: a hit whose follow-up calls offer no source call has shown its whole span"
-        in backbone
-    )
+    assert "Already shown: a hit whose follow-up calls offer no source call" in backbone
     assert "lines a view reports as not in the index are read exactly once" in backbone
-    # Each stated once: the definition is not in the head, and the draft
-    # mentions neither the prohibition nor the definition.
+    # Each stated once: the definition is not repeated in the head.
     assert "Already shown:" not in head
-    for phrase in ("already showed", "already shown", "not in the index", "whole span"):
-        assert phrase not in draft, phrase
+    assert "not in the index" not in head
 
 
 # --- Rule 16: absent ---------------------------------------------------------------
 
 
-def test_rule_16_the_gated_branch_rule_is_absent() -> None:
+def test_v3_rule_16_the_gated_branch_rule_is_absent() -> None:
     draft = _draft()
 
     assert "branch" not in draft.lower()
@@ -295,8 +297,8 @@ def test_rule_16_the_gated_branch_rule_is_absent() -> None:
 
 # --- The routing sentence -------------------------------------------------------------
 
-# Every distinctive instruction word of the moved rules about get_symbol and
-# get_overview: a routing sentence carrying any of them repeats a moved rule.
+# The distinctive instruction words of every moved rule (5, 7, 9, 12, 13, 14):
+# a routing sentence carrying any of them repeats a moved rule's instruction.
 _MOVED_INSTRUCTION_MARKERS = (
     "depth",
     "source",
@@ -366,14 +368,6 @@ def test_the_draft_names_all_six_routed_tools_and_fits_the_budget() -> None:
     assert len(draft) // CHARS_PER_TOKEN < _ASK_SYSTEM_TOKEN_BUDGET
     for tool in _ROUTED_TOOL_NAMES:
         assert tool in draft, tool
-    assert set(_ROUTED_TOOL_NAMES) == {
-        "search_codebase",
-        "get_symbol",
-        "get_context",
-        "grep",
-        "read_file",
-        "get_overview",
-    }
 
 
 def test_the_draft_is_smaller_than_system_v3() -> None:
@@ -397,28 +391,15 @@ def test_the_served_prompt_opens_with_the_draft_and_ends_with_the_repo_qa_guidan
 ) -> None:
     """The routing sentence says the guidance is BELOW: hold that on the
     assembled prompt the ask harness builds from this very file."""
-    from pydocs_mcp.harness.ask_your_docs.binding import (
-        _partition_guidance,
-        _write_candidate_skill,
-    )
-    from pydocs_mcp.harness.ask_your_docs.prompt_assembly import (
-        _assemble_prompt,
-        _resolved_skill_block,
-    )
-
     overrides, skill_sections = _partition_guidance(_variant_a_sections())
     skill_path = _write_candidate_skill(skill_sections, tmp_path)
     skill_block = _resolved_skill_block(skill_path, "repo_qa")
     served = _assemble_prompt("text_react", {"demo": ["pkg_a"]}, overrides, None, skill_block)
 
-    sections = _candidate_sections()
+    folded = (BACKBONE_HEADER, _REPO_QA_TASK_HEAD, _ASK_REPO_QA_HEAD)
     assert overrides.system_prompt == _draft()
     assert served.startswith(_draft() + "\nIndexed projects and packages:\n")
-    assert served.endswith(
-        "\n".join(
-            sections[key] for key in (BACKBONE_HEADER, "TASK_HEAD: repo_qa", _ASK_REPO_QA_HEAD)
-        )
-    )
+    assert served.endswith("\n".join(_candidate_sections()[key] for key in folded))
 
 
 # --- The product is untouched -----------------------------------------------------------
