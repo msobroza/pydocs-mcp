@@ -281,7 +281,7 @@ async def build_agent_with_scope_capabilities(
         catalog,
         prompts,
         pack,
-        _resolved_skill_block(skill_override, task_name),
+        _resolved_skill_block(skill_override, task_name, cfg.guidance_task),
         scope_capabilities=scope_caps,
         branches=branches,
     )
