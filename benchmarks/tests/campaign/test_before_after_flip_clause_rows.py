@@ -115,3 +115,17 @@ def test_every_pre_registered_row_is_still_in_the_reports_catalogue() -> None:
 
     assert not missing, f"pre-registered rows left the report's catalogue: {missing}"
     assert {f"outcome: {outcome}" for outcome in TaskOutcome} <= set(PRE_REGISTERED_ROW_LABELS)
+
+
+def test_turns_before_the_needle_reads_only_tasks_that_reached_it() -> None:
+    baseline, variant = _arms()
+    # t3 never showed the Needle: its headline (13) has no turns after needle to subtract.
+    never = ended_task("t3", TaskOutcome.BUDGET_EXHAUSTED, 12)
+    baseline = arm_of(BASELINE, *baseline.per_task, never)
+    variant = arm_of(CANDIDATE, *variant.per_task, never)
+
+    rows = read_flip_clause_rows(baseline, variant)
+
+    # Per task, over t1 and t2: (4 - 1, 13 - 3) against (3 - 0, 13 - 2).
+    assert rows.turns_before_needle == PointPair(6.5, 7.0)
+    assert rows.penalised_turns == PointPair(30 / 3, 29 / 3)

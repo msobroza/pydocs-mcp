@@ -12,13 +12,16 @@ from pydocs_eval.campaign.before_after_compare import Comparison, VariantCompari
 from pydocs_eval.campaign.before_after_flip_clauses import (
     CALLS_AFTER_FIRST_GOLD_LABEL,
     CALLS_AFTER_FIRST_GOLD_READ_LABEL,
+    CLAUSE_ORDER,
     SEARCH_CALLS_LABEL,
     TOKENS_IN_PER_TASK_LABEL,
     TURNS_AFTER_NEEDLE_LABEL,
     UNCACHED_PER_TURN_LABEL,
     UNCACHED_TOTAL_LABEL,
+    FlipClause,
     FlipClauseMode,
     FlipClauseRows,
+    clause_label,
     pair_text,
 )
 from pydocs_eval.trajectory.ask_outcome import TaskOutcome
@@ -41,9 +44,15 @@ def flip_clause_rule_text(mode: FlipClauseMode) -> str:
         if mode.noise_edge is None
         else f"noise edge {mode.noise_edge:.3f}"
     )
+    named = ", ".join(
+        f"{clause_label(clause)} ({edge})"
+        if clause is FlipClause.MINIMUM_GAIN
+        else clause_label(clause)
+        for clause in CLAUSE_ORDER
+    )
     return (
         "then the guidance-task flip clauses, for this experiment only and never changing "
-        f"the verdict: (b) unanswered outcomes, (c) minimum gain ({edge}), (a) tokens"
+        f"the verdict: {named}"
     )
 
 
@@ -84,10 +93,7 @@ def _variant_block(baseline_label: str, variant_label: str, rows: FlipClauseRows
 def _outcomes_text(rows: FlipClauseRows) -> str:
     """The outcome tally, one count per outcome, every outcome named."""
     counts = rows.outcome_counts
-    tally = ", ".join(
-        f"{outcome} {counts[outcome].baseline} → {counts[outcome].variant}"
-        for outcome in TaskOutcome
-    )
+    tally = ", ".join(counts[outcome].text(outcome) for outcome in TaskOutcome)
     return f"outcomes: {tally}"
 
 

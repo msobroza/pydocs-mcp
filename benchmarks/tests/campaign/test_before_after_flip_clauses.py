@@ -12,6 +12,8 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Mapping
 
+import pytest
+
 from pydocs_eval.campaign.before_after_acceptance import (
     CorrectnessBand,
     PointPair,
@@ -21,6 +23,7 @@ from pydocs_eval.campaign.before_after_acceptance import (
     decide_variant,
 )
 from pydocs_eval.campaign.before_after_flip_clauses import (
+    CLAUSE_ORDER,
     ClauseReading,
     CountPair,
     FlipClause,
@@ -59,6 +62,7 @@ def _rows(
         tokens_in_per_task=PointPair(*tokens_in),
         uncached_tokens_in_total=PointPair(40000.0, 41000.0),
         uncached_tokens_in_per_turn=PointPair(700.0, 720.0),
+        turns_before_needle=PointPair(3.0, 2.5),
     )
 
 
@@ -86,7 +90,7 @@ def test_a_fail_reads_no_clause() -> None:
     slower = _estimates(turns=(6.0, 6.5))
 
     assert _readings(slower, _rows(tokens_in=(9000.0, 9900.0))) == [
-        (clause, ClauseReading.NOT_READ) for clause in FlipClause
+        (clause, ClauseReading.NOT_READ) for clause in CLAUSE_ORDER
     ]
 
 
@@ -109,10 +113,11 @@ def test_a_pass_with_one_more_starved_reply_is_no_flip() -> None:
     assert (gain[1], tokens[1]) == (ClauseReading.HELD, ClauseReading.HELD)
 
 
-def test_each_unanswered_class_that_rises_is_no_flip() -> None:
-    for outcome in (TaskOutcome.TIMEOUT, TaskOutcome.UNANSWERED_EMPTY):
-        [unanswered, _gain, _tokens] = _readings(_estimates(), _rows(outcomes={outcome: (0, 1)}))
-        assert unanswered[1] is ClauseReading.NO_FLIP, outcome
+@pytest.mark.parametrize("outcome", [TaskOutcome.TIMEOUT, TaskOutcome.UNANSWERED_EMPTY])
+def test_each_unanswered_class_that_rises_is_no_flip(outcome: TaskOutcome) -> None:
+    [unanswered, _gain, _tokens] = _readings(_estimates(), _rows(outcomes={outcome: (0, 1)}))
+
+    assert unanswered[1] is ClauseReading.NO_FLIP
 
 
 def test_the_unanswered_finding_prints_both_counts_of_each_class() -> None:
@@ -234,3 +239,11 @@ def test_two_clauses_fire_together_and_each_says_so() -> None:
         (FlipClause.MINIMUM_GAIN, ClauseReading.RERUN_BEFORE_FLIP),
         (FlipClause.TOKENS, ClauseReading.OWNER_SIGN_OFF_REQUIRED),
     ]
+
+
+def test_a_pass_without_penalised_turns_is_a_bug_and_says_so() -> None:
+    passed = decide_variant(_estimates(), _BAND, completeness_arm=False)
+    unturned = dataclasses.replace(_estimates(), penalised_turns=None)
+
+    with pytest.raises(ValueError, match="clause \\(c\\) read a PASS without penalised turns"):
+        decide_flip_clauses(passed, unturned, _rows(), noise_edge=_EDGE)

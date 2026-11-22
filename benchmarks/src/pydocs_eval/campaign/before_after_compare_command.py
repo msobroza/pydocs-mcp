@@ -43,7 +43,12 @@ from pydocs_eval.campaign.before_after_compare import (
     compare_arms,
 )
 from pydocs_eval.campaign.before_after_compare_text import render_comparison
-from pydocs_eval.campaign.before_after_flip_clauses import RERUN_SLICE, FlipClauseMode
+from pydocs_eval.campaign.before_after_flip_clauses import (
+    CLAUSE_ORDER,
+    RERUN_SLICE,
+    FlipClauseMode,
+    clause_label,
+)
 from pydocs_eval.campaign.before_after_fresh_draw import FreshTestDraw
 from pydocs_eval.campaign.before_after_measure import measure_arm
 from pydocs_eval.campaign.before_after_recorded_draw import draw_the_arms_recorded
@@ -91,7 +96,7 @@ def _add_flip_clause_arguments(parser: argparse.ArgumentParser) -> None:
         "--guidance-task-clauses",
         action="store_true",
         help="for the guidance-task experiment (#391) only: after each standard verdict, print "
-        "one finding per flip clause ((b) unanswered outcomes, (c) minimum gain, (a) tokens) "
+        f"one finding per flip clause ({', '.join(clause_label(c) for c in CLAUSE_ORDER)}) "
         "and the pre-registered rows; the verdict and the exit status are unchanged",
     )
     parser.add_argument(

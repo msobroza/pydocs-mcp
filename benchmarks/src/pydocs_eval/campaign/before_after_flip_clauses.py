@@ -16,7 +16,7 @@ the standard rule passed:
   the owner's recorded sign-off, the finding quoting it and the uncached rows.
 
 No new measurement: every number is a report row (``before_after_rows``) read
-off the arms, or the difference of two (:attr:`FlipClauseRows.turns_before_needle`).
+off the arms, or the per-task difference of two (:attr:`FlipClauseRows.turns_before_needle`).
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from pydocs_eval.campaign.before_after_measure import ArmMetrics
 from pydocs_eval.campaign.before_after_paired import paired_means
 from pydocs_eval.campaign.before_after_rows import REPORT_ROWS, ReportRow
 from pydocs_eval.campaign.before_after_table_cells import UNDEFINED_CELL, metric_cell
+from pydocs_eval.campaign.before_after_task_measurement import TaskMeasurement
 from pydocs_eval.trajectory.ask_outcome import TaskOutcome
 
 #: The slice clause (c) sends a small gain to.
@@ -157,6 +158,10 @@ class CountPair:
     def rose(self) -> bool:
         return self.variant > self.baseline
 
+    def text(self, label: str) -> str:
+        """``label baseline → variant``, as a whole-arm count prints."""
+        return f"{label} {self.baseline} → {self.variant}"
+
 
 @dataclass(frozen=True, slots=True)
 class FlipClauseRows:
@@ -165,6 +170,9 @@ class FlipClauseRows:
     Each :class:`PointPair` is the row's paired mean over the tasks both arms
     defined, as the verdict's estimates are; ``None`` where they share none
     (and, for the uncached total, where either arm defined none).
+    ``turns_before_needle`` is the headline less turns after needle, per task,
+    over the tasks that define both: a task that never showed the Needle has no
+    turns before it.
     """
 
     outcome_counts: Mapping[TaskOutcome, CountPair]
@@ -176,14 +184,7 @@ class FlipClauseRows:
     tokens_in_per_task: PointPair | None
     uncached_tokens_in_total: PointPair | None
     uncached_tokens_in_per_turn: PointPair | None
-
-    @property
-    def turns_before_needle(self) -> PointPair | None:
-        """The headline less turns after needle: the turns before the Needle was first shown."""
-        turns, after = self.penalised_turns, self.turns_after_needle
-        if turns is None or after is None:
-            return None
-        return PointPair(turns.baseline - after.baseline, turns.variant - after.variant)
+    turns_before_needle: PointPair | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,9 +197,17 @@ class ClauseFinding:
 
     def text(self) -> str:
         """``clause (b) unanswered outcomes: held (...)``, as the comparison prints it."""
-        return (
-            f"clause ({self.clause}) {_CLAUSE_NAMES[self.clause]}: {self.reading} ({self.detail})"
-        )
+        return f"clause {clause_label(self.clause)}: {self.reading} ({self.detail})"
+
+
+def clause_label(clause: FlipClause) -> str:
+    """``(b) unanswered outcomes``: the clause's letter and name, as every line prints it.
+
+    Example:
+        >>> ", ".join(clause_label(clause) for clause in CLAUSE_ORDER)
+        '(b) unanswered outcomes, (c) minimum gain, (a) tokens'
+    """
+    return f"({clause}) {_CLAUSE_NAMES[clause]}"
 
 
 def read_flip_clause_rows(baseline: ArmMetrics, variant: ArmMetrics) -> FlipClauseRows:
@@ -225,7 +234,15 @@ def read_flip_clause_rows(baseline: ArmMetrics, variant: ArmMetrics) -> FlipClau
         tokens_in_per_task=mean(TOKENS_IN_PER_TASK_LABEL),
         uncached_tokens_in_total=_defined_totals(_ROWS[UNCACHED_TOTAL_LABEL], baseline, variant),
         uncached_tokens_in_per_turn=mean(UNCACHED_PER_TURN_LABEL),
+        turns_before_needle=paired_means(_turns_before_needle, baseline, variant),
     )
+
+
+def _turns_before_needle(task: TaskMeasurement) -> float | None:
+    """One task's headline less its turns after needle; ``None`` unless both are defined."""
+    turns = _ROWS[PENALISED_TURNS_LABEL].read(task)
+    after = _ROWS[TURNS_AFTER_NEEDLE_LABEL].read(task)
+    return None if turns is None or after is None else turns - after
 
 
 def _count_pair(row: ReportRow, baseline: ArmMetrics, variant: ArmMetrics) -> CountPair:
@@ -267,7 +284,7 @@ def decide_flip_clauses(
 def _unanswered_outcomes(rows: FlipClauseRows) -> ClauseFinding:
     """(b): no unanswered class may rise; budget exhaustion is the standard guard's alone."""
     counts = [(outcome, rows.outcome_counts[outcome]) for outcome in UNANSWERED_CLASSES]
-    shown = ", ".join(f"{outcome} {pair.baseline} → {pair.variant}" for outcome, pair in counts)
+    shown = ", ".join(pair.text(outcome) for outcome, pair in counts)
     rose = any(pair.rose for _outcome, pair in counts)
     reading = ClauseReading.NO_FLIP if rose else ClauseReading.HELD
     detail = f"{shown}; budget exhaustion: the standard rule's guard"
@@ -281,8 +298,11 @@ def _minimum_gain(estimates: VariantEstimates, noise_edge: float | None) -> Clau
         detail = "no noise edge given: a re-run on the larger slice is read without it"
         return ClauseFinding(clause, ClauseReading.NOT_EVALUATED, detail)
     if turns is None:
-        # Unreachable under a PASS, which the standard rule never gives without it.
-        return ClauseFinding(clause, ClauseReading.NOT_READ, "penalised turns-to-answer undefined")
+        # The standard rule never passes without it: reaching here is a bug, not an input.
+        raise ValueError(
+            f"clause (c) read a PASS without penalised turns-to-answer: got {estimates!r}, "
+            "expected the pair the standard rule passed on"
+        )
     gain = -turns.delta
     fell = f"penalised turns-to-answer fell by {gain:.3f}"
     if gain < noise_edge - ESTIMATE_TOLERANCE:
@@ -340,6 +360,7 @@ __all__ = (
     "FlipClause",
     "FlipClauseMode",
     "FlipClauseRows",
+    "clause_label",
     "decide_flip_clauses",
     "outcome_row_label",
     "pair_text",
