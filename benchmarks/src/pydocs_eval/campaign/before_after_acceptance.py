@@ -24,9 +24,10 @@ from enum import StrEnum
 #: Q44: how far the penalised turns-to-answer may rise for better coverage.
 COMPLETENESS_TURN_ALLOWANCE = 0.5
 
-# A rate over n tasks and a band of one task (1/n) meet exactly at the band's
-# edge, where float subtraction can land a hair on the wrong side.
-_TOLERANCE = 1e-9
+#: A rate over n tasks and a band of one task (1/n) meet exactly at the band's
+#: edge, where float subtraction can land a hair on the wrong side. Public so the
+#: guidance-task flip clauses (``before_after_flip_clauses``) read their edge alike.
+ESTIMATE_TOLERANCE = 1e-9
 
 #: The standard rule, as the comparison prints it.
 STANDARD_RULE_SUMMARY = (
@@ -181,7 +182,7 @@ def _turns_went_down(turns: PointPair) -> _Check:
 
 
 def _exhaustion_did_not_rise(exhausted: PointPair) -> _Check:
-    if exhausted.delta <= _TOLERANCE:
+    if exhausted.delta <= ESTIMATE_TOLERANCE:
         return _Check(True, f"budget exhaustion did not rise ({exhausted.delta:+.3f})")
     return _Check(False, f"budget exhaustion rose ({exhausted.delta:+.3f})")
 
@@ -189,7 +190,7 @@ def _exhaustion_did_not_rise(exhausted: PointPair) -> _Check:
 def _within_band(name: str, pair: PointPair, band: float) -> _Check:
     """The guard: the variant stays at or above the baseline less the band."""
     shown = f"{pair.baseline:.3f} → {pair.variant:.3f}, band {band:.3f}"
-    if pair.variant >= pair.baseline - band - _TOLERANCE:
+    if pair.variant >= pair.baseline - band - ESTIMATE_TOLERANCE:
         return _Check(True, f"{name} within the band ({shown})")
     return _Check(False, f"{name} fell past the band ({shown})")
 
@@ -213,7 +214,7 @@ def _completeness_check(estimates: VariantEstimates) -> _Check:
         f"gold-site coverage {coverage.baseline:.3f} → {coverage.variant:.3f}, "
         f"penalised turns {turns.delta:+.3f} (allowance +{COMPLETENESS_TURN_ALLOWANCE})"
     )
-    if coverage.delta > 0 and turns.delta <= COMPLETENESS_TURN_ALLOWANCE + _TOLERANCE:
+    if coverage.delta > 0 and turns.delta <= COMPLETENESS_TURN_ALLOWANCE + ESTIMATE_TOLERANCE:
         return _Check(True, f"bounded step-8 rule held: {shown}")
     return _Check(False, f"bounded step-8 rule did not hold: {shown}")
 
@@ -221,6 +222,7 @@ def _completeness_check(estimates: VariantEstimates) -> _Check:
 __all__ = (
     "COMPLETENESS_RULE_SUMMARY",
     "COMPLETENESS_TURN_ALLOWANCE",
+    "ESTIMATE_TOLERANCE",
     "STANDARD_RULE_SUMMARY",
     "AcceptanceRule",
     "CorrectnessBand",

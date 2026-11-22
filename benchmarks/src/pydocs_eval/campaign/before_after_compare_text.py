@@ -4,7 +4,9 @@ Rendering only: the numbers and the verdicts arrive computed
 (``before_after_compare``, ``before_after_acceptance``). The table pairs each
 variant's estimates with its Holm-adjusted p; under it, one line per variant
 names its verdict, the rule that decided it and every reason the rule read, and
-a verdict the bounded step-8 rule reached gets the owner's sign-off line.
+a verdict the bounded step-8 rule reached gets the owner's sign-off line. Under
+the guidance-task mode the flip clauses' findings follow each verdict line and
+the pre-registered rows close the block (``before_after_flip_clauses_text``).
 """
 
 from __future__ import annotations
@@ -25,6 +27,11 @@ from pydocs_eval.campaign.before_after_compare import (
     LabelledArm,
     PairedTest,
     VariantComparison,
+)
+from pydocs_eval.campaign.before_after_flip_clauses_text import (
+    flip_clause_rule_text,
+    flip_finding_lines,
+    pre_registered_lines,
 )
 from pydocs_eval.campaign.before_after_table_cells import (
     UNDEFINED_CELL,
@@ -70,6 +77,7 @@ def render_comparison(comparison: Comparison, *, split: str) -> str:
             *(_variant_row(variant) for variant in comparison.variants),
             "",
             *(line for variant in comparison.variants for line in _verdict_lines(variant)),
+            *pre_registered_lines(comparison),
         ]
     )
 
@@ -79,6 +87,8 @@ def _provenance_lines(comparison: Comparison, split: str) -> list[str]:
     rule = STANDARD_RULE_SUMMARY
     if comparison.completeness_arm:
         rule = f"{COMPLETENESS_RULE_SUMMARY}; otherwise {STANDARD_RULE_SUMMARY}"
+    if comparison.flip_clauses is not None:
+        rule = f"{rule}; {flip_clause_rule_text(comparison.flip_clauses)}"
     return [
         f"- split: `{split}`",
         f"- baseline: {_arm_line(comparison.baseline)}",
@@ -154,7 +164,9 @@ def _verdict_lines(variant: VariantComparison) -> list[str]:
     decision = variant.decision
     reasons = "; ".join(decision.reasons)
     lines = [f"- `{variant.arm.label}`: {_verdict_cell(decision)}: {reasons}."]
-    return [*lines, f"  - {_SIGN_OFF}"] if decision.owner_sign_off else lines
+    if decision.owner_sign_off:
+        lines.append(f"  - {_SIGN_OFF}")
+    return [*lines, *flip_finding_lines(variant)]
 
 
 __all__ = ("render_comparison",)

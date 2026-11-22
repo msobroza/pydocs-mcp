@@ -11,7 +11,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from statistics import fmean
 
+from pydocs_eval.campaign.before_after_acceptance import PointPair
 from pydocs_eval.campaign.before_after_measure import ArmMetrics
 from pydocs_eval.campaign.before_after_rows import MetricDirection
 from pydocs_eval.campaign.before_after_task_measurement import TaskValue
@@ -33,6 +35,19 @@ def paired_values(
     before, after = baseline.values_by_task(read), candidate.values_by_task(read)
     shared = sorted(before.keys() & after.keys())
     return tuple(before[task_id] for task_id in shared), tuple(after[task_id] for task_id in shared)
+
+
+def paired_means(read: TaskValue, baseline: ArmMetrics, variant: ArmMetrics) -> PointPair | None:
+    """Both arms' means over the tasks both defined; ``None`` when they share none.
+
+    The point estimate the acceptance rule and the guidance-task flip clauses read.
+
+    Example:
+        >>> paired_means(lambda task: task.reached_gold, before, after)  # doctest: +SKIP
+        PointPair(baseline=0.5, variant=1.0)
+    """
+    before, after = paired_values(read, baseline, variant)
+    return PointPair(fmean(before), fmean(after)) if before else None
 
 
 def improvement_p(
@@ -87,4 +102,10 @@ def mcnemar_contrast(before: Sequence[float], after: Sequence[float]) -> McNemar
     return McNemarContrast(delta=delta, low=low, high=high, p_value=p_value)
 
 
-__all__ = ("McNemarContrast", "improvement_p", "mcnemar_contrast", "paired_values")
+__all__ = (
+    "McNemarContrast",
+    "improvement_p",
+    "mcnemar_contrast",
+    "paired_means",
+    "paired_values",
+)
