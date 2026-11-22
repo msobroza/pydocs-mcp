@@ -19,6 +19,7 @@ from pydocs_mcp.harness.ask_your_docs.scope_capabilities import (
 )
 from pydocs_mcp.harness.core.prompt_override import PromptOverrides, assemble_system_prompt
 from pydocs_mcp.harness.core.prompt_surfaces import ACTIVE_SYSTEM_PROMPT_TEMPLATE
+from pydocs_mcp.retrieval.config.ask_your_docs_models import GuidanceTask
 
 # Back-compat name: the override type is the harness-generic core seam
 # (consumed by the eval binding and the UI through this import site).
@@ -72,16 +73,25 @@ def _assemble_prompt(
     return assemble_system_prompt(system, catalog_block, session_start_context, skill_block)
 
 
-def _resolved_skill_block(skill_override: Path | None, task_name: str | None) -> str | None:
+def _resolved_skill_block(
+    skill_override: Path | None,
+    task_name: str | None,
+    guidance_task: GuidanceTask = GuidanceTask.NONE,
+) -> str | None:
     """The skill guidance for this build, or ``None`` — the byte-identity default.
 
-    The backbone folds whenever skill guidance is requested at all
-    (``skill_override`` or ``task_name`` given); the harness-invariant task
-    head and this harness's harness task head fold only when ``task_name``
-    names the arm's task. An unknown task name fails loudly in
-    ``task_head_section_header`` (the enumerated v1 set); an invalid override
-    document fails loudly in the loader — never a silent fallback.
+    The task whose guidance folds resolves here, the one place every build passes
+    through (chat page, CLI and eval runner alike): an explicit ``task_name`` wins;
+    otherwise the ``ask_your_docs.guidance_task`` knob; ``NONE`` folds nothing
+    (issue #391). The backbone folds whenever skill guidance is requested at all
+    (``skill_override`` or a resolved task); the harness-invariant task head and
+    this harness's harness task head fold only when a task is resolved. An
+    unknown task name fails loudly in ``task_head_section_header`` (the
+    enumerated v1 set); an invalid document — the packaged seed included, every
+    section checked against its cap — fails loudly in the loader, never a silent
+    fallback to an unguided prompt.
     """
+    task_name = task_name if task_name is not None else _knob_task_name(guidance_task)
     if skill_override is None and task_name is None:
         return None
     # WHY function-local: the loader pulls in the description grammar; the
@@ -94,3 +104,8 @@ def _resolved_skill_block(skill_override: Path | None, task_name: str | None) ->
     task_head = artifact.task_head(task_name)
     harness_task_head = artifact.harness_task_head("ask_your_docs", task_name)
     return f"{artifact.backbone}\n{task_head}\n{harness_task_head}"
+
+
+def _knob_task_name(guidance_task: GuidanceTask) -> str | None:
+    """The task the knob names, or ``None`` for ``NONE`` (no guidance at all)."""
+    return None if guidance_task is GuidanceTask.NONE else guidance_task.value

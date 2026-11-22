@@ -107,11 +107,27 @@ def test_an_invalid_overlay_is_an_input_error_naming_its_flag(
     tmp_path: Path, stub_command: FakeArmRun, capsys: pytest.CaptureFixture[str]
 ) -> None:
     repo = git_repo_with_two_descriptions(tmp_path)
-    overlay = write_overlay(tmp_path, {"guidance_task": "repo_qa"})
+    overlay = write_overlay(tmp_path, {"nonsense_knob": "repo_qa"})
 
     assert main(before_after_argv(tmp_path, repo, "--baseline-settings", str(overlay))) == 2
 
     assert "--baseline-settings" in capsys.readouterr().err
+
+
+def test_a_guidance_task_overlay_plans_with_its_own_digest_and_diff(
+    tmp_path: Path, stub_command: FakeArmRun, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The product's knob (issue #391) is an ordinary overlay key: accepted at plan
+    time, so the same commit with and without it is not an identical pair."""
+    repo = git_repo_with_two_descriptions(tmp_path)
+    candidate = write_overlay(tmp_path, {"guidance_task": "repo_qa"}, "guided.yaml")
+
+    assert main(_same_commit_argv(tmp_path, repo, "--candidate-settings", str(candidate))) == 0
+
+    printed = capsys.readouterr().out
+    diff = printed[printed.index("diff (baseline -> candidate):") :]
+    assert "guidance_task: (default) -> repo_qa" in diff
+    assert stub_command.roles == []
 
 
 def test_each_arms_settings_file_carries_its_own_variant(
