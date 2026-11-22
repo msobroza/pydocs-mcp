@@ -17,12 +17,12 @@ Whether there is anything to announce depends on a paid run that has not happene
 
 ## 1. The root changelog entry a winning PR would carry
 
-Draft only; it goes into `CHANGELOG.md` under `## [Unreleased]` in the winning PR, and nowhere before. The names are those on this branch.
+Draft only. It goes into `CHANGELOG.md` under `## [Unreleased]` → `### Changed` (it is a default flip) in the winning PR, and nowhere before. The names are those on this branch. The two bracketed or italic parts are notes for the writer: settle them and remove them before the entry lands.
 
 > - **Ask-your-docs chat now folds the search guidance into its prompt, and uses a slimmer system prompt.** `ask_your_docs.guidance_task` (`none` | `repo_qa` | `vuln` | `bug_loc`) now defaults to `repo_qa`. Chat therefore receives the packaged seed's `BACKBONE`, `TASK_HEAD: repo_qa` and `HARNESS_TASK_HEAD: ask_your_docs.repo_qa` sections after the catalog and the session-start pack, and `system_v4` is the active system prompt. The packaged search-guidance seed (`harness/core/skills/search_guidance_seed.md`) is rewritten in five sections: `BACKBONE`, `TASK_HEAD: repo_qa` and the three `ask_your_docs.*` heads. In `BACKBONE`, the two breadth passages are now conditional: decompose a question only when it holds several behaviours, and treat five documents as a ceiling, not a target. `BACKBONE` also gains the definition of "already shown". In `TASK_HEAD: repo_qa`, the confirming read is now conditional and the "get_symbol where exact signatures matter" clause is dropped. The six chat rules that `system_v4` no longer carries now live in the `ask_your_docs.*` heads.
 >   - **Evidence:** one chat model (`qwen/qwen3.8-27b`, thinking mode, 12-Turn budget) on one slice (`repoqa-qa/small_dev`, 20 tasks[, re-run on `repoqa-qa/dev`, 100 tasks]). It is not a general result.
 >   - **Unmeasured readers:** the `BACKBONE` change is unmeasured for the `vuln` and `bug_loc` tasks and for the external harness. The external harness's `repo_qa` fold also reads the rewritten `TASK_HEAD: repo_qa`, including the dropped signature clause, and that is unmeasured too. Their own heads (`TASK_HEAD: vuln`, `TASK_HEAD: bug_loc`, the three `external.*` heads) are byte-identical. To restore the old text for those readers, restore the two `BACKBONE` breadth passages (and, for the external `repo_qa` reader, the old `TASK_HEAD: repo_qa`) from the previous seed.
->   - **Way back:** `guidance_task: none` restores the old prompt. *(Holds only if the winning PR makes the served template follow the knob; see owner point 5.1.)*
+>   - **Revert:** `guidance_task: none` restores the old prompt. *[Writer's note, remove before landing: this holds only if the winning PR makes the served template follow the knob (part 5, point 1). Otherwise reword it.]*
 
 **Where what landed differs from the spec's wording of this entry:**
 
@@ -32,11 +32,11 @@ Draft only; it goes into `CHANGELOG.md` under `## [Unreleased]` in the winning P
 
 ## 2. The eval-suite changelog entry of the same PR
 
-Draft only; it goes into `benchmarks/CHANGELOG.md` in the winning PR. The names are those on this branch.
+Draft only. It goes into `benchmarks/CHANGELOG.md` under `## [Unreleased]` in the winning PR. The loader, compare mode and overlays go under `### Added`; the `ESTIMATE_TOLERANCE` rename goes under `### Changed`. The names are those on this branch.
 
 > - **The arm overlay's guidance file may hold a `SYSTEM_PROMPT` section.** `campaign/before_after_arm_settings.py` parses the `guidance_sections` file strictly. It allows `SYSTEM_PROMPT` beside the ten skill sections and still refuses every other header (`REWRITE_PROMPT` included) and a prompt-only file. The skill sections are validated by the product loader as before. The prompt section is validated by the ask prompt's own rules: non-empty, within 1,200 tokens, every routed tool named. Those rules are now public in `optimize/artifacts/ask_prompt.py` as `system_prompt_violations()` and `SYSTEM_PROMPT_KEY`.
 > - **Arm overlays accept `guidance_task`.** The product key is accepted in an arm overlay and moves the arm's settings digest (`ARM_OVERLAY_SHAPE` names it).
-> - **`before-after-compare --guidance-task-clauses [--noise-edge EDGE]`** is an opt-in mode for this experiment only. After each variant's standard verdict it prints one finding per added clause, in reading order: (b) unanswered outcomes, (c) minimum gain, (a) tokens. It then prints a `### Pre-registered rows (reported, not gating)` section. The verdict, its reasons and the exit status are unchanged, and without the flag the output is byte-identical. `--noise-edge` is the slice's noise edge in penalised Turns (0.6 for the 20-task slice). Leave it out when reading the re-run on `repoqa-qa/dev`. Three combinations are refused as input errors (exit 2): the mode with `--completeness-arm`, `--noise-edge` without the mode, and an edge ≤ 0. Two supporting changes: `before_after_acceptance.ESTIMATE_TOLERANCE` is now public (it was `_TOLERANCE`; the value is unchanged), and `before_after_paired.paired_means` is the shared paired point estimate.
+> - **`before-after-compare --guidance-task-clauses [--noise-edge EDGE]`** is an opt-in mode for this experiment only. After each variant's standard verdict it prints one finding per added clause, in reading order: (b) unanswered outcomes, (c) minimum gain, (a) tokens. A variant that did not PASS gets "not read" for all three. It then prints a `### Pre-registered rows (reported, not gating)` section. The verdict, its reasons and the exit status are unchanged, and without the flag the output is byte-identical. `--noise-edge` is the slice's noise edge in penalised Turns (0.6 for the 20-task slice). Leave it out when reading the re-run on `repoqa-qa/dev`. Three combinations are refused as input errors (exit 2): the mode with `--completeness-arm`, `--noise-edge` without the mode, and an edge ≤ 0. Two supporting changes: `before_after_acceptance.ESTIMATE_TOLERANCE` is now public (it was `_TOLERANCE`; the value is unchanged), and `before_after_paired.paired_means` is the shared paired point estimate.
 > - **The guidance-task experiment's three variant overlays and their guidance files**, in `benchmarks/configs/guidance_task/`:
 >   - `arm_variant_a_system_v4_draft.yaml` → `variant_a_system_v4_draft.md`: the candidate seed's ten sections plus the `SYSTEM_PROMPT` draft of `system_v4`. This is the variant that decides.
 >   - `arm_variant_b_candidate_seed.yaml` → `candidate_seed.md`: `system_v3` plus the candidate seed. Diagnostic.
@@ -58,7 +58,7 @@ From the spec's "Outcomes". No ticket of this series does any of it.
 
 1. **Flip the default** of `ask_your_docs.guidance_task` to `repo_qa`: the `AskYourDocsConfig` field and its restatement in `defaults/default_config.yaml`, including that YAML's "WHY off" comment.
 2. **Ship the candidate as the packaged seed.** `benchmarks/configs/guidance_task/candidate_seed.md` replaces `python/pydocs_mcp/harness/core/skills/search_guidance_seed.md`, including the `BACKBONE` rewrite.
-3. **Ship `system_v4` as a new template** (`harness/core/prompts/system_v4.j2`), with the gated branch rule appended as its last rule. The draft's rules run 1–10, so the branch rule becomes 11. Earlier templates are not edited. `ACTIVE_SYSTEM_PROMPT_TEMPLATE` (`harness/core/prompt_surfaces.py`, `"system_v3"` today) moves only in the way owner point 5.1 settles.
+3. **Ship `system_v4` as a new template** (`harness/core/prompts/system_v4.j2`), with the gated branch rule appended as its last rule. The draft's rules run 1–10, so the branch rule becomes 11. Earlier templates are not edited. `ACTIVE_SYSTEM_PROMPT_TEMPLATE` (`harness/core/prompt_surfaces.py`, `"system_v3"` today) moves only in the way part 5, point 1 settles.
 4. **Regenerate the goldens and the optimizer-side seeds** that follow the active prompt. The `system_v3` golden (`tests/fixtures/goldens/ask_your_docs_system_v3.txt`) stays as it is, because the `none` byte-identity test compares against it.
 5. **Record the two fingerprint moves in the umbrella issue #366:** the ask prompt's (a second time) and the search skill's (once).
 6. **Keep every routed tool named in the template a live tool.**
@@ -88,22 +88,21 @@ The figures are the spec's ("Cost and budget"), quoted with their ranges. No pri
 
 None of these blocked the $0 work.
 
-1. **`none` after a win.** "`guidance_task: none` restores the old prompt" is true only if a build under `none` still serves `system_v3` after the win. On this branch the active template is one module-level switch: `ACTIVE_SYSTEM_PROMPT_TEMPLATE = "system_v3"` in `harness/core/prompt_surfaces.py`, rendered once into `prompts.SYSTEM_PROMPT`. Moving that switch to `system_v4` would make `none` serve `system_v4` with no guidance: a prompt missing six rules, which is neither the old prompt nor a measured one. There are two options:
+1. **`none` after a win.** "`guidance_task: none` restores the old prompt" is true only if a build under `none` still serves `system_v3` after the win. On this branch the active template is one module-level switch: `ACTIVE_SYSTEM_PROMPT_TEMPLATE = "system_v3"` in `harness/core/prompt_surfaces.py`, rendered from it into `prompts.SYSTEM_PROMPT` and, on every build, by `harness/ask_your_docs/prompt_assembly.py` (both branch-selector forms). Moving that switch to `system_v4` would make `none` serve `system_v4` with no guidance: a prompt missing six rules, which is neither the old prompt nor a measured one. There are two options:
    - the winning PR makes the served template follow the knob (`none` serves `system_v3`; any other value serves `system_v4`);
    - or the owner rewords the sentence.
 
    This is the winning PR's design, and no ticket of this series builds it.
-2. **The tokens clause's row (as #462 coded it).** Clause (a) gates only on `tokens in (per task)`, read as the paired mean over the tasks both arms define, the same way the verdict's estimates are read. It fires on a strict rise (more than `ESTIMATE_TOLERANCE`).
+2. **The tokens clause's row (as #462 coded it).** Clause (a) gates only on `tokens in (per task)`, read as the paired mean over the tasks both arms define, the same way the verdict's estimates are read. On a strict rise (more than `ESTIMATE_TOLERANCE`) it prints "owner's sign-off required", not "no flip".
    - The uncached rows exist only as a total and per Turn. The finding quotes both, `uncached tokens in (total)` and `uncached tokens in (per turn)`, and neither gates.
    - If either arm recorded no usage, the clause prints **not read** with `n/a` and neither passes nor fires.
 3. **The unanswered-outcomes clause includes `unanswered_empty`**, on the literal reading of "no unanswered outcome class may rise" (as #462 coded it). It compares whole-arm counts of `starved_reply`, `timeout` and `unanswered_empty` and fires on any strict rise. Budget exhaustion is left to the standard rule's guard and is not counted a second time.
-4. **The exit status (as #462 coded it)** is the standard verdict's. The mode never changes it. The status covers every variant: 0 only when all of them PASS, 1 when any FAILs, 2 for no verdict or an input error. So a PASS whose clause says "no flip" can still exit 0, and a PASS of (a) exits 1 when a diagnostic variant fails. Read (a)'s findings, not the exit code.
+4. **The exit status (as #462 coded it)** is the standard verdict's. The mode never changes it. The status covers every variant. It is 2 when any variant has no verdict, or on an input error. Otherwise it is 1 when any variant FAILs, and 0 only when all of them PASS. So a PASS whose clause says "no flip" can still exit 0, and a PASS of (a) exits 1 when a diagnostic variant fails. Read (a)'s findings, not the exit code.
 5. **Other readings #462 coded, to confirm with the above:**
    - Clause (c)'s gain is the drop in penalised Turns-to-answer from the verdict's own estimate. It counts as "under the edge" only if gain < edge − `ESTIMATE_TOLERANCE`, so a gain exactly at 0.6 holds.
    - "Turns before the Needle" is computed per task, as the headline less `turns after needle`, over the tasks where both are defined. A task that never showed the Needle is left out.
-   - Findings print for every variant, not only (a).
    - The mode with `--completeness-arm` is refused, and so is `--noise-edge` without the mode.
-6. **The band.** 0.050 is one task of 20 and is the floor. The run's own A/A pair sets the band and may widen it, and the printed table states the band used.
+6. **The Correctness band.** 0.050 is one task of 20 and is the floor. The run's own A/A pair sets the band and may widen it, and the printed table states the band used.
 7. **The re-run's sample.** `small_dev` is drawn from `dev`, so the 100 tasks include the 20 already run. It is a larger sample of the same pool, not a fresh one, and it consumes no test split.
 8. **What the earlier tickets reported, as it happened:**
    - **No stop-and-report exit was triggered** in #461, #463, #464 or #465.
@@ -153,7 +152,10 @@ The tickets landed in parallel, so this note is the series' one integrated check
 - **Eval:** 5 failures, all raised inside a `pydocs_eval.runner` subprocess: `benchmarks/tests/core/runner_resume/test_runner_resume_cli.py::test_cli_run_id_resumes_and_the_report_covers_every_task`, plus 4 in `benchmarks/tests/core/test_runner_results_dir_and_commit.py`.
 - **Owner or orchestrator action:** re-run both suites where the model is cached, or with network access. Expect green there.
 - **Run conditions:** both suites ran serially (`pytest-xdist` is not in the dev group), with `uv sync --frozen --group dev --extra harness-ask-your-docs`. The eval suite also needs `uv pip install -e "benchmarks[optimizers-gepa]"` (unidiff, gepa), which the root lock does not install. That changes no lockfile.
-- **Not run:** the Rust gates and `pip-audit`, because the series changes nothing on the Rust or dependency side.
+- **Dependency and Rust gates:**
+  - The `uv export` plus `pip-audit` gate passes: "No known vulnerabilities found, 12 ignored", with CI's ignore list.
+  - `cargo test` passes: 13 tests.
+  - Not run: `cargo fmt --check` and `cargo clippy` are not installed on this box, and the maturin-built parity tests were skipped. The series changes no Rust file.
 - **The series' own tests pass, run on their own:**
   - 85 product tests: the knob's config and served-prompt modules, the binding modules and the prompt-seam pins.
   - 260 eval tests: the overlay loader, the `SYSTEM_PROMPT` section, the block probe, the variant command, the flip clauses (three modules), the candidate seed, the placebo, the `system_v4` draft, the variant overlays, and the unedited compare and acceptance modules.
