@@ -10,7 +10,8 @@
 # only in the text it loads. Every other setting is the before/after default
 # the ladder's repoqa-qa arms use: the serving file below (which leaves
 # max_agent_turns at the product default, a 12-Turn budget), the pinned LLM
-# block, the pinned architecture and the citing scaffold. It sets no
+# block (qwen/qwen3.8-27b in thinking mode), the pinned architecture and the
+# citing scaffold. It sets no
 # guidance_task: on the eval path the binding hands the build an explicit task
 # name (repo_qa) whenever an arm carries guidance, and an explicit name wins
 # over the knob.
@@ -23,7 +24,9 @@
 # If the program's $25 stop-and-ask bites, drop (c) first, then (b); never (a).
 #
 # Plan (free; prints the plan and spends nothing). The paid run adds
-# --confirm-spend, and only after the owner's go:
+# --confirm-spend, and only after the owner's go. The first paid arm also runs
+# the baseline; every later one adds --reuse-baseline <that baseline arm dir>
+# as well, so the baseline runs once:
 #   python -m pydocs_eval.campaign before-after \
 #     --baseline <experiment head sha> --candidate <experiment head sha> \
 #     --candidate-settings benchmarks/configs/guidance_task/arm_variant_a_system_v4_draft.yaml \

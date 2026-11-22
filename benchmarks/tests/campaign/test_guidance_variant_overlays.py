@@ -20,6 +20,7 @@ import argparse
 import asyncio
 import re
 import shlex
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,7 @@ from pydocs_eval.optimize.artifacts.ask_prompt import SYSTEM_PROMPT_KEY
 from pydocs_eval.task_rendering import DEFAULT_TASK_SCAFFOLD
 
 from ._fakes import FakeArmRun, FakeHarnessRunner, eval_task, git_repo_with_two_descriptions
+from .test_before_after_reuse_baseline import write_finished_baseline
 
 CaptureFixture = pytest.CaptureFixture[str]
 
@@ -46,6 +48,17 @@ _FLAG = "--candidate-settings"
 _DIFF_HEADING = "diff (baseline -> candidate):"
 _PLAN_MARKER = "# Plan (free"
 _PLACEHOLDER = re.compile(r"<[^>]*>")
+_PLACEHOLDER_TOKEN = "<placeholder>"
+_COMMIT_FLAGS = ("--baseline", "--candidate")
+_HEADER_PLAN_FLAGS = (
+    *_COMMIT_FLAGS,
+    "--candidate-settings",
+    "--config",
+    "--llm-block",
+    "--split",
+    "--workspace",
+    "--model",
+)
 _PATH_FLAGS = ("--candidate-settings", "--config", "--llm-block")
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -61,7 +74,7 @@ _LADDER_LLM_BLOCK = _REPO_ROOT / "benchmarks" / "configs" / "ask_openrouter_qwen
 _REFUSED_KEYS = ("guidance_task", "architecture", "max_agent_turns", "llm", "task_scaffold")
 
 
-def _payload(path: Path) -> dict[str, object]:
+def _overlay_yaml(path: Path) -> dict[str, object]:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
@@ -73,13 +86,13 @@ def test_exactly_three_overlays_exist_one_per_variant() -> None:
 
 
 def test_each_overlays_only_key_is_guidance_sections() -> None:
-    assert [list(_payload(path)) for path in _VARIANTS] == [[GUIDANCE_SECTIONS_KEY]] * 3
+    assert [list(_overlay_yaml(path)) for path in _VARIANTS] == [[GUIDANCE_SECTIONS_KEY]] * 3
 
 
 # --- the overlay loader, at plan time -------------------------------------------
 
 
-def _loaded(path: Path) -> ArmOverlay:
+def _load_variant_overlay(path: Path) -> ArmOverlay:
     return load_arm_overlay(path, flag=_FLAG)
 
 
@@ -92,7 +105,7 @@ def _loaded(path: Path) -> ArmOverlay:
     ],
 )
 def test_each_overlay_loads_its_guidance_file_at_plan_time(path: Path, guidance_file: str) -> None:
-    overlay = _loaded(path)
+    overlay = _load_variant_overlay(path)
 
     assert overlay.guidance_sections_path == str(_VARIANT_DIR / guidance_file)
     assert overlay.product == {}, "no product key: the variant is its text alone"
@@ -102,8 +115,13 @@ def test_each_overlay_loads_its_guidance_file_at_plan_time(path: Path, guidance_
 # --- the plan, through the verb's own entry point --------------------------------
 
 
-def _header_plan_argv(path: Path) -> list[str]:
-    """The free plan command the overlay's header writes out, as an argv."""
+def _header_plan_command(path: Path) -> dict[str, str]:
+    """The free plan command the overlay's header writes out, as ``{flag: value}``.
+
+    Strict on purpose: the command must be the verb plus exactly the flags of
+    ``_HEADER_PLAN_FLAGS``, each with a value, so a dropped line continuation,
+    an added flag or a bare switch fails here instead of planning something else.
+    """
     header = path.read_text(encoding="utf-8").split(_PLAN_MARKER, 1)[1]
     lines = [line.removeprefix("#").strip() for line in header.splitlines()]
     start = next(i for i, line in enumerate(lines) if line.startswith("python -m "))
@@ -112,20 +130,27 @@ def _header_plan_argv(path: Path) -> list[str]:
         command.append(line.removesuffix("\\").strip())
         if not line.endswith("\\"):
             break
-    # A placeholder (`<experiment head sha>`) is one value; the test binds it to HEAD.
-    return shlex.split(_PLACEHOLDER.sub("HEAD", " ".join(command)))
+    # A placeholder (`<experiment head sha>`) is one value, not three words.
+    argv = shlex.split(_PLACEHOLDER.sub(_PLACEHOLDER_TOKEN, " ".join(command)))
+    assert argv[:4] == ["python", "-m", "pydocs_eval.campaign", "before-after"], argv
+    flags, values = argv[4::2], argv[5::2]
+    assert sorted(flags) == sorted(_HEADER_PLAN_FLAGS), argv
+    assert not any(value.startswith("--") for value in values), argv
+    return dict(zip(flags, values, strict=True))
 
 
-def _runnable(argv: list[str], tmp_path: Path, repo: Path) -> list[str]:
-    """The header's argv with its placeholders bound to the test's fakes."""
-    assert argv[:3] == ["python", "-m", "pydocs_eval.campaign"]
+def _plan_argv_bound_to_fakes(path: Path, tmp_path: Path, repo: Path) -> list[str]:
+    """The header's command with its placeholders and paths bound to the test's fakes."""
     bound: list[str] = []
-    for flag, value in zip(argv[4::2], argv[5::2], strict=True):
+    for flag, value in _header_plan_command(path).items():
         bound += [flag, _bound_value(flag, value, tmp_path)]
-    return [argv[3], *bound, "--repo", str(repo), "--out", str(tmp_path / "out")]
+    return ["before-after", *bound, "--repo", str(repo), "--out", str(tmp_path / "out")]
 
 
 def _bound_value(flag: str, value: str, tmp_path: Path) -> str:
+    if value == _PLACEHOLDER_TOKEN:
+        assert flag in _COMMIT_FLAGS, f"placeholder for {flag}: only the commits are left open"
+        return "HEAD"
     if flag == "--workspace":
         return str(tmp_path / "ws")
     if flag in _PATH_FLAGS:
@@ -138,7 +163,7 @@ def _plan(path: Path, tmp_path: Path, stub_command: FakeArmRun, capsys: CaptureF
     tmp_path.mkdir(parents=True, exist_ok=True)
     repo = git_repo_with_two_descriptions(tmp_path)
 
-    assert main(_runnable(_header_plan_argv(path), tmp_path, repo)) == 0
+    assert main(_plan_argv_bound_to_fakes(path, tmp_path, repo)) == 0
 
     assert stub_command.roles == [], "a plan starts no rollout"
     return capsys.readouterr().out
@@ -147,7 +172,8 @@ def _plan(path: Path, tmp_path: Path, stub_command: FakeArmRun, capsys: CaptureF
 def _digests(printed: str) -> tuple[str, str]:
     """The (baseline, candidate) settings digests the plan printed."""
     found = re.findall(r"(baseline|candidate)\s+([0-9a-f]{64})\s", printed)
-    return dict(found)["baseline"], dict(found)["candidate"]
+    assert [role for role, _ in found] == ["baseline", "candidate"], found
+    return found[0][1], found[1][1]
 
 
 def _diff_rows(printed: str) -> list[str]:
@@ -184,7 +210,7 @@ def test_each_overlay_plans_with_its_own_digest_and_prints_the_guidance_differen
     assert baseline != candidate
     assert f"candidate  {candidate}  ({path})" in printed
     assert _diff_rows(printed) == [
-        f"guidance_sections: (default) -> {_loaded(path).guidance_sections_path}"
+        f"guidance_sections: (default) -> {_load_variant_overlay(path).guidance_sections_path}"
     ], "the guidance text is the only difference from the baseline"
 
 
@@ -209,7 +235,7 @@ def _planned_arm_settings(
     plans: list[object] = []
     monkeypatch.setattr(before_after_command, "render_plan", lambda plan: plans.append(plan) or "")
     repo = git_repo_with_two_descriptions(tmp_path)
-    assert main(_runnable(_header_plan_argv(path), tmp_path, repo)) == 0
+    assert main(_plan_argv_bound_to_fakes(path, tmp_path, repo)) == 0
     args = argparse.Namespace(max_usd=None, base_url=None, config=tmp_path / "serve.yaml")
     return {
         role: arm_settings_for(args, plans[0], role=role, arm_dir=tmp_path / role)  # type: ignore[arg-type]
@@ -217,7 +243,9 @@ def _planned_arm_settings(
     }
 
 
-def _handed(settings: ArmSettings, tmp_path: Path) -> tuple[list[dict[str, str]], list[object]]:
+def _guidance_handed_to_rollouts(
+    settings: ArmSettings, tmp_path: Path
+) -> tuple[list[dict[str, str]], list[object]]:
     """The guidance and task name every rollout of the arm was handed."""
     runner = FakeHarnessRunner(tmp_path / f"traces-{settings.role}")
     tasks = (eval_task("t1"), eval_task("t2"))
@@ -235,10 +263,10 @@ def test_each_variant_hands_every_rollout_its_sections_with_the_repo_qa_task_nam
 ) -> None:
     arms = _planned_arm_settings(path, tmp_path, stub_command, monkeypatch)
 
-    guidance, task_names = _handed(arms["candidate"], tmp_path)
+    guidance, task_names = _guidance_handed_to_rollouts(arms["candidate"], tmp_path)
 
     assert [len(handed) for handed in guidance] == [sections, sections]
-    assert guidance == [dict(_loaded(path).guidance_sections)] * 2
+    assert guidance == [dict(_load_variant_overlay(path).guidance_sections)] * 2
     assert (SYSTEM_PROMPT_KEY in guidance[0]) is (path == VARIANT_A)
     assert task_names == [REPO_QA_TASK_NAME] * 2
 
@@ -248,7 +276,7 @@ def test_the_arm_without_an_overlay_still_hands_every_rollout_no_guidance(
 ) -> None:
     arms = _planned_arm_settings(VARIANT_A, tmp_path, stub_command, monkeypatch)
 
-    guidance, _ = _handed(arms["baseline"], tmp_path)
+    guidance, _ = _guidance_handed_to_rollouts(arms["baseline"], tmp_path)
 
     assert guidance == [{}, {}]
 
@@ -268,7 +296,9 @@ def test_variant_c_costs_what_variant_b_costs_on_the_three_sections_repo_qa_deli
         task_head_section_header(REPO_QA_TASK_NAME),
         harness_task_head_section_header("ask_your_docs", REPO_QA_TASK_NAME),
     )
-    seed, placebo = (_loaded(path).guidance_sections for path in (VARIANT_B, VARIANT_C))
+    seed, placebo = (
+        _load_variant_overlay(path).guidance_sections for path in (VARIANT_B, VARIANT_C)
+    )
 
     assert [len(placebo[header]) for header in delivered] == [
         len(seed[header]) for header in delivered
@@ -277,7 +307,9 @@ def test_variant_c_costs_what_variant_b_costs_on_the_three_sections_repo_qa_deli
 
 
 def test_variant_a_carries_variant_bs_ten_skill_sections_and_the_draft() -> None:
-    draft, seed = (dict(_loaded(path).guidance_sections) for path in (VARIANT_A, VARIANT_B))
+    draft, seed = (
+        dict(_load_variant_overlay(path).guidance_sections) for path in (VARIANT_A, VARIANT_B)
+    )
 
     assert draft.pop(SYSTEM_PROMPT_KEY).strip()
     assert draft == seed
@@ -285,7 +317,7 @@ def test_variant_a_carries_variant_bs_ten_skill_sections_and_the_draft() -> None
 
 @pytest.mark.parametrize("key", _REFUSED_KEYS)
 def test_no_overlay_sets_a_key_beyond_the_guidance(key: str) -> None:
-    assert all(key not in _payload(path) for path in _VARIANTS)
+    assert all(key not in _overlay_yaml(path) for path in _VARIANTS)
 
 
 # --- the headers ------------------------------------------------------------------
@@ -319,15 +351,14 @@ def test_each_header_says_how_the_arms_fit_together(path: Path) -> None:
 
 @pytest.mark.parametrize("path", _VARIANTS)
 def test_each_header_writes_the_free_plan_command_and_no_paid_one(path: Path) -> None:
-    argv = _header_plan_argv(path)
-    flags = dict(zip(argv[4::2], argv[5::2], strict=True))
+    flags = _header_plan_command(path)
 
     assert flags["--candidate-settings"] == str(path.relative_to(_REPO_ROOT))
     assert flags["--split"] == "repoqa-qa/small_dev"
     assert flags["--model"] == "qwen/qwen3.8-27b"
     assert (_REPO_ROOT / flags["--config"]) == _LADDER_SERVING
     assert (_REPO_ROOT / flags["--llm-block"]) == _LADDER_LLM_BLOCK
-    assert "--confirm-spend" not in argv
+    assert "--confirm-spend" not in flags, "no paid command line is written out"
     assert "The paid run adds --confirm-spend, and only after the owner's go" in (
         _collapsed_header(path)
     )
@@ -336,10 +367,12 @@ def test_each_header_writes_the_free_plan_command_and_no_paid_one(path: Path) ->
 def test_the_serving_file_leaves_the_12_turn_budget_at_the_product_default() -> None:
     """The headers' 12-Turn budget is the serving file's, not an overlay key."""
     from pydocs_mcp.retrieval.config.app_config import AppConfig
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 
     serving = AppConfig.load(explicit_path=_LADDER_SERVING)
 
-    assert serving.ask_your_docs.max_agent_turns == 12
+    assert serving.ask_your_docs.max_agent_turns == AskYourDocsConfig().max_agent_turns
+    assert serving.ask_your_docs.max_agent_turns == 12, "the spec's pinned 12-Turn budget"
     assert all("12-Turn budget" in _collapsed_header(path) for path in _VARIANTS)
 
 
@@ -348,3 +381,29 @@ def _collapsed_header(path: Path) -> str:
     lines = path.read_text(encoding="utf-8").splitlines()
     comments = [line.removeprefix("#").strip() for line in lines if line.startswith("#")]
     return " ".join(comments)
+
+
+@pytest.mark.parametrize("path", _VARIANTS)
+def test_each_header_command_plans_against_a_reused_baseline_and_prices_one_arm(
+    path: Path, tmp_path: Path, stub_command: FakeArmRun, capsys: CaptureFixture
+) -> None:
+    """The later arms' paid step: the header's command plus ``--reuse-baseline``."""
+    repo = git_repo_with_two_descriptions(tmp_path)
+    reused = write_finished_baseline(
+        tmp_path / "earlier" / "baseline", commit=_head_sha(repo), model="qwen/qwen3.8-27b"
+    )
+    argv = [*_plan_argv_bound_to_fakes(path, tmp_path, repo), "--reuse-baseline", str(reused)]
+
+    assert main(argv) == 0
+
+    printed = capsys.readouterr().out
+    assert f"reused from {reused} (no baseline rollout)" in printed
+    assert "estimate:   2 rollout(s)" in printed, "the candidate alone is priced"
+    assert stub_command.roles == []
+
+
+def _head_sha(repo: Path) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    )
+    return completed.stdout.strip()
