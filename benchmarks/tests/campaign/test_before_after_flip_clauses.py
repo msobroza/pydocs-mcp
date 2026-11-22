@@ -178,9 +178,7 @@ def test_a_gain_exactly_at_the_edge_is_not_under_it() -> None:
 
 
 def test_without_an_edge_the_gain_clause_is_not_evaluated() -> None:
-    [_unanswered, gain, _tokens] = _readings(
-        _estimates(turns=(6.0, 5.9)), _rows(), noise_edge=None
-    )
+    [_unanswered, gain, _tokens] = _readings(_estimates(turns=(6.0, 5.9)), _rows(), noise_edge=None)
 
     assert gain[1] is ClauseReading.NOT_EVALUATED
     assert _gain_finding((6.0, 5.9), noise_edge=None) == (

@@ -132,6 +132,21 @@ class ClauseReading(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class FlipClauseMode:
+    """The compare verb's opt-in for this experiment: clause (c) reads ``noise_edge`` if given.
+
+    ``noise_edge`` is the slice's A/A edge in penalised turns (0.6 for the
+    20-task ``repoqa-qa/small_dev``); ``None`` when a re-run is read.
+    """
+
+    noise_edge: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.noise_edge is not None and not self.noise_edge > 0:
+            raise ValueError(f"--noise-edge must be positive, got {self.noise_edge!r}")
+
+
+@dataclass(frozen=True, slots=True)
 class CountPair:
     """One whole-arm count on the baseline and on the variant."""
 
@@ -181,7 +196,9 @@ class ClauseFinding:
 
     def text(self) -> str:
         """``clause (b) unanswered outcomes: held (...)``, as the comparison prints it."""
-        return f"clause ({self.clause}) {_CLAUSE_NAMES[self.clause]}: {self.reading} ({self.detail})"
+        return (
+            f"clause ({self.clause}) {_CLAUSE_NAMES[self.clause]}: {self.reading} ({self.detail})"
+        )
 
 
 def read_flip_clause_rows(baseline: ArmMetrics, variant: ArmMetrics) -> FlipClauseRows:
@@ -321,6 +338,7 @@ __all__ = (
     "ClauseReading",
     "CountPair",
     "FlipClause",
+    "FlipClauseMode",
     "FlipClauseRows",
     "decide_flip_clauses",
     "outcome_row_label",

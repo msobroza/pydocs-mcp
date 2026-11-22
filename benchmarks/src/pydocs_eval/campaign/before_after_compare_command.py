@@ -6,6 +6,10 @@ arms. Campaign arms and chat runner outputs read alike, since both write
 ``arm.json`` beside ``arm_settings.json``. Every stored answer is scored against
 the split's gold, and the comparison is printed. It spends nothing: no arm runs.
 
+``--guidance-task-clauses`` (the guidance-task experiment, #391, only) prints
+that experiment's flip clauses under each verdict and the rows it registered in
+advance (``before_after_flip_clauses``); it changes no verdict and no exit status.
+
 Exit status: 0 when every variant passes, 1 when any fails, 2 on an input error
 or when a variant gets no verdict (its arms, or the A/A replicate, stored no
 answers).
@@ -34,10 +38,12 @@ from pydocs_eval.campaign.before_after_compare import (
     Comparison,
     ComparisonInputError,
     LabelledArm,
+    check_mode_combination,
     check_variant_count,
     compare_arms,
 )
 from pydocs_eval.campaign.before_after_compare_text import render_comparison
+from pydocs_eval.campaign.before_after_flip_clauses import RERUN_SLICE, FlipClauseMode
 from pydocs_eval.campaign.before_after_fresh_draw import FreshTestDraw
 from pydocs_eval.campaign.before_after_measure import measure_arm
 from pydocs_eval.campaign.before_after_recorded_draw import draw_the_arms_recorded
@@ -75,7 +81,44 @@ def add_before_after_compare_command(sub: argparse._SubParsersAction) -> None:
         action="store_true",
         help="try the bounded step-8 rule (Q44) first; adopting on it needs the owner's sign-off",
     )
+    _add_flip_clause_arguments(parser)
     parser.set_defaults(func=cmd_before_after_compare)
+
+
+def _add_flip_clause_arguments(parser: argparse.ArgumentParser) -> None:
+    """The guidance-task experiment's opt-in: its flip clauses and the noise edge they read."""
+    parser.add_argument(
+        "--guidance-task-clauses",
+        action="store_true",
+        help="for the guidance-task experiment (#391) only: after each standard verdict, print "
+        "one finding per flip clause ((b) unanswered outcomes, (c) minimum gain, (a) tokens) "
+        "and the pre-registered rows; the verdict and the exit status are unchanged",
+    )
+    parser.add_argument(
+        "--noise-edge",
+        type=float,
+        default=None,
+        help="with --guidance-task-clauses: the slice's noise edge in penalised turns that "
+        "clause (c) reads (0.6 for the 20-task slice); omit it when reading the re-run on "
+        f"{RERUN_SLICE}, which is read without the clause",
+    )
+
+
+def _flip_clause_mode(args: argparse.Namespace) -> FlipClauseMode | None:
+    """The guidance-task mode the flags ask for; a refusal for an edge without the mode."""
+    if not args.guidance_task_clauses:
+        if args.noise_edge is not None:
+            raise ComparisonInputError(
+                f"--noise-edge needs --guidance-task-clauses: got --noise-edge {args.noise_edge} "
+                "alone, expected both or neither"
+            )
+        return None
+    try:
+        mode = FlipClauseMode(noise_edge=args.noise_edge)
+    except ValueError as exc:
+        raise ComparisonInputError(str(exc)) from exc
+    check_mode_combination(completeness_arm=args.completeness_arm, flip_clauses=mode)
+    return mode
 
 
 def _add_arm_arguments(parser: argparse.ArgumentParser) -> None:
@@ -126,6 +169,7 @@ def _comparison_from_args(args: argparse.Namespace) -> tuple[Comparison, FreshTe
     """
     # Refused before any arm is read, so a mistyped command costs no trace reading.
     check_variant_count(len(args.variant))
+    flip_clauses = _flip_clause_mode(args)
     draw = draw_the_arms_recorded([args.baseline, args.aa_replicate, *args.variant])
     tasks = asyncio.run(load_split_tasks(args.split, draw=draw))
     answer_key = answer_key_for(tasks, load_judge_config().jev)
@@ -134,6 +178,7 @@ def _comparison_from_args(args: argparse.Namespace) -> tuple[Comparison, FreshTe
         [_read_arm(arm_dir, answer_key) for arm_dir in args.variant],
         replicate=_read_arm(args.aa_replicate, answer_key),
         completeness_arm=args.completeness_arm,
+        flip_clauses=flip_clauses,
     )
     return comparison, draw
 

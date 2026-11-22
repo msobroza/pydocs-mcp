@@ -24,7 +24,7 @@ prints.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from types import MappingProxyType
 
@@ -33,6 +33,13 @@ from pydocs_eval.campaign.before_after_acceptance import (
     VariantDecision,
     VariantEstimates,
     decide_variant,
+)
+from pydocs_eval.campaign.before_after_flip_clauses import (
+    ClauseFinding,
+    FlipClauseMode,
+    FlipClauseRows,
+    decide_flip_clauses,
+    read_flip_clause_rows,
 )
 from pydocs_eval.campaign.before_after_measure import ArmMetrics
 from pydocs_eval.campaign.before_after_paired import (
@@ -105,6 +112,10 @@ class VariantComparison:
     #: Holm-adjusted across the variants; ``None`` where the test paired nothing.
     p_values: Mapping[PairedTest, float | None]
     decision: VariantDecision
+    #: Under the guidance-task mode only: the rows its clauses read, and one
+    #: finding per clause after the verdict, which they never change.
+    flip_rows: FlipClauseRows | None = None
+    flip_findings: tuple[ClauseFinding, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +127,7 @@ class Comparison:
     band: CorrectnessBand
     variants: tuple[VariantComparison, ...]
     completeness_arm: bool
+    flip_clauses: FlipClauseMode | None = None
 
 
 def check_variant_count(count: int) -> None:
@@ -140,8 +152,12 @@ def compare_arms(
     *,
     replicate: LabelledArm,
     completeness_arm: bool = False,
+    flip_clauses: FlipClauseMode | None = None,
 ) -> Comparison:
     """Pair every variant with ``baseline``, adjust across them, and decide each one.
+
+    Under ``flip_clauses`` each variant also gets the guidance-task clauses'
+    findings; the verdicts are the ones computed without them.
 
     Example:
         >>> comparison = compare_arms(baseline, [variant], replicate=aa)  # doctest: +SKIP
@@ -149,14 +165,52 @@ def compare_arms(
         <VariantVerdict.PASSED: 'PASS'>
     """
     check_variant_count(len(variants))
+    check_mode_combination(completeness_arm=completeness_arm, flip_clauses=flip_clauses)
     check_aa_pair(baseline, replicate)
     band = correctness_band(baseline.metrics, replicate.metrics)
     p_values = _holm_across([_raw_p_values(baseline.metrics, arm.metrics) for arm in variants])
     compared = tuple(
-        _compared(baseline.metrics, arm, band, adjusted, completeness_arm=completeness_arm)
+        _with_flip_clauses(
+            _compared(baseline.metrics, arm, band, adjusted, completeness_arm=completeness_arm),
+            baseline.metrics,
+            flip_clauses,
+        )
         for arm, adjusted in zip(variants, p_values, strict=True)
     )
-    return Comparison(baseline, replicate, band, compared, completeness_arm)
+    return Comparison(baseline, replicate, band, compared, completeness_arm, flip_clauses)
+
+
+def check_mode_combination(*, completeness_arm: bool, flip_clauses: FlipClauseMode | None) -> None:
+    """Refuse the step-8 rule and the guidance-task clauses together.
+
+    The clauses are read after a standard PASS; a Q44 PASS carries its own
+    sign-off rule, and no experiment asks for both.
+
+    Example:
+        >>> try:
+        ...     check_mode_combination(completeness_arm=True, flip_clauses=FlipClauseMode())
+        ... except ComparisonInputError as refused:
+        ...     print(str(refused).split(":")[0])
+        --guidance-task-clauses and --completeness-arm are two experiments' rules
+    """
+    if completeness_arm and flip_clauses is not None:
+        raise ComparisonInputError(
+            "--guidance-task-clauses and --completeness-arm are two experiments' rules: "
+            "got both, expected at most one"
+        )
+
+
+def _with_flip_clauses(
+    compared: VariantComparison, baseline: ArmMetrics, mode: FlipClauseMode | None
+) -> VariantComparison:
+    """The variant with the guidance-task clauses' rows and findings, under the mode only."""
+    if mode is None:
+        return compared
+    rows = read_flip_clause_rows(baseline, compared.arm.metrics)
+    findings = decide_flip_clauses(
+        compared.decision, compared.estimates, rows, noise_edge=mode.noise_edge
+    )
+    return replace(compared, flip_rows=rows, flip_findings=findings)
 
 
 def check_aa_pair(baseline: LabelledArm, replicate: LabelledArm) -> None:
@@ -286,6 +340,7 @@ __all__ = (
     "PairedTest",
     "VariantComparison",
     "check_aa_pair",
+    "check_mode_combination",
     "check_variant_count",
     "compare_arms",
     "correctness_band",
