@@ -16,7 +16,11 @@ eval's own and never reach it:
 
 - ``guidance_sections`` — a skill document, parsed and validated here with the
   product loader, because the binding re-validates the WHOLE section set on
-  every rollout (``_write_candidate_skill``).
+  every rollout (``_write_candidate_skill``). Beside the ten skill sections it
+  may hold a ``SYSTEM_PROMPT`` section, which the binding serves as the system
+  text; it is validated by the ask prompt's own rules (non-empty, inside the
+  budget, every routed tool named). There is no prompt-only file: the ten
+  skill sections stay required, and every other header is refused.
 - ``task_scaffold`` — how the question is rendered: ``citing`` (the default)
   or ``bare``, the question alone, as the chat page sends it (issue #386).
 
@@ -36,6 +40,9 @@ from pydocs_eval.campaign.before_after import MeasurementPlanError
 from pydocs_eval.task_rendering import DEFAULT_TASK_SCAFFOLD, TaskScaffold
 
 GUIDANCE_SECTIONS_KEY = "guidance_sections"
+# The one non-skill header a guidance file may hold: the ask harness's binding
+# routes it to its prompt-override channel (issue #460).
+SYSTEM_PROMPT_SECTION_KEY = "SYSTEM_PROMPT"
 TASK_SCAFFOLD_KEY = "task_scaffold"
 _EVAL_ONLY_KEYS = (GUIDANCE_SECTIONS_KEY, TASK_SCAFFOLD_KEY)
 # The ask_your_docs keys an arm carries on fields of its own, and the model key an
@@ -48,7 +55,8 @@ MODEL_KEY = "model"
 # What an overlay file may hold, for the error messages and the --help text.
 ARM_OVERLAY_SHAPE = (
     "an ask_your_docs mapping: architecture, max_agent_turns, seed_search_with_question, "
-    "llm, plus the eval-only guidance_sections (a skill file) and task_scaffold"
+    "llm, plus the eval-only guidance_sections (a skill file, optionally with a "
+    "SYSTEM_PROMPT section) and task_scaffold"
 )
 
 
@@ -148,10 +156,23 @@ def _guidance_path(value: object, overlay: Path) -> Path | None:
 
 
 def _guidance_sections(path: Path | None, origin: str) -> dict[str, str]:
-    """The skill document's sections, validated by the product loader; ``{}`` for none."""
+    """The guidance file's sections, in document order; ``{}`` for none.
+
+    The ten skill sections are validated by the product loader, as the binding
+    re-validates them per rollout; an optional ``SYSTEM_PROMPT`` section beside
+    them (issue #460) by the ask prompt's own rules.
+    """
     if path is None:
         return {}
-    from pydocs_mcp.application.description_source import parse_sections
+    sections = _skill_sections_validated(path, origin)
+    if SYSTEM_PROMPT_SECTION_KEY in sections:
+        _refuse_invalid_system_prompt(sections[SYSTEM_PROMPT_SECTION_KEY], path, origin)
+    return sections
+
+
+def _skill_sections_validated(path: Path, origin: str) -> dict[str, str]:
+    """Every section of the file; the skill ones must pass the product loader."""
+    from pydocs_mcp.application.description_source import parse_sections, render_sections
     from pydocs_mcp.harness.core.skill_artifact_loader import (
         SKILL_ARTIFACT_HEADERS,
         parse_skill_artifact,
@@ -159,18 +180,37 @@ def _guidance_sections(path: Path | None, origin: str) -> dict[str, str]:
 
     try:
         text = path.read_text(encoding="utf-8")
-        parse_skill_artifact(text, origin=str(path))
-        return parse_sections(text, allowed=SKILL_ARTIFACT_HEADERS)
+        # Strict parse: any header but the prompt section and the ten is refused.
+        sections = parse_sections(text, allowed=(SYSTEM_PROMPT_SECTION_KEY, *SKILL_ARTIFACT_HEADERS))
+        # The skill sections re-rendered alone: the document the binding validates
+        # and writes beside each trajectory (``_write_candidate_skill``).
+        skill = {key: value for key, value in sections.items() if key in SKILL_ARTIFACT_HEADERS}
+        parse_skill_artifact(render_sections(skill), origin=str(path))
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise MeasurementPlanError(
             f"{origin}: {GUIDANCE_SECTIONS_KEY} {path} is not a usable skill document "
-            f"(expected every section of {', '.join(SKILL_ARTIFACT_HEADERS)}): {exc}"
+            f"(expected every section of {', '.join(SKILL_ARTIFACT_HEADERS)}, plus an "
+            f"optional {SYSTEM_PROMPT_SECTION_KEY}): {exc}"
         ) from exc
+    return sections
+
+
+def _refuse_invalid_system_prompt(system: str, path: Path, origin: str) -> None:
+    """The ask prompt's rules (budget, routed tools) from where they are defined."""
+    from pydocs_eval.optimize.artifacts.ask_prompt import system_prompt_violations
+
+    violations = system_prompt_violations(system)
+    if violations:
+        raise MeasurementPlanError(
+            f"{origin}: {GUIDANCE_SECTIONS_KEY} {path} holds a {SYSTEM_PROMPT_SECTION_KEY} "
+            f"section the ask prompt's rules refuse: {'; '.join(violations)}"
+        )
 
 
 __all__ = (
     "ARM_OVERLAY_SHAPE",
     "GUIDANCE_SECTIONS_KEY",
+    "SYSTEM_PROMPT_SECTION_KEY",
     "TASK_SCAFFOLD_KEY",
     "ArmOverlay",
     "load_arm_overlay",
