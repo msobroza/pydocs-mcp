@@ -359,10 +359,19 @@ def test_this_product_rejects_an_architecture_it_does_not_register() -> None:
 
 @_needs_ask_extra
 def test_this_product_rejects_a_harness_key_it_does_not_know() -> None:
-    """The guidance_task knob is refused by a product that predates it (issue #391)."""
     acceptance = verdict_here(
-        None, role="baseline", sha="a", harness_block={"guidance_task": "repo_qa"}
+        None, role="baseline", sha="a", harness_block={"nonsense_knob": "repo_qa"}
     )
 
     assert acceptance.rejected
-    assert acceptance.keys == ("harness.guidance_task",)
+    assert acceptance.keys == ("harness.nonsense_knob",)
+
+
+@_needs_ask_extra
+def test_this_product_accepts_the_guidance_task_knob() -> None:
+    """The knob exists in this product (issue #391), so an arm block may carry it."""
+    acceptance = verdict_here(
+        None, role="candidate", sha="b", harness_block={"guidance_task": "repo_qa"}
+    )
+
+    assert acceptance.verdict is ArmBlockVerdict.ACCEPTS

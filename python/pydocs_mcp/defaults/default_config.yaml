@@ -589,6 +589,13 @@ ask_your_docs:
   # question retrieved 0.90 at k=10, against 0.73-0.77 for the model's own
   # rewrites.
   seed_search_with_question: false
+  # Fold the packaged search-guidance seed into the chat prompt: BACKBONE, then
+  # the task head, then the ask_your_docs task head of the named task, after the
+  # catalog and the session-start pack. One of none, repo_qa, vuln, bug_loc
+  # (chat borrows repo_qa). WHY off: the guidance-task experiment has not yet
+  # measured whether it saves Turns, and it adds several hundred tokens to every
+  # Turn; none serves exactly today's prompt. A mistyped value fails at load.
+  guidance_task: none
   # The chat page's opt-in trace. On: every serve child the page starts (the first
   # and each restart) records its tool calls under a fresh trajectory id, and each
   # answered question becomes one trajectory directory the eval readers open —

@@ -13,6 +13,8 @@ heavy deps. Defaults are duplicated in ``defaults/default_config.yaml`` on purpo
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 from pydantic import BaseModel, ConfigDict, Field
 
 # Re-exported: these moved to their own modules to keep this one inside its line budget.
@@ -47,6 +49,22 @@ from pydocs_mcp.retrieval.config.ask_your_docs_ui_models import AskYourDocsUiCon
 _DEFAULT_MAX_AGENT_TURNS = 12
 
 
+class GuidanceTask(StrEnum):
+    """Which task's search guidance the ask-your-docs prompt folds (issue #391).
+
+    ``NONE`` folds nothing: the prompt is today's bytes. Every other member names
+    a task of the packaged search-guidance seed — the members after ``NONE`` are
+    held equal to ``skill_artifact_loader.TASK_NAMES`` by a parity test. It lives
+    here, not in the harness, so importing the config imports no harness module.
+    Chat borrows ``REPO_QA``; there is deliberately no ``chat`` task name.
+    """
+
+    NONE = "none"
+    REPO_QA = "repo_qa"
+    VULN = "vuln"
+    BUG_LOC = "bug_loc"
+
+
 class AskYourDocsConfig(BaseModel):
     """Top-level ``ask_your_docs:`` block — architecture, multimodal, LLM connection, UI."""
 
@@ -65,6 +83,10 @@ class AskYourDocsConfig(BaseModel):
     # on repoqa-qa/small_test the verbatim question retrieved 0.90 at k=10
     # against 0.73-0.77 for the queries the model wrote itself.
     seed_search_with_question: bool = Field(default=False)
+    # Fold the packaged seed's BACKBONE + task head + ask_your_docs task head for
+    # this task into the system prompt (after the catalog and the session-start
+    # pack). OFF until the guidance-task experiment (#391) measures a win.
+    guidance_task: GuidanceTask = Field(default=GuidanceTask.NONE)
     # The chat page's opt-in trace: a traced serve child plus one trajectory directory per
     # answered question (ask_your_docs_trace_models.py). Off = the page as it was.
     trace: ChatTraceConfig = Field(default_factory=ChatTraceConfig)
@@ -83,6 +105,7 @@ __all__ = (
     "AskYourDocsConfig",
     "AuthMode",
     "ChatTraceConfig",
+    "GuidanceTask",
     "ImagesConfig",
     "LlmAuthConfig",
     "LlmConnectionConfig",

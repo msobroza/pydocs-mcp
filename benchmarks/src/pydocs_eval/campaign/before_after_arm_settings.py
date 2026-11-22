@@ -8,11 +8,12 @@ splits off the eval-only keys and validates the rest, all at plan time — the
 already cost a worktree, a serve child and a token.
 
 The file holds an ``ask_your_docs`` mapping. Product keys — ``architecture``,
-``max_agent_turns``, ``seed_search_with_question``, ``llm`` — are validated by
-the PRODUCT's ``AskYourDocsConfig`` (``extra="forbid"``), so it alone decides
-what an overlay may set: ``guidance_task`` is refused until the product grows
-that knob (issue #391), with no eval-side list to forget. Two keys are the
-eval's own and never reach it:
+``max_agent_turns``, ``seed_search_with_question``, ``guidance_task``, ``llm`` —
+are validated by the PRODUCT's ``AskYourDocsConfig`` (``extra="forbid"``), so it
+alone decides what an overlay may set, with no eval-side list to forget:
+``guidance_task`` (issue #391) became accepted the moment the product grew that
+knob, and like every product key it moves the arm's settings digest. Two keys
+are the eval's own and never reach it:
 
 - ``guidance_sections`` — a skill document, parsed and validated here with the
   product loader, because the binding re-validates the WHOLE section set on
@@ -52,7 +53,7 @@ MODEL_KEY = "model"
 # What an overlay file may hold, for the error messages and the --help text.
 ARM_OVERLAY_SHAPE = (
     "an ask_your_docs mapping: architecture, max_agent_turns, seed_search_with_question, "
-    "llm, plus the eval-only guidance_sections (a skill file, optionally with a "
+    "guidance_task, llm, plus the eval-only guidance_sections (a skill file, optionally with a "
     "SYSTEM_PROMPT section) and task_scaffold"
 )
 
