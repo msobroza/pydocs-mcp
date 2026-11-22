@@ -19,7 +19,6 @@ what can be checked without a container runtime or network:
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import re
 import subprocess
@@ -28,31 +27,20 @@ import tomllib
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 import yaml
 from pydocs_eval.bench_vm.container_paths import REPO_DIR
 from pydocs_eval.sweep_support import COMMIT_SHA_ENV_VAR
 
+from ._image_scripts import BENCH_VM_DIR, DOCKER_DIR, load_image_script
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_BENCH_VM_DIR = _REPO_ROOT / "infra" / "bench-vm"
-_DOCKER_DIR = _BENCH_VM_DIR / "docker"
 _FLAVOURS = ("cpu", "cuda")
 
 
-def _load(name: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, _DOCKER_DIR / f"{name}.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    # smoke.py imports image_deps by its top-level name, as it does in the image.
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-image_deps = _load("image_deps")
-smoke = _load("smoke")
+image_deps = load_image_script("image_deps")
+smoke = load_image_script("smoke")
 
 
 # ---- uv.lock helpers -------------------------------------------------------
@@ -338,7 +326,7 @@ def test_cuda_base_image_torch_and_onnxruntime_gpu_share_one_cuda_major():
 
 
 def _dockerfile(flavour: str) -> str:
-    return (_DOCKER_DIR / f"Dockerfile.{flavour}").read_text()
+    return (DOCKER_DIR / f"Dockerfile.{flavour}").read_text()
 
 
 def _stages(text: str) -> list[str]:
@@ -396,7 +384,7 @@ def test_cuda_recipe_bakes_in_the_nvidia_library_path():
 
 
 def _cloudbuild() -> dict:
-    return yaml.safe_load((_BENCH_VM_DIR / "cloudbuild.yaml").read_text())
+    return yaml.safe_load((BENCH_VM_DIR / "cloudbuild.yaml").read_text())
 
 
 _TAG = "${_REPOSITORY}/bench-${_FLAVOUR}:${_COMMIT}"

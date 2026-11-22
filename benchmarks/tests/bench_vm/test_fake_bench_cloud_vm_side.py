@@ -8,7 +8,7 @@ import pytest
 
 from pydocs_eval.bench_vm.bench_cloud import BenchCloud, BenchCloudError
 
-from ._fakes import FakeBenchCloud
+from ._fakes import FakeBenchCloud, fake_vm_request
 
 _STATE_URI = "gs://bench-runs/r/state/"
 _EXCLUDE = r".*\.tmp$"
@@ -70,6 +70,29 @@ def test_a_delete_is_recorded(tmp_path: Path) -> None:
 
     assert isinstance(cloud, FakeBenchCloud)
     assert cloud.deleted == [("bench-project", "europe-west4-a", "bench-r-1")]
+
+
+def test_a_token_delete_is_recorded_and_the_vm_stops_listing(tmp_path: Path) -> None:
+    cloud = FakeBenchCloud(root=tmp_path)
+    vm = fake_vm_request("r", attempt=1, zone="europe-west4-a")
+    cloud.create_instance(vm)
+    port: BenchCloud = cloud
+
+    port.delete_instance_with_metadata_token(vm.project, vm.zone, vm.name)
+
+    assert cloud.deleted == [(vm.project, vm.zone, vm.name)]
+    assert cloud.operations()[-1] == "delete_instance_with_metadata_token"
+    assert cloud.list_labelled_instances(vm.project, [vm.zone], label="bench-run-id") == ()
+
+
+def test_a_scripted_token_delete_error_raises_and_deletes_nothing(tmp_path: Path) -> None:
+    cloud = FakeBenchCloud(root=tmp_path)
+    cloud.token_delete_errors["bench-r-1"] = BenchCloudError("HTTPError 403 (scripted)")
+
+    with pytest.raises(BenchCloudError, match="403"):
+        cloud.delete_instance_with_metadata_token("bench-project", "europe-west4-a", "bench-r-1")
+
+    assert cloud.deleted == []
 
 
 def test_a_restore_pulls_every_object_under_the_prefix_into_the_directory(

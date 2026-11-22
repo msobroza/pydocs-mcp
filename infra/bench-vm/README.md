@@ -270,8 +270,9 @@ Nothing relaunches on its own: a relaunch is you running
 `make bench-vm RUN=runs/<name>.yaml` again. A relaunch is the run's next
 attempt, on the commits frozen at its first launch (even if the branch has
 moved since), and each benchmark resumes from the state the last attempt
-synced. Work done after the last completed sync (every `sync_interval`,
-default 5 minutes) runs again.
+synced, or starts from the beginning when no attempt synced anything. Work
+done after the last completed sync (every `sync_interval`, default 5 minutes)
+runs again.
 
 | Status | What happened | What to do |
 | --- | --- | --- |
@@ -406,9 +407,12 @@ image is missing, Cloud NAT egress and bucket storage. Model-provider spend
    deleted with it. A VM whose supervisor refuses its run deletes itself too,
    writing nothing: its record has moved on, as when the launcher recorded a
    create as `failed` that came up anyway, or a second launch of the same run
-   took over. Only a VM that cannot read its own metadata, or whose host fails
-   to log in, pull or start the image so that no supervisor runs, stays up until
-   `max_runtime`.
+   took over. The delete goes through gcloud first. If gcloud fails, it is sent
+   again with the token the metadata server gives the VM's service account, so
+   a VM whose gcloud cannot authenticate still deletes itself. Its record then
+   stays `launching`, and your next launch records it `lost`. Only a VM that
+   cannot read its own metadata, or whose host fails to log in, pull or start
+   the image so that no supervisor runs, stays up until `max_runtime`.
 2. **The platform deletes it at `max_runtime`** (default 6 hours): Compute
    Engine's maximum run duration with the DELETE action. It is the backstop for
    a hung guest and still applies with `self_delete: false`. The supervisor

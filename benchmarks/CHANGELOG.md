@@ -1151,6 +1151,38 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Fixed
 
+- **A bench VM's gcloud has the VM's credentials from its first call: the images
+  no longer ship gcloud's "not on Compute Engine" cache**
+  (`infra/bench-vm/docker/install_cli_tools.sh`, `infra/bench-vm/docker/smoke.py`,
+  `infra/bench-vm/host/startup.sh`). The image build ran gcloud with no metadata
+  server, and gcloud cached that answer in the image as
+  `/root/.config/gcloud/gce` = `False`. gcloud trusts that file for ten minutes
+  after its mtime. On a VM booted within ten minutes of its image build, which
+  is the first attempt of a run whose image was built for it, every gcloud call
+  answered "You do not currently have an active account selected". The
+  supervisor's first read and its self-delete failed with it. The build now runs
+  gcloud with a throwaway user config. The smoke step fails an image that holds a
+  gcloud user config, so such an image never gets a tag. The host starts the
+  supervisor's container with `CLOUDSDK_CONFIG` set to a directory no image
+  holds. (#434)
+- **A bench VM whose gcloud cannot authenticate still deletes itself**
+  (`bench_vm/own_vm.py`, `bench_vm/compute_api_delete.py`). When gcloud's
+  delete fails, the self-delete now sends the Compute API's instance DELETE
+  through curl, with the token the metadata server gives the VM's service
+  account. Before, a VM whose gcloud had no account (see above) would have
+  billed until `max_runtime`. The token goes to curl on stdin, never into argv
+  or a log. A failure of both deletes is logged with both errors
+  (`bench_vm_self_delete_failed`). `BenchCloud` gains
+  `delete_instance_with_metadata_token`. (#434)
+- **A relaunch whose earlier attempts never synced any state starts the benchmark
+  from the beginning** (`bench_vm/gcloud_bench_cloud.py`,
+  `bench_vm/gcloud_stderr.py`). Cloud SDK 592's `gcloud storage rsync` answers a
+  source prefix that holds no object with "Did not find existing container at:
+  gs://…", not the "matched no objects" the adapter recognised. So the relaunch of
+  a run recorded `lost` before it ever synced failed its state restore in seconds,
+  and the attempt was recorded `failed`. That answer now restores nothing, as the
+  `BenchCloud` port promises for an empty prefix. A missing bucket still fails the
+  restore. (#434)
 - **A CPU run on the default `n2-standard-8` is no longer refused at launch for
   reporting no architecture** (`bench_vm/machine_check.py`). The Compute API reports
   no `architecture` for the classic x86 families (`n2-standard-8` and
