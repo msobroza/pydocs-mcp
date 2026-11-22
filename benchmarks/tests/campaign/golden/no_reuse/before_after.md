@@ -7,8 +7,8 @@
 - estimated spend: $0.00 (the plan's pre-run estimate; the spend rows below are measured)
 - outcomes, baseline: no task (near cap: 0)
 - outcomes, candidate: no task (near cap: 0)
-- settings, baseline: architecture `text_react`, scaffold `citing`, guidance none, digest `f320c3b7c1df918c88449615e90cb1bc09282729bf4321be4675a42845d68c3a`
-- settings, candidate: architecture `text_react`, scaffold `citing`, guidance none, digest `f320c3b7c1df918c88449615e90cb1bc09282729bf4321be4675a42845d68c3a`
+- settings, baseline: architecture `text_react`, scaffold `citing`, guidance none, digest `8a8d7416313fe28a3f70e6b3785a9ffac466131e0a6cd21e3a1ed86d018afa17`
+- settings, candidate: architecture `text_react`, scaffold `citing`, guidance none, digest `8a8d7416313fe28a3f70e6b3785a9ffac466131e0a6cd21e3a1ed86d018afa17`
 
 | Metric | baseline | candidate | delta (95% CI) | p | pairs |
 |---|---|---|---|---|---|

@@ -24,7 +24,7 @@
     "provider_routing": {
       "allow_fallbacks": false,
       "order": [
-        "deepinfra/bf16"
+        "deepinfra/fp8"
       ]
     },
     "timeout_seconds": 300
@@ -34,7 +34,7 @@
   "out_dir": "<tmp>/out/candidate",
   "pydocs_config": "<repo>/benchmarks/configs/ask_openrouter_qwen3_4b.yaml",
   "role": "candidate",
-  "settings_digest": "f320c3b7c1df918c88449615e90cb1bc09282729bf4321be4675a42845d68c3a",
+  "settings_digest": "8a8d7416313fe28a3f70e6b3785a9ffac466131e0a6cd21e3a1ed86d018afa17",
   "task_draw": null,
   "task_scaffold": "citing",
   "task_timeout_seconds": 900.0,

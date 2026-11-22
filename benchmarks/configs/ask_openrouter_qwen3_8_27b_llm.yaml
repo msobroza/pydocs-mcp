@@ -36,6 +36,8 @@ params:
 # plan's per-arm block probe says so before anything is spent.
 timeout_seconds: 300        # one chat request; the SDK's own default is 600
 max_retries: 2              # the SDK's default, pinned so it cannot drift
-provider_routing:           # the upstream the owner pinned (2026-09-26): full
-  order: [deepinfra/bf16]   # precision, one endpoint; OpenRouter otherwise
-  allow_fallbacks: false    # load-balances across ~16 upstreams per request
+provider_routing:           # Q5 pin, amended 2026-11-22 for #391 only:
+  order: [deepinfra/fp8]    # DeepInfra still, one endpoint, no fallbacks.
+  allow_fallbacks: false    # deepinfra/bf16 was withdrawn (OpenRouter 404).
+                            # Same model/provider, fp8 not bf16: see the
+                            # #391 hand-off note for the comparability caveat.

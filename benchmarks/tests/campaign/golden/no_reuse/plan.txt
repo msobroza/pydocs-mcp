@@ -17,7 +17,7 @@ llm block:  <repo>/benchmarks/configs/ask_openrouter_qwen3_8_27b_llm.yaml (arm-s
             params.top_p: 0.95
             provider: openrouter
             provider_routing.allow_fallbacks: False
-            provider_routing.order: ['deepinfra/bf16']
+            provider_routing.order: ['deepinfra/fp8']
             timeout_seconds: 300
             baseline <short>: accepts the block
             candidate <short>: accepts the block

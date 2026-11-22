@@ -15,6 +15,17 @@
 
 Whether there is anything to announce depends on a paid run that has not happened. A win ships the entries below in the winning PR. A loss closes the PR unmerged and ships none.
 
+## Provider pin amendment (2026-11-22, paid-run go)
+
+OpenRouter no longer lists a `deepinfra/bf16` endpoint for `qwen/qwen3.8-27b`. With `allow_fallbacks: false`, every chat request under the original Q5 pin returned HTTP 404. The owner approved (verbatim): "Pode trocar o pin para deepinfra/fp8 e rodar o #391 com teto de US$3".
+
+On this experiment branch, `benchmarks/configs/ask_openrouter_qwen3_8_27b_llm.yaml` now routes `order: [deepinfra/fp8]` and still sets `allow_fallbacks: false`. A cheap diagnostic completion with that routing returned HTTP 200 from provider DeepInfra.
+
+**Comparability caveat.** Every earlier measured arm in the turn-efficiency program (the Q5 pin of 2026-09-26, #366 comments, the #379 before/after) ran `deepinfra/bf16`. This #391 run is the same model and provider (Qwen3.8 27B on DeepInfra, thinking mode, no fallbacks) at a different quantization (fp8, not bf16). Numbers from this run are comparable across the #391 arms — all of them, including a fresh A/A, use fp8. They are not a same-precision replicate of the earlier bf16 arms.
+
+The default of `ask_your_docs.guidance_task` is unchanged (`none`). This amendment is for the #391 run on this branch; it is not merged to `main`.
+
+
 ## 1. The root changelog entry a winning PR would carry
 
 Draft only. It goes into `CHANGELOG.md` under `## [Unreleased]` → `### Changed` (it is a default flip) in the winning PR, and nowhere before. The names are those on this branch. The two bracketed or italic parts are notes for the writer: settle them and remove them before the entry lands.

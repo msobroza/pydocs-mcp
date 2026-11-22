@@ -105,7 +105,7 @@ def test_the_plan_prints_the_arm_llm_block(
     assert "provider: openrouter" in printed
     # The chat model's request settings, the file their single source (issue #371).
     assert "timeout_seconds: 300" in printed and "max_retries: 2" in printed
-    assert "provider_routing.order: ['deepinfra/bf16']" in printed
+    assert "provider_routing.order: ['deepinfra/fp8']" in printed
     # Absent, not null: an unset knob is never sent, and a baseline commit that
     # predates the knob rejects the key outright.
     assert "parallel_tool_calls" not in printed
