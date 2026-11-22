@@ -32,6 +32,9 @@ from pydocs_eval.campaign.before_after_acceptance import (
     VariantEstimates,
     VariantVerdict,
 )
+from pydocs_eval.campaign.before_after_measure import ArmMetrics
+from pydocs_eval.campaign.before_after_paired import paired_means
+from pydocs_eval.campaign.before_after_rows import REPORT_ROWS, ReportRow
 from pydocs_eval.campaign.before_after_table_cells import UNDEFINED_CELL, metric_cell
 from pydocs_eval.trajectory.ask_outcome import TaskOutcome
 
@@ -47,10 +50,52 @@ UNANSWERED_CLASSES: tuple[TaskOutcome, ...] = (
 )
 
 
-#: The report rows clause (a) reads and quotes, by their catalogue labels.
+# The report rows the clauses and the pre-registered list read, by their
+# catalogue labels: a label that leaves ``REPORT_ROWS`` fails at import.
+PENALISED_TURNS_LABEL = "turns-to-answer (penalised, exhausted = cap+1)"
+SEARCH_CALLS_LABEL = "search calls"
+TURNS_AFTER_NEEDLE_LABEL = "turns after needle"
+CALLS_AFTER_FIRST_GOLD_LABEL = "calls after first gold (per task)"
+CALLS_AFTER_FIRST_GOLD_READ_LABEL = "calls after first gold read (per task)"
 TOKENS_IN_PER_TASK_LABEL = "tokens in (per task)"
 UNCACHED_TOTAL_LABEL = "uncached tokens in (total)"
 UNCACHED_PER_TURN_LABEL = "uncached tokens in (per turn)"
+
+
+def outcome_row_label(outcome: TaskOutcome) -> str:
+    """The catalogue label of one outcome's whole-arm count.
+
+    Example:
+        >>> outcome_row_label(TaskOutcome.TIMEOUT)
+        'outcome: timeout'
+    """
+    return f"outcome: {outcome}"
+
+
+#: Every catalogue row this module reads, the pre-registered list's included.
+PRE_REGISTERED_ROW_LABELS: tuple[str, ...] = (
+    SEARCH_CALLS_LABEL,
+    PENALISED_TURNS_LABEL,
+    TURNS_AFTER_NEEDLE_LABEL,
+    CALLS_AFTER_FIRST_GOLD_LABEL,
+    CALLS_AFTER_FIRST_GOLD_READ_LABEL,
+    TOKENS_IN_PER_TASK_LABEL,
+    UNCACHED_TOTAL_LABEL,
+    UNCACHED_PER_TURN_LABEL,
+    *(outcome_row_label(outcome) for outcome in TaskOutcome),
+)
+
+
+def _catalogue_rows(labels: tuple[str, ...]) -> Mapping[str, ReportRow]:
+    """``label -> row`` for every label; a label the catalogue lost is refused by name."""
+    catalogue = {row.label: row for row in REPORT_ROWS}
+    missing = [label for label in labels if label not in catalogue]
+    if missing:
+        raise LookupError(f"rows missing from the report's catalogue: {missing!r}")
+    return {label: catalogue[label] for label in labels}
+
+
+_ROWS = _catalogue_rows(PRE_REGISTERED_ROW_LABELS)
 
 
 class FlipClause(StrEnum):
@@ -139,6 +184,44 @@ class ClauseFinding:
         return f"clause ({self.clause}) {_CLAUSE_NAMES[self.clause]}: {self.reading} ({self.detail})"
 
 
+def read_flip_clause_rows(baseline: ArmMetrics, variant: ArmMetrics) -> FlipClauseRows:
+    """The rows the clauses read, off the arms through the report's own row readers.
+
+    Example:
+        >>> read_flip_clause_rows(baseline, variant).tokens_in_per_task  # doctest: +SKIP
+        PointPair(baseline=9000.0, variant=9600.0)
+    """
+
+    def mean(label: str) -> PointPair | None:
+        return paired_means(_ROWS[label].read, baseline, variant)
+
+    return FlipClauseRows(
+        outcome_counts={
+            outcome: _count_pair(_ROWS[outcome_row_label(outcome)], baseline, variant)
+            for outcome in TaskOutcome
+        },
+        penalised_turns=mean(PENALISED_TURNS_LABEL),
+        search_calls=mean(SEARCH_CALLS_LABEL),
+        turns_after_needle=mean(TURNS_AFTER_NEEDLE_LABEL),
+        calls_after_first_gold=mean(CALLS_AFTER_FIRST_GOLD_LABEL),
+        calls_after_first_gold_read=mean(CALLS_AFTER_FIRST_GOLD_READ_LABEL),
+        tokens_in_per_task=mean(TOKENS_IN_PER_TASK_LABEL),
+        uncached_tokens_in_total=_defined_totals(_ROWS[UNCACHED_TOTAL_LABEL], baseline, variant),
+        uncached_tokens_in_per_turn=mean(UNCACHED_PER_TURN_LABEL),
+    )
+
+
+def _count_pair(row: ReportRow, baseline: ArmMetrics, variant: ArmMetrics) -> CountPair:
+    """A whole-arm count row, as the report's tally counts it."""
+    return CountPair(baseline.total_of(row.read), variant.total_of(row.read))
+
+
+def _defined_totals(row: ReportRow, baseline: ArmMetrics, variant: ArmMetrics) -> PointPair | None:
+    """A whole-arm total row; ``None`` unless both arms defined it."""
+    before, after = baseline.defined_total_of(row.read), variant.defined_total_of(row.read)
+    return None if before is None or after is None else PointPair(before, after)
+
+
 def decide_flip_clauses(
     decision: VariantDecision,
     estimates: VariantEstimates,
@@ -222,9 +305,15 @@ def pair_text(label: str, pair: PointPair | None) -> str:
 
 
 __all__ = (
+    "CALLS_AFTER_FIRST_GOLD_LABEL",
+    "CALLS_AFTER_FIRST_GOLD_READ_LABEL",
     "CLAUSE_ORDER",
+    "PENALISED_TURNS_LABEL",
+    "PRE_REGISTERED_ROW_LABELS",
     "RERUN_SLICE",
+    "SEARCH_CALLS_LABEL",
     "TOKENS_IN_PER_TASK_LABEL",
+    "TURNS_AFTER_NEEDLE_LABEL",
     "UNANSWERED_CLASSES",
     "UNCACHED_PER_TURN_LABEL",
     "UNCACHED_TOTAL_LABEL",
@@ -234,5 +323,7 @@ __all__ = (
     "FlipClause",
     "FlipClauseRows",
     "decide_flip_clauses",
+    "outcome_row_label",
     "pair_text",
+    "read_flip_clause_rows",
 )

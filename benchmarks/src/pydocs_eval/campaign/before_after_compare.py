@@ -26,12 +26,10 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from statistics import fmean
 from types import MappingProxyType
 
 from pydocs_eval.campaign.before_after_acceptance import (
     CorrectnessBand,
-    PointPair,
     VariantDecision,
     VariantEstimates,
     decide_variant,
@@ -40,6 +38,7 @@ from pydocs_eval.campaign.before_after_measure import ArmMetrics
 from pydocs_eval.campaign.before_after_paired import (
     improvement_p,
     mcnemar_contrast,
+    paired_means,
     paired_values,
 )
 from pydocs_eval.campaign.before_after_rows import (
@@ -194,16 +193,10 @@ def correctness_band(baseline: ArmMetrics, replicate: ArmMetrics) -> Correctness
 
 def _band(read: TaskValue, baseline: ArmMetrics, replicate: ArmMetrics) -> float | None:
     """One task, widened to the A/A difference; ``None`` where the pair defines nothing."""
-    pair = _point_pair(read, baseline, replicate)
+    pair = paired_means(read, baseline, replicate)
     if pair is None:
         return None
     return max(abs(pair.delta), 1 / len(baseline.values_by_task(read)))
-
-
-def _point_pair(read: TaskValue, baseline: ArmMetrics, variant: ArmMetrics) -> PointPair | None:
-    """Both arms' means over the tasks both defined; ``None`` when they share none."""
-    before, after = paired_values(read, baseline, variant)
-    return PointPair(fmean(before), fmean(after)) if before else None
 
 
 def _compared(
@@ -231,10 +224,10 @@ def _task_ids(arm: ArmMetrics) -> set[str]:
 def _estimates(baseline: ArmMetrics, variant: ArmMetrics) -> VariantEstimates:
     """The paired point estimates the acceptance rule reads."""
     return VariantEstimates(
-        penalised_turns=_point_pair(penalised_turns_of_task, baseline, variant),
-        budget_exhausted=_point_pair(budget_exhausted_of_task, baseline, variant),
-        needle_cited=_point_pair(needle_cited_of_task, baseline, variant),
-        gold_site_coverage=_point_pair(gold_site_coverage_of_task, baseline, variant),
+        penalised_turns=paired_means(penalised_turns_of_task, baseline, variant),
+        budget_exhausted=paired_means(budget_exhausted_of_task, baseline, variant),
+        needle_cited=paired_means(needle_cited_of_task, baseline, variant),
+        gold_site_coverage=paired_means(gold_site_coverage_of_task, baseline, variant),
     )
 
 
