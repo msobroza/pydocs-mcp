@@ -23,6 +23,7 @@ Open [`experiments-394-391.html`](experiments-394-391.html) in a browser. It is 
 
 - **Zero-hit pointer experiment:** the count is below the floor (at most 9 of 20 tasks had an empty search; the floor is 12), so the experiment closes without a paid run.
 - **Guidance-knob experiment:** goes to the spec with three variant arms, a rewrite of the breadth sentences in the shared `BACKBONE` section, and three added acceptance clauses.
+- **After the review:** the owner confirmed the design on 2026-11-22; the guidance-knob experiment's spec is [`2026-11-22-guidance-task-experiment-design.md`](../superpowers/specs/2026-11-22-guidance-task-experiment-design.md).
 
 ## What is not here
 
