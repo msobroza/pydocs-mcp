@@ -1,7 +1,7 @@
 """``--baseline-settings`` / ``--candidate-settings``: one arm's ``ask_your_docs`` overlay.
 
 An overlay file may set ``architecture``, ``max_agent_turns``,
-``seed_search_with_question`` and ``llm`` — validated by the PRODUCT's own
+``seed_search_with_question``, ``guidance_task`` and ``llm`` — validated by the PRODUCT's own
 ``AskYourDocsConfig`` (``extra="forbid"``) — plus two eval-only keys split off
 first: ``guidance_sections`` (a skill document, parsed and validated here, at
 plan time) and ``task_scaffold``. Everything else is refused by name before a
@@ -66,10 +66,35 @@ def test_an_unknown_key_is_refused_by_the_product_config_naming_it(tmp_path: Pat
         _load(tmp_path, {"nonsense_knob": 1})
 
 
-def test_guidance_task_is_refused_until_the_product_has_the_knob(tmp_path: Path) -> None:
-    """The product config is the one arbiter: no eval-side list to forget to widen."""
-    with pytest.raises(MeasurementPlanError, match="guidance_task"):
-        _load(tmp_path, {"guidance_task": "repo_qa"})
+def test_guidance_task_is_accepted_and_moves_the_settings_digest(tmp_path: Path) -> None:
+    """The product grew the knob (issue #391): the product config is still the one
+    arbiter, so the overlay accepts it with no eval-side list to widen."""
+    from pydocs_eval.campaign.before_after_arm_variant import variant_of
+
+    with_knob = _load(tmp_path, {"seed_search_with_question": True, "guidance_task": "repo_qa"})
+    without = load_arm_overlay(
+        write_overlay(tmp_path, {"seed_search_with_question": True}, "without.yaml"), flag=_FLAG
+    )
+
+    assert with_knob.product == {"seed_search_with_question": True, "guidance_task": "repo_qa"}
+    assert (
+        variant_of(with_knob, llm_block=None, serving_turns=12).digest
+        != variant_of(without, llm_block=None, serving_turns=12).digest
+    )
+
+
+def test_a_mistyped_guidance_task_is_refused_naming_it_and_the_accepted_set(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(MeasurementPlanError) as excinfo:
+        _load(tmp_path, {"guidance_task": "chat"})
+    assert "'chat'" in str(excinfo.value) and "'repo_qa'" in str(excinfo.value)
+
+
+def test_the_overlay_shape_names_the_guidance_task_key() -> None:
+    from pydocs_eval.campaign.before_after_arm_settings import ARM_OVERLAY_SHAPE
+
+    assert "guidance_task" in ARM_OVERLAY_SHAPE
 
 
 @pytest.mark.parametrize("payload", [{"model": "other"}, {"llm": {"model": "other"}}])
