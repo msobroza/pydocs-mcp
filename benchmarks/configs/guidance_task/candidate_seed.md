@@ -94,8 +94,8 @@ first search: the question routes the first query. When a result showed a
 signature or usage, end with a short Example built from it; otherwise leave
 it out. Effort: the first turn locates, the second reads the cited spans
 not yet rendered in one batch, the third answers; any call past that names
-the claim it supports. Put what you could not confirm on the Not confirmed:
-line.
+the claim it supports. When part of the answer is unconfirmed, end with one
+line that starts with "Not confirmed:" and names it.
 === HARNESS_TASK_HEAD: ask_your_docs.vuln ===
 Follow-up calls on a result are offers: take only those the question
 needs. Issue the calls on a "Together:" line in one turn, since they are
@@ -111,8 +111,8 @@ first search: the question routes the first query. When a result showed a
 signature or usage, end with a short Example built from it; otherwise leave
 it out. Effort: the first turn locates, the second reads the cited spans
 not yet rendered in one batch, the third answers; any call past that names
-the claim it supports. Put what you could not confirm on the Not confirmed:
-line.
+the claim it supports. When part of the answer is unconfirmed, end with one
+line that starts with "Not confirmed:" and names it.
 === HARNESS_TASK_HEAD: ask_your_docs.bug_loc ===
 Follow-up calls on a result are offers: take only those the question
 needs. Issue the calls on a "Together:" line in one turn, since they are
@@ -128,8 +128,9 @@ first search: route the first query from the report's own literals. When a
 result showed a signature or usage, end with a short Example built from it;
 otherwise leave it out. Effort: the first turn locates, the second reads
 the cited spans not yet rendered in one batch, the third answers; any call
-past that names the claim it supports. Put what you could not confirm on
-the Not confirmed: line.
+past that names the claim it supports. When part of the answer is
+unconfirmed, end with one line that starts with "Not confirmed:" and names
+it.
 === HARNESS_TASK_HEAD: external.repo_qa ===
 No catalog is pre-injected: orient first — get_overview on an unfamiliar
 project — then route per the backbone policy. Answers must be
