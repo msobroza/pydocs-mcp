@@ -24,22 +24,28 @@ prints.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
-from statistics import fmean
 from types import MappingProxyType
 
 from pydocs_eval.campaign.before_after_acceptance import (
     CorrectnessBand,
-    PointPair,
     VariantDecision,
     VariantEstimates,
     decide_variant,
+)
+from pydocs_eval.campaign.before_after_flip_clauses import (
+    ClauseFinding,
+    FlipClauseMode,
+    FlipClauseRows,
+    decide_flip_clauses,
+    read_flip_clause_rows,
 )
 from pydocs_eval.campaign.before_after_measure import ArmMetrics
 from pydocs_eval.campaign.before_after_paired import (
     improvement_p,
     mcnemar_contrast,
+    paired_means,
     paired_values,
 )
 from pydocs_eval.campaign.before_after_rows import (
@@ -106,6 +112,10 @@ class VariantComparison:
     #: Holm-adjusted across the variants; ``None`` where the test paired nothing.
     p_values: Mapping[PairedTest, float | None]
     decision: VariantDecision
+    #: Under the guidance-task mode only: the rows its clauses read, and one
+    #: finding per clause after the verdict, which they never change.
+    flip_rows: FlipClauseRows | None = None
+    flip_findings: tuple[ClauseFinding, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +127,7 @@ class Comparison:
     band: CorrectnessBand
     variants: tuple[VariantComparison, ...]
     completeness_arm: bool
+    flip_clauses: FlipClauseMode | None = None
 
 
 def check_variant_count(count: int) -> None:
@@ -141,8 +152,12 @@ def compare_arms(
     *,
     replicate: LabelledArm,
     completeness_arm: bool = False,
+    flip_clauses: FlipClauseMode | None = None,
 ) -> Comparison:
     """Pair every variant with ``baseline``, adjust across them, and decide each one.
+
+    Under ``flip_clauses`` each variant also gets the guidance-task clauses'
+    findings; the verdicts are the ones computed without them.
 
     Example:
         >>> comparison = compare_arms(baseline, [variant], replicate=aa)  # doctest: +SKIP
@@ -150,14 +165,52 @@ def compare_arms(
         <VariantVerdict.PASSED: 'PASS'>
     """
     check_variant_count(len(variants))
+    check_mode_combination(completeness_arm=completeness_arm, flip_clauses=flip_clauses)
     check_aa_pair(baseline, replicate)
     band = correctness_band(baseline.metrics, replicate.metrics)
     p_values = _holm_across([_raw_p_values(baseline.metrics, arm.metrics) for arm in variants])
     compared = tuple(
-        _compared(baseline.metrics, arm, band, adjusted, completeness_arm=completeness_arm)
+        _with_flip_clauses(
+            _compared(baseline.metrics, arm, band, adjusted, completeness_arm=completeness_arm),
+            baseline.metrics,
+            flip_clauses,
+        )
         for arm, adjusted in zip(variants, p_values, strict=True)
     )
-    return Comparison(baseline, replicate, band, compared, completeness_arm)
+    return Comparison(baseline, replicate, band, compared, completeness_arm, flip_clauses)
+
+
+def check_mode_combination(*, completeness_arm: bool, flip_clauses: FlipClauseMode | None) -> None:
+    """Refuse the step-8 rule and the guidance-task clauses together.
+
+    The clauses are read after a standard PASS; a Q44 PASS carries its own
+    sign-off rule, and no experiment asks for both.
+
+    Example:
+        >>> try:
+        ...     check_mode_combination(completeness_arm=True, flip_clauses=FlipClauseMode())
+        ... except ComparisonInputError as refused:
+        ...     print(str(refused).split(":")[0])
+        --guidance-task-clauses and --completeness-arm are two experiments' rules
+    """
+    if completeness_arm and flip_clauses is not None:
+        raise ComparisonInputError(
+            "--guidance-task-clauses and --completeness-arm are two experiments' rules: "
+            "got both, expected at most one"
+        )
+
+
+def _with_flip_clauses(
+    compared: VariantComparison, baseline: ArmMetrics, mode: FlipClauseMode | None
+) -> VariantComparison:
+    """The variant with the guidance-task clauses' rows and findings, under the mode only."""
+    if mode is None:
+        return compared
+    rows = read_flip_clause_rows(baseline, compared.arm.metrics)
+    findings = decide_flip_clauses(
+        compared.decision, compared.estimates, rows, noise_edge=mode.noise_edge
+    )
+    return replace(compared, flip_rows=rows, flip_findings=findings)
 
 
 def check_aa_pair(baseline: LabelledArm, replicate: LabelledArm) -> None:
@@ -194,16 +247,10 @@ def correctness_band(baseline: ArmMetrics, replicate: ArmMetrics) -> Correctness
 
 def _band(read: TaskValue, baseline: ArmMetrics, replicate: ArmMetrics) -> float | None:
     """One task, widened to the A/A difference; ``None`` where the pair defines nothing."""
-    pair = _point_pair(read, baseline, replicate)
+    pair = paired_means(read, baseline, replicate)
     if pair is None:
         return None
     return max(abs(pair.delta), 1 / len(baseline.values_by_task(read)))
-
-
-def _point_pair(read: TaskValue, baseline: ArmMetrics, variant: ArmMetrics) -> PointPair | None:
-    """Both arms' means over the tasks both defined; ``None`` when they share none."""
-    before, after = paired_values(read, baseline, variant)
-    return PointPair(fmean(before), fmean(after)) if before else None
 
 
 def _compared(
@@ -231,10 +278,10 @@ def _task_ids(arm: ArmMetrics) -> set[str]:
 def _estimates(baseline: ArmMetrics, variant: ArmMetrics) -> VariantEstimates:
     """The paired point estimates the acceptance rule reads."""
     return VariantEstimates(
-        penalised_turns=_point_pair(penalised_turns_of_task, baseline, variant),
-        budget_exhausted=_point_pair(budget_exhausted_of_task, baseline, variant),
-        needle_cited=_point_pair(needle_cited_of_task, baseline, variant),
-        gold_site_coverage=_point_pair(gold_site_coverage_of_task, baseline, variant),
+        penalised_turns=paired_means(penalised_turns_of_task, baseline, variant),
+        budget_exhausted=paired_means(budget_exhausted_of_task, baseline, variant),
+        needle_cited=paired_means(needle_cited_of_task, baseline, variant),
+        gold_site_coverage=paired_means(gold_site_coverage_of_task, baseline, variant),
     )
 
 
@@ -293,6 +340,7 @@ __all__ = (
     "PairedTest",
     "VariantComparison",
     "check_aa_pair",
+    "check_mode_combination",
     "check_variant_count",
     "compare_arms",
     "correctness_band",
