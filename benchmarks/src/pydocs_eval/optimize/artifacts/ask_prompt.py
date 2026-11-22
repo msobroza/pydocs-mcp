@@ -38,7 +38,10 @@ from pydocs_eval.optimize.artifacts._delimited import (
 )
 from pydocs_eval.optimize.registries import artifact_registry
 
-_SYSTEM_KEY = "SYSTEM_PROMPT"
+# Public: the before/after overlay loader accepts a guidance file's section of this
+# name beside the ten skill sections (issue #460), so the header has one spelling here.
+SYSTEM_PROMPT_KEY = "SYSTEM_PROMPT"
+_SYSTEM_KEY = SYSTEM_PROMPT_KEY
 _REWRITE_KEY = "REWRITE_PROMPT"
 _SECTION_ORDER = (_SYSTEM_KEY, _REWRITE_KEY)
 
@@ -159,21 +162,44 @@ def _structure_violations(text: str, sections: dict[str, str]) -> tuple[str, ...
     return tuple(violations)
 
 
-def _content_violations(sections: dict[str, str]) -> tuple[str, ...]:
+def system_prompt_violations(system: str) -> tuple[str, ...]:
+    """The ask prompt's rules for ONE system section; empty tuple == valid.
+
+    Non-empty, inside ``_ASK_SYSTEM_TOKEN_BUDGET``, and naming every routed
+    tool. The before/after overlay loader reads a guidance file's
+    ``SYSTEM_PROMPT`` section through this (issue #460), so the budget and
+    the tool list keep one spelling: here.
+
+    Example:
+        >>> system_prompt_violations("")[0]
+        "section 'SYSTEM_PROMPT' is empty"
+    """
+    return (*_section_violations(_SYSTEM_KEY, system), *_routed_tool_violations(system))
+
+
+def _section_violations(key: str, content: str) -> tuple[str, ...]:
     violations: list[str] = []
-    for key in _SECTION_ORDER:
-        content = sections.get(key)
-        if content is None:
-            continue
-        if not content.strip():
-            violations.append(f"section {key!r} is empty")
-        tokens = len(content) // CHARS_PER_TOKEN
-        if tokens > _BUDGETS[key]:
-            violations.append(f"section {key!r}: {tokens} tokens > {_BUDGETS[key]}")
-    system = sections.get(_SYSTEM_KEY, "")
-    violations += [
+    if not content.strip():
+        violations.append(f"section {key!r} is empty")
+    tokens = len(content) // CHARS_PER_TOKEN
+    if tokens > _BUDGETS[key]:
+        violations.append(f"section {key!r}: {tokens} tokens > {_BUDGETS[key]}")
+    return tuple(violations)
+
+
+def _routed_tool_violations(system: str) -> tuple[str, ...]:
+    return tuple(
         f"system section does not name tool {tool_name!r}"
         for tool_name in _ROUTED_TOOL_NAMES
         if tool_name not in system
+    )
+
+
+def _content_violations(sections: dict[str, str]) -> tuple[str, ...]:
+    violations = [
+        violation
+        for key in _SECTION_ORDER
+        if key in sections
+        for violation in _section_violations(key, sections[key])
     ]
-    return tuple(violations)
+    return (*violations, *_routed_tool_violations(sections.get(_SYSTEM_KEY, "")))
