@@ -26,12 +26,13 @@ from pydocs_eval.campaign.before_after_arm_settings import (
 )
 from pydocs_eval.campaign.before_after_arm_variant import ArmVariant, variant_of
 from pydocs_eval.datasets.repo_qa import REPO_QA_TASK_NAME
+from pydocs_eval.optimize.artifacts.ask_prompt import _ROUTED_TOOL_NAMES, SYSTEM_PROMPT_KEY
 
 from ._fakes import FakeHarnessRunner, eval_task
 from .test_before_after_arm_records import arm_settings
 from .test_before_after_arm_settings import SEED_SKILL, _load, write_overlay
 
-_PROMPT_KEY = "SYSTEM_PROMPT"
+_PROMPT_KEY = SYSTEM_PROMPT_KEY
 # Names every tool the ask prompt's routing rules send work to.
 _DRAFT = (
     "You answer questions about one codebase. Orient with get_overview, then "
@@ -127,7 +128,7 @@ def test_a_missing_skill_section_is_refused_beside_a_prompt_section(tmp_path: Pa
 
 
 def test_a_prompt_section_without_the_ten_skill_sections_is_refused(tmp_path: Path) -> None:
-    """No prompt-only mode: step 8 decides its own channel."""
+    """No prompt-only mode: a prompt-only arm needs its own channel (issue #392)."""
     guidance = _guidance_file(tmp_path, skill="")
 
     with pytest.raises(MeasurementPlanError, match=r"guidance\.md.*missing required section"):
@@ -154,16 +155,16 @@ def test_an_empty_prompt_section_is_refused_naming_the_rule(tmp_path: Path) -> N
 def test_a_prompt_section_over_the_ask_budget_is_refused_naming_the_rule(tmp_path: Path) -> None:
     from pydocs_eval.optimize.artifacts.ask_prompt import _ASK_SYSTEM_TOKEN_BUDGET
 
-    padding = "x" * (_ASK_SYSTEM_TOKEN_BUDGET * 4)
+    from pydocs_mcp.application.description_source import CHARS_PER_TOKEN
+
+    padding = "x" * (_ASK_SYSTEM_TOKEN_BUDGET * CHARS_PER_TOKEN)
 
     message = _refusal(tmp_path, f"{_DRAFT} {padding}")
 
     assert f"tokens > {_ASK_SYSTEM_TOKEN_BUDGET}" in message
 
 
-@pytest.mark.parametrize(
-    "tool", ["search_codebase", "get_symbol", "get_context", "grep", "read_file", "get_overview"]
-)
+@pytest.mark.parametrize("tool", _ROUTED_TOOL_NAMES)
 def test_a_prompt_section_missing_a_routed_tool_is_refused_naming_it(
     tmp_path: Path, tool: str
 ) -> None:

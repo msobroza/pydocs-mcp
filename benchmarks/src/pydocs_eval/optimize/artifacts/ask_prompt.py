@@ -38,7 +38,10 @@ from pydocs_eval.optimize.artifacts._delimited import (
 )
 from pydocs_eval.optimize.registries import artifact_registry
 
-_SYSTEM_KEY = "SYSTEM_PROMPT"
+# Public: the before/after overlay loader accepts a guidance file's section of this
+# name beside the ten skill sections (issue #460), so the header has one spelling here.
+SYSTEM_PROMPT_KEY = "SYSTEM_PROMPT"
+_SYSTEM_KEY = SYSTEM_PROMPT_KEY
 _REWRITE_KEY = "REWRITE_PROMPT"
 _SECTION_ORDER = (_SYSTEM_KEY, _REWRITE_KEY)
 
