@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Experiments #394 and #391 — review before to-spec</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #6f6d68;
+    --hair: #e1e0d9;
+    --rule: #c3c2b7;
+    --wash: #f0efec;
+    --accent: #1c5cab;
+    --accent-wash: #e6f0fd;
+    --series: #2a78d6;
+    --track: #cde2fb;
+    --before-wash: #f0efec;
+    --after-wash: #e6f0fd;
+    --note-wash: #fdf4dc;
+    --note-rule: #c98500;
+    --code-bg: #f0efec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #f0efec;
+      --ink-2: #c3c2b7;
+      --muted: #a09e97;
+      --hair: #2c2c2a;
+      --rule: #383835;
+      --wash: #242423;
+      --accent: #86b6ef;
+      --accent-wash: #132a47;
+      --series: #3987e5;
+      --track: #0d366b;
+      --before-wash: #242423;
+      --after-wash: #132a47;
+      --note-wash: #2e2610;
+      --note-rule: #c98500;
+      --code-bg: #2c2c2a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 62rem; margin: 0 auto; padding: 2.5rem 1.5rem 5rem; }
+  h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 .4rem; letter-spacing: -.01em; }
+  h2 {
+    font-size: 1.4rem; line-height: 1.25; margin: 3.5rem 0 1rem;
+    padding-top: 1.25rem; border-top: 1px solid var(--rule);
+    scroll-margin-top: 1rem;
+  }
+  h3 { font-size: 1.08rem; margin: 2rem 0 .6rem; scroll-margin-top: 1rem; }
+  p, ul, ol { max-width: 46rem; margin: 0 0 1rem; }
+  li { margin-bottom: .35rem; }
+  li > ul { margin-top: .35rem; }
+  a { color: var(--accent); text-underline-offset: 2px; }
+  code {
+    font: .88em/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--code-bg); padding: .08em .32em; border-radius: 4px;
+    overflow-wrap: break-word;
+  }
+  pre {
+    font: .8rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--surface); border: 1px solid var(--hair); border-radius: 8px;
+    padding: 1rem; overflow-x: auto; max-width: 100%;
+  }
+  .lede { font-size: 1.08rem; color: var(--ink-2); max-width: 46rem; }
+  .small { font-size: .88rem; color: var(--ink-2); }
+
+  /* status strip */
+  .strip {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+    gap: 1px; background: var(--hair); border: 1px solid var(--hair);
+    border-radius: 10px; overflow: hidden; margin: 1.5rem 0 1rem;
+  }
+  .strip div { background: var(--surface); padding: .85rem 1rem; }
+  .strip .k { display: block; font-size: .74rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: .15rem; }
+  .strip .v { font-weight: 600; }
+  .verdict {
+    background: var(--surface); border: 1px solid var(--hair); border-left: 5px solid var(--ink);
+    border-radius: 8px; padding: 1rem 1.2rem; margin: 0 0 2rem;
+  }
+  .verdict p { margin: 0; max-width: none; }
+  .verdict .head { font-size: 1.12rem; font-weight: 650; margin-bottom: .3rem; }
+
+  /* table of contents */
+  nav.toc { background: var(--surface); border: 1px solid var(--hair); border-radius: 10px; padding: 1rem 1.25rem; margin: 2rem 0; }
+  nav.toc h2 { all: unset; display: block; font-size: .74rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: .5rem; }
+  nav.toc ol { margin: 0; padding-left: 1.3rem; columns: 2; column-gap: 2.5rem; max-width: none; }
+  nav.toc li { break-inside: avoid; }
+
+  /* tables */
+  .table-wrap { overflow-x: auto; margin: 0 0 1.25rem; border: 1px solid var(--hair); border-radius: 10px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; line-height: 1.45; }
+  th, td { text-align: left; vertical-align: top; padding: .6rem .8rem; border-bottom: 1px solid var(--hair); overflow-wrap: break-word; }
+  thead th { font-size: .78rem; letter-spacing: .03em; color: var(--ink-2); background: var(--wash); border-bottom: 1px solid var(--rule); white-space: normal; }
+  tbody tr:last-child > * { border-bottom: 0; }
+  tbody th { font-weight: 600; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.nowrap { white-space: nowrap; }
+  tr.total > * { font-weight: 650; background: var(--wash); }
+  caption { caption-side: top; text-align: left; padding: .7rem .8rem; font-size: .85rem; color: var(--ink-2); border-bottom: 1px solid var(--hair); }
+
+  /* before / after */
+  table.ba { table-layout: fixed; }
+  table.ba thead th:first-child { width: 14%; }
+  table.ba thead th.before, table.ba thead th.after { width: 43%; }
+  table.even { table-layout: fixed; }
+  table.even thead th:first-child { width: 28%; }
+  table.ba thead th.before { background: var(--before-wash); }
+  table.ba thead th.after { background: var(--after-wash); color: var(--ink); }
+  table.ba td.after { background: color-mix(in srgb, var(--after-wash) 45%, transparent); }
+  table.ba td.before { color: var(--ink-2); }
+  .tag {
+    display: inline-block; font-size: .72rem; font-weight: 650; letter-spacing: .04em; text-transform: uppercase;
+    border: 1px solid var(--rule); border-radius: 999px; padding: .05rem .5rem; margin-right: .3rem; white-space: nowrap;
+  }
+  .tag.solid { background: var(--ink); color: var(--page); border-color: var(--ink); }
+
+  /* callouts */
+  .note { background: var(--note-wash); border-left: 4px solid var(--note-rule); border-radius: 6px; padding: .8rem 1rem; margin: 0 0 1.25rem; max-width: 46rem; }
+  .note p:last-child, .note ul:last-child { margin-bottom: 0; }
+  .note .label { font-weight: 650; }
+
+  details { background: var(--surface); border: 1px solid var(--hair); border-radius: 10px; padding: .2rem 1rem; margin: 0 0 1.25rem; }
+  details > summary { cursor: pointer; font-weight: 600; padding: .6rem 0; }
+  details[open] > summary { border-bottom: 1px solid var(--hair); margin-bottom: 1rem; }
+
+  /* meter list: tasks with a search zero hit, out of 20, against the floor */
+  .viz { background: var(--surface); border: 1px solid var(--hair); border-radius: 10px; padding: 1.1rem 1.25rem 1rem; margin: 0 0 1.25rem; }
+  .viz h4 { margin: 0 0 .15rem; font-size: 1rem; }
+  .viz .sub { margin: 0 0 1rem; font-size: .85rem; color: var(--ink-2); max-width: none; }
+  .meters { --name: 15rem; --fig: 5.2rem; }
+  .meter-group { font-size: .74rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: .9rem 0 .3rem; }
+  .meter-row, .meter-axis {
+    display: grid; grid-template-columns: var(--name) 1fr var(--fig); column-gap: 1rem; align-items: center;
+  }
+  .meter-row { position: relative; padding: .32rem 0; border-radius: 6px; outline-offset: 2px; }
+  .meter-row:hover, .meter-row:focus { background: var(--wash); }
+  .meter-name { font-size: .9rem; }
+  .meter-name small { display: block; color: var(--muted); font-size: .78rem; }
+  .meter-track { position: relative; height: 12px; background: var(--track); border-radius: 0 4px 4px 0; }
+  .meter-fill { display: block; height: 100%; background: var(--series); border-radius: 0 4px 4px 0; }
+  .meter-track::after { /* the floor: 12 of 20 */
+    content: ""; position: absolute; left: 60%; top: -7px; bottom: -7px; width: 2px; margin-left: -1px; background: var(--ink);
+  }
+  .meter-fig { font-size: .9rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .meter-axis { margin-top: .35rem; font-size: .76rem; color: var(--muted); }
+  .meter-axis .scale { position: relative; height: 1.3rem; grid-column: 2; }
+  .meter-axis .scale span { position: absolute; top: 0; white-space: nowrap; }
+  .meter-axis .scale .a0 { left: 0; }
+  .meter-axis .scale .a12 { left: 60%; transform: translateX(-50%); color: var(--ink); font-weight: 600; }
+  .meter-axis .scale .a20 { right: 0; }
+  .tip {
+    position: absolute; z-index: 2; left: var(--name); top: 100%; margin: 2px 0 0 1rem;
+    background: var(--ink); color: var(--page); font-size: .8rem; line-height: 1.4;
+    padding: .45rem .65rem; border-radius: 6px; max-width: 26rem;
+    visibility: hidden; opacity: 0; transition: opacity .12s; pointer-events: none;
+  }
+  .tip b { font-weight: 650; }
+  .meter-row:hover .tip, .meter-row:focus .tip { visibility: visible; opacity: 1; }
+
+  footer { margin-top: 4rem; padding-top: 1rem; border-top: 1px solid var(--rule); font-size: .85rem; color: var(--ink-2); }
+
+  @media (max-width: 760px) {
+    .wrap { padding: 1.5rem 1rem 3rem; }
+    nav.toc ol { columns: 1; }
+    .meter-row, .meter-axis { grid-template-columns: 1fr var(--fig); row-gap: .25rem; }
+    .meter-name { grid-column: 1 / -1; }
+    .meter-axis .scale { grid-column: 1; }
+    .tip { left: 0; margin-left: 0; }
+    .table-wrap table:not(.ba) { min-width: 40rem; }
+    table.ba { table-layout: auto; }
+    table.ba thead { display: none; }
+    table.ba tr { display: block; border-bottom: 1px solid var(--rule); }
+    table.ba th[scope="row"], table.ba td { display: block; width: auto; border-bottom: 0; }
+    table.ba td::before { content: attr(data-label); display: block; font-size: .72rem; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin-bottom: .15rem; }
+  }
+  @media print {
+    body { background: #fff; }
+    details { break-inside: avoid; }
+    .tip { display: none; }
+    h2 { break-after: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Experiments #394 and #391 — review before to-spec</h1>
+  <p class="lede">Two turn-efficiency experiments of the #366 program, as written in their issues and as they stand after Max's five decisions and a $0 count. This page is for confirmation. It asks for no spend.</p>
+
+  <div class="strip" role="group" aria-label="Status">
+    <div><span class="k">Date</span><span class="v">2026-11-22 (Europe/Paris)</span></div>
+    <div><span class="k">Worktree</span><span class="v"><code>daa105be</code></span><br><span class="small">branch <code>docs/review-experiments-394-391</code></span></div>
+    <div><span class="k">Stage</span><span class="v">For review before to-spec</span><br><span class="small">no spec written, nothing posted, $0 spent</span></div>
+    <div><span class="k">#394 count</span><span class="v">▼ Below the floor</span><br><span class="small">at most 9 of 20 tasks; the floor is 12</span></div>
+  </div>
+
+  <div class="verdict">
+    <p class="head">#394: the count is below the floor, so the experiment closes without a paid arm.</p>
+    <p>In the four stored ladder arms, 5, 9, 4 and 4 of 20 tasks had a search that returned nothing. The floor Max fixed in advance is 12 of 20. Every one of those empty searches was a <code>kind="api"</code> request, which the product now answers with results in the same response (ADR 0027); in the two complete arms recorded after that change the count is 0 of 20. #391 goes on to the spec with the design below.</p>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#glance">At a glance</a></li>
+    <li><a href="#decisions">Max's five answers</a></li>
+    <li><a href="#count">#394 — the $0 zero-hit count</a></li>
+    <li><a href="#b394">#394 — before and after</a></li>
+    <li><a href="#b391">#391 — before and after</a></li>
+    <li><a href="#variants">#391 — the three variants</a></li>
+    <li><a href="#backbone">#391 — the BACKBONE rewrite and the other heads</a></li>
+    <li><a href="#acceptance">#391 — the acceptance rule</a></li>
+    <li><a href="#cost">Cost</a></li>
+    <li><a href="#confirm">What to confirm, and what follows</a></li>
+    <li><a href="#evidence">Evidence and files</a></li>
+  </ol>
+</nav>
+
+<!-- ───────────────────────────── 1 ───────────────────────────── -->
+<h2 id="glance">1. At a glance</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th style="width:9%">Issue</th><th style="width:27%">What it is</th><th>Where it stands</th><th style="width:16%">Paid spend</th></tr></thead>
+  <tbody>
+    <tr>
+      <th scope="row">#394</th>
+      <td>Change the line the agent reads when a search finds nothing (the zero-hit Pointer to <code>get_overview</code>).</td>
+      <td><strong>Closes unmerged.</strong> Counted at $0: below the floor in every arm. The count table is prepared for #366 and not posted. No paid arm. Arm C is not built. Question 2 does not apply.</td>
+      <td>$0</td>
+    </tr>
+    <tr>
+      <th scope="row">#391</th>
+      <td>Load the search-guidance seed into chat through a <code>guidance_task</code> knob; a win flips the default and ships <code>system_v4</code>.</td>
+      <td><strong>Goes to the spec</strong> with three variants. The arm that matches what ships decides. The BACKBONE breadth sentences are rewritten. Three clauses are added to the acceptance rule.</td>
+      <td>About $0.35–0.55; up to $1.0–1.3 more if the gain is small. Not requested here.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+<p>Four points need a word from Max before the spec is written: one on #394 and three on #391. They are listed in <a href="#confirm">section 10</a>.</p>
+
+<!-- ───────────────────────────── 2 ───────────────────────────── -->
+<h2 id="decisions">2. Max's five answers</h2>
+<p>Given on 2026-11-22 (Europe/Paris) to the five questions of the grill round. They are binding for the spec.</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th style="width:4%">#</th><th style="width:26%">Question</th><th style="width:9%">Picked</th><th>What was picked</th><th style="width:22%">Effect</th></tr></thead>
+  <tbody>
+    <tr>
+      <td class="num">1</td>
+      <td><strong>#394.</strong> Count the zero hits at $0 first, and close without a paid arm if there are too few?</td>
+      <td class="nowrap">Option 1</td>
+      <td>Count first, with the floor fixed in advance: 12 of 20 tasks on <code>repoqa-qa/small_dev</code>, about 27 of 100 on <code>repoqa-qa/dev</code>. Below the floor, close #394 unmerged and record the table in #366.</td>
+      <td>Counted. Below the floor. <a href="#count">Section 3</a>.</td>
+    </tr>
+    <tr>
+      <td class="num">2</td>
+      <td><strong>#394</strong>, only if the count clears the floor. How is arm C built, and what replaces the q01 gate?</td>
+      <td class="nowrap">Option 1</td>
+      <td>A new printed line behind a default-off flag; run both B and C. Gate: <code>needle cited</code> over the tasks that had a zero hit in the shipped arm may fall by at most one task. Reported, not gating: Turns after the first zero hit, the next call, and answers without the Needle after a zero hit.</td>
+      <td><strong>Does not apply.</strong> The count is below the floor: arm C is not built.</td>
+    </tr>
+    <tr>
+      <td class="num">3</td>
+      <td><strong>#391.</strong> Which arm decides the default flip?</td>
+      <td class="nowrap">Option 3</td>
+      <td>Three variants: (a) <code>system_v4</code> draft + seed <strong>decides</strong>; (b) v3 + seed, diagnostic; (c) v3 + a length-matched placebo, diagnostic. If the $25 stop bites, drop (c) first, then (b).</td>
+      <td><a href="#variants">Section 6</a>.</td>
+    </tr>
+    <tr>
+      <td class="num">4</td>
+      <td><strong>#391.</strong> How far may the seed rewrite go?</td>
+      <td class="nowrap">Option 3</td>
+      <td>Also rewrite the BACKBONE breadth sentences. This reaches the <code>vuln</code>, <code>bug_loc</code> and external heads, so the spec must say how that is measured or guarded.</td>
+      <td><a href="#backbone">Section 7</a>.</td>
+    </tr>
+    <tr>
+      <td class="num">5</td>
+      <td><strong>#391.</strong> What must a win show before the default flips?</td>
+      <td class="nowrap">Option 2</td>
+      <td>The current rule plus three clauses: (a) a PASS whose tokens-in per task is above baseline flips only with Max's recorded sign-off; (b) no unanswered outcome class may rise; (c) a PASS whose Turn gain is under 0.6 is re-run on the 100-task <code>repoqa-qa/dev</code> slice before the flip. One model stays.</td>
+      <td><a href="#acceptance">Section 8</a>.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<!-- ───────────────────────────── 3 ───────────────────────────── -->
+<h2 id="count">3. #394 — the $0 zero-hit count</h2>
+
+<h3>The floor</h3>
+<p>A search zero hit can cost the agent at most one Turn: the follow-up call the Pointer invites. So an arm that changes the Pointer can move the mean by at most (share of tasks with a zero hit) × 1 Turn. Two identical arms already differ by about ±0.6 Turns at 20 tasks. The floor is the share at which the largest possible effect reaches that noise edge: <strong>12 of 20 tasks</strong> on <code>repoqa-qa/small_dev</code>.</p>
+<p class="small">For a future 100-task <code>repoqa-qa/dev</code> arm the same rule gives about 27 of 100. No such arm exists in the stored runs, so nothing was scored against it.</p>
+
+<h3>What was counted</h3>
+<ul>
+  <li><strong>Search zero hit:</strong> a <code>search_codebase</code> call that did not fail and returned no rows, read from the call record in the trace (<code>hit_count == 0</code>, empty <code>result_ids</code>). The fired-rule log was not the source.</li>
+  <li><strong>Zero-hit task:</strong> a task with at least one search zero hit. A <code>grep</code> or <code>glob</code> with no match does not count.</li>
+  <li><strong>Slice:</strong> the four complete <code>repoqa-qa/small_dev</code> ladder arms copied from Max's machine, 20 tasks each, chat model <code>qwen/qwen3.8-27b</code>.</li>
+</ul>
+<div class="note"><p><span class="label">Label for every primary figure below:</span> the four ladder arms were recorded <strong>before ADR 0027</strong> (the API zero-hit fallback, merged 2026-11-08) <strong>and before <code>system_v3</code></strong> (2026-11-07). They are the only complete <code>small_dev</code> ladder traces available and the right slice for the 12-of-20 floor. They bound today's rate from above.</p></div>
+
+<div class="viz" role="group" aria-labelledby="viz-title">
+  <h4 id="viz-title">Tasks with a search zero hit, out of 20</h4>
+  <p class="sub">One bar per arm. The vertical mark is the floor, 12 of 20. Every figure is also in the tables below.</p>
+  <div class="meters">
+    <div class="meter-group">Ladder arms — before ADR 0027 and <code>system_v3</code></div>
+    <div class="meter-row" tabindex="0">
+      <div class="meter-name">A1 <small>aa-374/baseline · 2026-09-30</small></div>
+      <div class="meter-track"><span class="meter-fill" style="width:25%"></span></div>
+      <div class="meter-fig">5 of 20</div>
+      <div class="tip" role="tooltip"><b>5 of 20</b> — A1. 5 zero-hit searches, all <code>kind="api"</code>. <code>get_overview</code> was the next call in 1. Needle cited in 5 of 5.</div>
+    </div>
+    <div class="meter-row" tabindex="0">
+      <div class="meter-name">A2 <small>aa-374/candidate · 2026-09-30</small></div>
+      <div class="meter-track"><span class="meter-fill" style="width:45%"></span></div>
+      <div class="meter-fig">9 of 20</div>
+      <div class="tip" role="tooltip"><b>9 of 20</b> — A2, same commit and settings as A1. 9 zero-hit searches, all <code>kind="api"</code>. <code>get_overview</code> was the next call in 0. Needle cited in 7 of 9.</div>
+    </div>
+    <div class="meter-row" tabindex="0">
+      <div class="meter-name">Step 4 <small>step4-376/candidate · 2026-09-30</small></div>
+      <div class="meter-track"><span class="meter-fill" style="width:20%"></span></div>
+      <div class="meter-fig">4 of 20</div>
+      <div class="tip" role="tooltip"><b>4 of 20</b> — step 4. 4 zero-hit searches, all <code>kind="api"</code>. <code>get_overview</code> was the next call in 1. Needle cited in 4 of 4.</div>
+    </div>
+    <div class="meter-row" tabindex="0">
+      <div class="meter-name">Step 3 <small>step3-375/candidate · 2026-10-03</small></div>
+      <div class="meter-track"><span class="meter-fill" style="width:20%"></span></div>
+      <div class="meter-fig">4 of 20</div>
+      <div class="tip" role="tooltip"><b>4 of 20</b> — step 3, the latest complete ladder arm. 4 zero-hit searches, all <code>kind="api"</code>. <code>get_overview</code> was the next call in 0. Needle cited in 3 of 4.</div>
+    </div>
+    <div class="meter-group">Supporting — after ADR 0027, with <code>system_v3</code> (fallback experiment, not ladder arms)</div>
+    <div class="meter-row" tabindex="0">
+      <div class="meter-name">Candidate, seed 1 <small>m1-20261109T0134Z · 2026-11-09</small></div>
+      <div class="meter-track"><span class="meter-fill" style="width:0%"></span></div>
+      <div class="meter-fig">0 of 20</div>
+      <div class="tip" role="tooltip"><b>0 of 20</b> — commit <code>0a6496b1</code>. 7 <code>kind="api"</code> searches matched nothing and were all answered with fallback rows.</div>
+    </div>
+    <div class="meter-row" tabindex="0">
+      <div class="meter-name">Candidate, seed 2 <small>m1-20261109T0134Z · 2026-11-09</small></div>
+      <div class="meter-track"><span class="meter-fill" style="width:0%"></span></div>
+      <div class="meter-fig">0 of 20</div>
+      <div class="tip" role="tooltip"><b>0 of 20</b> — commit <code>0a6496b1</code>. 4 <code>kind="api"</code> searches matched nothing and were all answered with fallback rows.</div>
+    </div>
+    <div class="meter-axis" aria-hidden="true">
+      <div class="scale"><span class="a0">0</span><span class="a12">floor: 12</span><span class="a20">20</span></div>
+    </div>
+  </div>
+</div>
+
+<h3>Per arm</h3>
+<div class="table-wrap">
+<table class="even">
+  <caption>Ladder arms on <code>repoqa-qa/small_dev</code> — all before ADR 0027 and before <code>system_v3</code>.</caption>
+  <thead>
+    <tr><th></th><th>A1</th><th>A2</th><th>Step 4</th><th>Step 3</th></tr>
+  </thead>
+  <tbody>
+    <tr><th scope="row">Arm directory</th><td><code>aa-374/baseline</code></td><td><code>aa-374/candidate</code></td><td><code>step4-376/candidate</code></td><td><code>step3-375/candidate</code></td></tr>
+    <tr><th scope="row">Commit · run date</th><td><code>60d5a00a</code> · 09-30</td><td><code>60d5a00a</code> · 09-30</td><td><code>7f30e8ec</code> · 09-30</td><td><code>8fd6a23a</code> · 10-03</td></tr>
+    <tr><th scope="row">Tasks</th><td>20</td><td>20</td><td>20</td><td>20</td></tr>
+    <tr class="total"><th scope="row">Zero-hit tasks</th><td>5</td><td>9</td><td>4</td><td>4</td></tr>
+    <tr><th scope="row">Zero-hit search calls</th><td>5</td><td>9</td><td>4</td><td>4</td></tr>
+    <tr><th scope="row">Kind of those searches</th><td><code>api</code> ×5</td><td><code>api</code> ×9</td><td><code>api</code> ×4</td><td><code>api</code> ×4</td></tr>
+    <tr><th scope="row">Searches of any other kind: zero hits / calls</th><td>0 / 17</td><td>0 / 12</td><td>0 / 16</td><td>0 / 18</td></tr>
+    <tr><th scope="row">Next call after the first zero hit</th><td><code>search_codebase</code> 2, <code>read_file</code> 1, <code>get_overview</code> 1, <code>grep</code> 1</td><td><code>read_file</code> 4, <code>grep</code> 4, <code>grep</code> + <code>get_symbol</code> 1</td><td><code>read_file</code> 2, <code>grep</code> 1, <code>get_overview</code> + <code>grep</code> 1</td><td><code>grep</code> 3, <code>read_file</code> 1</td></tr>
+    <tr><th scope="row"><code>get_overview</code> was the next call</th><td>1 of 5</td><td>0 of 9</td><td>1 of 4</td><td>0 of 4</td></tr>
+    <tr><th scope="row">Gold file reached: same Turn as the miss / later / never</th><td>3 / 2 / 0</td><td>7 / 2 / 0</td><td>2 / 2 / 0</td><td>3 / 1 / 0</td></tr>
+    <tr><th scope="row"><code>needle cited</code>, zero-hit tasks</th><td>5 of 5</td><td>7 of 9</td><td>4 of 4</td><td>3 of 4</td></tr>
+    <tr><th scope="row"><code>needle cited</code>, other tasks</th><td>12 of 15</td><td>11 of 11</td><td>14 of 16</td><td>15 of 16</td></tr>
+    <tr><th scope="row">Mean Turns after the first zero hit</th><td>4.60</td><td>4.33</td><td>3.25</td><td>3.50</td></tr>
+    <tr><th scope="row">Largest possible effect on the mean</th><td>0.25 Turns</td><td>0.45 Turns</td><td>0.20 Turns</td><td>0.20 Turns</td></tr>
+    <tr class="total"><th scope="row">Against the floor of 12</th><td>5 of 20 — BELOW</td><td>9 of 20 — BELOW</td><td>4 of 20 — BELOW</td><td>4 of 20 — BELOW</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">A fifth directory, <code>step4-376/baseline</code>, is the reused A1 baseline: its traces are byte-identical to A1's and it is counted once, as A1. Two searches failed with a validation error (one in A2, one in step 4); counting them as well gives 5, 10, 5 and 4 tasks, still below the floor.</p>
+
+<h3>What the rows show</h3>
+<ul>
+  <li><strong>Every search zero hit is an API zero hit.</strong> All 22 are <code>kind="api"</code> requests, each the task's opening search in Turn 1. None of the 63 searches of any other kind came back empty.</li>
+  <li><strong>The count itself is noisy.</strong> A1 and A2 are the same commit with the same settings and show 5 and 9.</li>
+  <li><strong>The Pointer is rarely followed.</strong> <code>get_overview</code> was the next call in 2 of 22 zero-hit tasks — the only two where the miss was sent alone in its Turn. In the other 20 the model had sent a <code>grep</code> or a second search alongside and carried on from that result.</li>
+  <li><strong>The Needle was still reached.</strong> The gold file reached the model in all 22 tasks, and 19 of 22 answers cite the Needle. The three misses are all on the two generated-code <code>mlc-llm</code> needles, which no arm cites, zero hit or not.</li>
+  <li><strong>Zero-hit tasks take more Turns, and that is a different problem.</strong> The gap (for example 5.33 against 2.55 Turns in A2) belongs to opening with a descriptive <code>kind="api"</code> query. The arms of #394 would have changed one line of the response. ADR 0027 already answers the API zero hit itself.</li>
+</ul>
+
+<h3>Today's product</h3>
+<p>Since ADR 0027 (default on at <code>daa105be</code>) a <code>kind="api"</code> request that matches nothing is answered in the same response with the <code>kind="any"</code> rows, and the overview Pointer renders only when that fallback is empty too. All 22 empty searches above are of that kind, so today's rate is at most the counts above. The stored traces that carry <code>system_v3</code> agree:</p>
+<div class="table-wrap">
+<table>
+  <caption>Supporting check, not the floor test. Same 20 tasks and chat model; a fixed sampling seed per arm. These come from the three-seed before/after of 2026-11-08 and the <code>kind="api"</code> fallback experiment of 2026-11-09, not from the turn-efficiency ladder.</caption>
+  <thead><tr><th>Slice</th><th>Commit</th><th><code>system_v3</code></th><th>ADR 0027</th><th>Zero-hit tasks per 20-task arm</th><th>Note</th></tr></thead>
+  <tbody>
+    <tr><td>Three-seed, baseline</td><td><code>7ee99fd4</code></td><td>no</td><td>before</td><td>5, 2, 3</td><td>all <code>api</code></td></tr>
+    <tr><td>Three-seed, candidate</td><td><code>9b9de5a3</code></td><td>yes</td><td>before</td><td>5, 4, 8</td><td>all <code>api</code>; 17 over 60, the same count ADR 0027 records</td></tr>
+    <tr><td>Fallback experiment, baseline</td><td><code>9b9de5a3</code></td><td>yes</td><td>before</td><td>7, 2, 4</td><td>all <code>api</code></td></tr>
+    <tr class="total"><td>Fallback experiment, candidate</td><td><code>0a6496b1</code></td><td>yes</td><td>after</td><td>0, 0</td><td>two complete seeds; 11 API zero hits, all answered with fallback rows</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">Partial runs were left out and not pooled: the third candidate seed of the fallback experiment (10 traces, no <code>arm.json</code>) and the two later runs under <code>track-49/m2</code> and <code>m3</code> (9 traces each, no <code>arm.json</code>).</p>
+
+<h3>What it implies</h3>
+<p><strong>#394 closes unmerged.</strong> The table is recorded in #366 — prepared in <a href="394-zero-hit-count.md"><code>394-zero-hit-count.md</code></a>, not posted. No paid arm runs. Arm C is not built. Question 2 does not apply. #394 stops blocking the final confirmation (#396).</p>
+
+<details>
+  <summary>Caveats on the count</summary>
+  <ul>
+    <li>The ladder arms predate <code>system_v3</code> and ADR 0027. They give an upper bound, not a measurement of today's rate.</li>
+    <li>No ladder arm of the current accepted state is among the stored runs. The post-fallback evidence is two complete arms of the fallback experiment.</li>
+    <li>No 100-task <code>repoqa-qa/dev</code> arm exists; the floor of about 27 of 100 was not tested.</li>
+    <li>"Gold file reached" is the eval suite's file-level rule: the file was returned to the model. <code>needle cited</code> is the stricter outcome row.</li>
+    <li>The Turn gap between zero-hit tasks and the others is observational. It does not estimate what changing the Pointer would do.</li>
+    <li>Check on the script: from the same files it reproduces the stored verdict figures of all four arms (penalised Turns-to-answer 4.200 / 3.850 / 3.600 / 3.150; <code>needle cited</code> 0.850 / 0.900 / 0.900 / 0.900).</li>
+  </ul>
+</details>
+
+<!-- ───────────────────────────── 4 ───────────────────────────── -->
+<h2 id="b394">4. #394 — before and after</h2>
+<p><span class="tag">Before</span> the issue as written on GitHub. <span class="tag solid">After</span> Max's answers applied, with the count in.</p>
+<div class="table-wrap">
+<table class="ba">
+  <thead><tr><th></th><th class="before">Before — issue as written</th><th class="after">After — decided, count applied</th></tr></thead>
+  <tbody>
+    <tr>
+      <th scope="row">Premise</th>
+      <td class="before" data-label="Before">On a zero hit the response offers a Pointer to <code>get_overview</code> and a Suggestion nudging an orientation call. That costs the agent a Turn that rarely helps.</td>
+      <td class="after" data-label="After">The chat model reads two lines: <code>No matches found.</code> (or <code>No symbols found.</code>) and <code>Together: → get_overview()</code>. The Suggestion is metadata it never reads. Since ADR 0027 an API zero hit is answered with rows, and the Pointer appears only when the fallback is empty too. In the stored arms the Pointer was followed in 2 of 22 zero-hit tasks.</td>
+    </tr>
+    <tr>
+      <th scope="row">First step</th>
+      <td class="before" data-label="Before">Build the overlay arms and pay for them.</td>
+      <td class="after" data-label="After">Count the zero hits on stored traces at $0, against a floor fixed in advance: 12 of 20 tasks.</td>
+    </tr>
+    <tr>
+      <th scope="row">Result</th>
+      <td class="before" data-label="Before">—</td>
+      <td class="after" data-label="After"><strong>5, 9, 4 and 4 of 20: below the floor in every arm.</strong> 0 of 20 in both complete arms after ADR 0027.</td>
+    </tr>
+    <tr>
+      <th scope="row">Arms</th>
+      <td class="before" data-label="Before">(A) shipped. (B) <code>zero_hit</code> row cleared plus <code>search_zero_hit: false</code>. (C) "suggestion text naming a widening (text only)". At most 3 variants under Holm, on top of accepted v3.</td>
+      <td class="after" data-label="After"><strong>None.</strong> B is not run. C is not built: it could not have been "text only" — it needed a new printed line, a new key and an ADR 0007 amendment.</td>
+    </tr>
+    <tr>
+      <th scope="row">Slice</th>
+      <td class="before" data-label="Before">The chat adoption set, with <code>repoqa-qa/small_dev</code> as a guard (the design when the ticket was written).</td>
+      <td class="after" data-label="After"><code>repoqa-qa/small_dev</code>, 20 tasks: the only slice a PASS/FAIL reads since the owner's decision of 2026-09-28. The count used it.</td>
+    </tr>
+    <tr>
+      <th scope="row">Metric and gate</th>
+      <td class="before" data-label="Before">The acceptance rule "with multi-site recall gating (q01's overview rescue)".</td>
+      <td class="after" data-label="After">The floor decides, and it is not met. The q01 gate had no slice to run on: repoqa needles are single-site, and q01 is a chat <code>dev</code> question whose gold is unratified.</td>
+    </tr>
+    <tr>
+      <th scope="row">Keys and code</th>
+      <td class="before" data-label="Before">Existing keys only (<code>output.pointers.table.zero_hit</code>, <code>output.suggestions.search_zero_hit</code>); three overlay files; $0 tests pinning that <code>zero_hit: {}</code> keeps the row and <code>together: []</code> clears it.</td>
+      <td class="after" data-label="After">No overlay file, no test, no key, no code.</td>
+    </tr>
+    <tr>
+      <th scope="row">Cost</th>
+      <td class="before" data-label="Before">Ledger line 15: $1.00–2.00 for two variants. First in the drop order at the $25 stop, reduced to one variant.</td>
+      <td class="after" data-label="After"><strong>$0.</strong> Line 15 is not spent.</td>
+    </tr>
+    <tr>
+      <th scope="row">On a win</th>
+      <td class="before" data-label="Before">The winning PR flips the zero-hit pointer default and carries the changelog entry.</td>
+      <td class="after" data-label="After">Not applicable: no arm runs.</td>
+    </tr>
+    <tr>
+      <th scope="row">On a loss</th>
+      <td class="before" data-label="Before">Close unmerged, with the table in the umbrella issue.</td>
+      <td class="after" data-label="After"><strong>Close unmerged now.</strong> The count table is recorded in #366 (prepared, not posted).</td>
+    </tr>
+    <tr>
+      <th scope="row">Product</th>
+      <td class="before" data-label="Before">No default changes. <code>callers</code> stays on <code>search_hit_code</code>. No <code>pointer_hits</code> knob.</td>
+      <td class="after" data-label="After">The same: nothing changes in the product.</td>
+    </tr>
+    <tr>
+      <th scope="row">Final confirmation (#396)</th>
+      <td class="before" data-label="Before">Blocked by #394.</td>
+      <td class="after" data-label="After">The edge clears when #394 is closed.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<details>
+  <summary>For the record: what would have run had the count cleared the floor (question 2, option 1)</summary>
+  <ul>
+    <li><strong>Arm A:</strong> the shipped state.</li>
+    <li><strong>Arm B:</strong> the <code>zero_hit</code> row cleared and <code>search_zero_hit: false</code>. The model still reads <code>No matches found.</code>, so B removes the Pointer only.</li>
+    <li><strong>Arm C:</strong> a new printed, fixed line behind a new default-off flag, with the <code>zero_hit</code> row cleared so the response names one move. Draft wording from the grill: <code>[suggestion: zero hits — search_codebase again with a broader query (fewer, more general words) and without package= or scope= filters; if that also finds nothing, say the index has no match]</code>. It would have cost code, one new key and an ADR 0007 amendment.</li>
+    <li><strong>Gate:</strong> the acceptance rule, plus: <code>needle cited</code> over the tasks that had a zero hit in the shipped arm may fall by at most one task. This replaces the q01 gate.</li>
+    <li><strong>Reported, not gating:</strong> Turns after the first zero hit; the next call; answers given without the Needle after a zero hit. The count in section 3 already reports these three rows for the stored arms.</li>
+    <li>Both B and C would have run; if cut to one variant, C stays.</li>
+  </ul>
+  <p>The same rule holds for a future slice: on a 100-task <code>repoqa-qa/dev</code> arm the floor is about 27 tasks.</p>
+</details>
+
+<!-- ───────────────────────────── 5 ───────────────────────────── -->
+<h2 id="b391">5. #391 — before and after</h2>
+<p><span class="tag">Before</span> the issue as written, which follows decisions B1–B3 of the program's decision log. <span class="tag solid">After</span> Max's answers to questions 3, 4 and 5 applied.</p>
+<div class="table-wrap">
+<table class="ba">
+  <thead><tr><th></th><th class="before">Before — issue as written</th><th class="after">After — decided</th></tr></thead>
+  <tbody>
+    <tr>
+      <th scope="row">The knob</th>
+      <td class="before" data-label="Before"><code>ask_your_docs.guidance_task</code>: <code>none</code> / <code>repo_qa</code> / <code>vuln</code> / <code>bug_loc</code>. <code>none</code>, the default, is byte-identical to today. A bad value is refused. The enum matches <code>TASK_NAMES</code>. Chat borrows <code>repo_qa</code>.</td>
+      <td class="after" data-label="After">Same contract. Order of work: candidate seed file → paid arms → the knob and the default flip land only in a winning PR. The eval arm already serves the seed through <code>guidance_sections</code>, so the measurement does not wait for the knob.</td>
+    </tr>
+    <tr>
+      <th scope="row">Slice</th>
+      <td class="before" data-label="Before">One chat arm on the adoption set, with the <code>repoqa-qa/small_dev</code> guard.</td>
+      <td class="after" data-label="After"><code>repoqa-qa/small_dev</code> (20 tasks) decides. Chat is informational. This follows the owner's decision of 2026-09-28; the grill assumed it covers the experiments.</td>
+    </tr>
+    <tr>
+      <th scope="row">Arms</th>
+      <td class="before" data-label="Before">One variant: v3 + <code>repo_qa</code> + candidate seed, against v3 + <code>none</code>.</td>
+      <td class="after" data-label="After">Baseline v3 + <code>none</code>, and <strong>three variants</strong>: (a) <code>system_v4</code> draft + seed, which decides; (b) v3 + seed, diagnostic; (c) v3 + length-matched placebo, diagnostic. <a href="#variants">Section 6</a>.</td>
+    </tr>
+    <tr>
+      <th scope="row">What the deciding arm tests</th>
+      <td class="before" data-label="Before">A state that never ships: v3 and the seed together carry six rules twice, in two wordings. <code>system_v4</code> ships untested.</td>
+      <td class="after" data-label="After">The state a win ships: the slimmed <code>system_v4</code> with the seed.</td>
+    </tr>
+    <tr>
+      <th scope="row">Seed rewrite</th>
+      <td class="before" data-label="Before">The three <code>ask_your_docs.*</code> heads rewritten (B2). BACKBONE keeps its stop rule and gains the "already shown" definition; the repo-QA confirming read becomes conditional (B3). The external, <code>vuln</code> and <code>bug_loc</code> heads are untouched. The BACKBONE breadth sentences stay as they are.</td>
+      <td class="after" data-label="After">All of that, <strong>plus the BACKBONE breadth sentences rewritten</strong>. BACKBONE is read by every harness and task, so the <code>vuln</code>, <code>bug_loc</code> and external heads are affected even though their own sections stay untouched. <a href="#backbone">Section 7</a>.</td>
+    </tr>
+    <tr>
+      <th scope="row">Tokens per Turn</th>
+      <td class="before" data-label="Before">"+800–900 tokens per turn", reported and not gated.</td>
+      <td class="after" data-label="After">Recomputed at HEAD: about +820–1,090 for variant (b); about +480–750 for the state that ships, variant (a). Reported. A PASS that costs more tokens-in per task than baseline needs Max's sign-off.</td>
+    </tr>
+    <tr>
+      <th scope="row">Primary metric</th>
+      <td class="before" data-label="Before">Penalised Turns-to-answer.</td>
+      <td class="after" data-label="After">Unchanged. Turns after needle and its call companions stay reported rows.</td>
+    </tr>
+    <tr>
+      <th scope="row">Acceptance</th>
+      <td class="before" data-label="Before">The acceptance rule as coded in the compare verb (or the owner's cost-grounds sign-off). Any drop in the point estimate passes.</td>
+      <td class="after" data-label="After">The same rule <strong>plus three clauses</strong>, for this experiment only: tokens sign-off, no unanswered class up, and a 100-task re-run when the gain is under 0.6 Turns. <a href="#acceptance">Section 8</a>.</td>
+    </tr>
+    <tr>
+      <th scope="row">Chat model</th>
+      <td class="before" data-label="Before"><code>qwen/qwen3.8-27b</code>, the pinned block.</td>
+      <td class="after" data-label="After">The same. One model stays; no second-model arm.</td>
+    </tr>
+    <tr>
+      <th scope="row">Cost</th>
+      <td class="before" data-label="Before">Ledger line 17: $0.60–1.20. Second in the drop order at the $25 stop.</td>
+      <td class="after" data-label="After">About $0.35–0.55 for the baseline and three variants at recorded prices. About $1.0–1.3 more if the re-run clause applies. <a href="#cost">Section 9</a>.</td>
+    </tr>
+    <tr>
+      <th scope="row">On a win</th>
+      <td class="before" data-label="Before">The same PR flips the default to <code>repo_qa</code>, ships the candidate as the packaged seed and the <code>system_v4</code> template, regenerates goldens and seeds, and records both fingerprint moves.</td>
+      <td class="after" data-label="After">The same contents, decided by variant (a) under the extended rule. The packaged seed now includes the BACKBONE rewrite. The changelog says the evidence is one model on one slice and that <code>guidance_task: none</code> restores the old prompt.</td>
+    </tr>
+    <tr>
+      <th scope="row">On a loss</th>
+      <td class="before" data-label="Before">The PR closes unmerged with its table in the umbrella issue. v3 stays. The knob never lands. Step 8 takes the <code>SYSTEM_PROMPT</code> channel.</td>
+      <td class="after" data-label="After">The same. One more case: if (a) fails and (b) passes, nothing flips in this PR and the <code>system_v4</code> draft is revised.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<!-- ───────────────────────────── 6 ───────────────────────────── -->
+<h2 id="variants">6. #391 — the three variants</h2>
+<p>All arms run on one commit, on <code>repoqa-qa/small_dev</code>, with the pinned chat model. Three variants is the most the Holm correction of the compare verb covers; Holm changes the printed p values only, never PASS or FAIL.</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th style="width:11%">Arm</th><th style="width:17%">System prompt</th><th style="width:19%">Guidance loaded</th><th style="width:12%">Role</th><th>What its result tells us</th><th style="width:12%">Tokens per Turn vs today</th></tr></thead>
+  <tbody>
+    <tr><th scope="row">Baseline</th><td><code>system_v3</code></td><td>none</td><td>Reference</td><td>Today's product.</td><td>—</td></tr>
+    <tr class="total"><th scope="row">(a)</th><td><code>system_v4</code> draft</td><td>candidate seed, <code>repo_qa</code></td><td>Decides the flip</td><td>Whether the state a win would ship is better than today.</td><td>about +480–750</td></tr>
+    <tr><th scope="row">(b)</th><td><code>system_v3</code></td><td>candidate seed, <code>repo_qa</code></td><td>Diagnostic</td><td>The arm of the original design. Against (a) it shows what carrying six rules twice costs or buys.</td><td>about +820–1,090</td></tr>
+    <tr><th scope="row">(c)</th><td><code>system_v3</code></td><td>placebo: the same section sizes, task-irrelevant text</td><td>Diagnostic</td><td>The effect of length alone. Against (b) it separates what the seed says from how long it is.</td><td>the same as (b), by construction</td></tr>
+  </tbody>
+</table>
+</div>
+<ul>
+  <li><strong>Only (a) decides.</strong> If (a) fails and (b) passes, there is no flip in this PR and the <code>system_v4</code> draft is revised.</li>
+  <li><strong>Drop order</strong> if the $25 stop bites: (c) first, then (b).</li>
+  <li><strong>No product change is needed to run them.</strong> The <code>system_v4</code> draft is served from the eval side, as a <code>SYSTEM_PROMPT</code> section of the same guidance file.</li>
+  <li><strong>The spec carries a sentence map</strong> with one home for each v3 rule. Rules 8, 10 and 15 are named by neither the list of rules that move to the seed nor the description of what <code>system_v4</code> keeps; they are the ones a slim could drop without anyone deciding it.</li>
+  <li><strong>Why the head is a rewording:</strong> the six v3 rules that move are 383 tokens verbatim, against a 300-token cap per head. That is also why the knob costs more than the issue's "+800–900".</li>
+</ul>
+
+<!-- ───────────────────────────── 7 ───────────────────────────── -->
+<h2 id="backbone">7. #391 — the BACKBONE rewrite and the other heads</h2>
+
+<h3>What is rewritten</h3>
+<p>The seed keeps two passages in BACKBONE that tell the agent to search more broadly (<code>python/pydocs_mcp/harness/core/skills/search_guidance_seed.md</code>, lines 25–34):</p>
+<ul>
+  <li>"Decompose before retrieving: at most three sharp search queries … two focused queries beat one sprawling sentence that mixes concerns."</li>
+  <li>"Spend a ~5-document precision budget: keep about five retrieved documents in play at a time …"</li>
+</ul>
+<p>The direction named in the grill: decompose only when the question holds several behaviours, and state the five-document budget as a ceiling. The reason: this is the kind of breadth advice that raised a Qwen model's tool calls by up to 44% in the literature the grill read (2611.22539), while the baseline already shows the Needle in a turn-1 result in 27 of 29 repoqa tasks.</p>
+
+<div class="note">
+  <p><span class="label">This changes an earlier decision.</span> The decision log (B2) left BACKBONE policy to the multitask optimizer and limited hand edits to the "already shown" definition. Question 4, option 3 overrides that for the breadth sentences. Two rules stay binding: BACKBONE must not grow (543 of 1,000 tokens today), and each edit replaces a whole section with a per-section token ledger for all ten sections.</p>
+</div>
+
+<h3>Who reads BACKBONE</h3>
+<p>Guidance folds in a fixed order: BACKBONE, then the task head, then the harness-and-task head (<code>python/pydocs_mcp/harness/core/guidance_fold.py</code>). Every harness and task therefore reads the rewritten sentences. This experiment measures one of the six.</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th style="width:22%">Reader</th><th>Why the breadth sentences matter to it</th><th style="width:24%">Measured by this experiment?</th></tr></thead>
+  <tbody>
+    <tr><th scope="row"><code>ask_your_docs</code> · <code>repo_qa</code></th><td>The chat default after a win.</td><td><strong>Yes</strong> — variants (a) and (b).</td></tr>
+    <tr><th scope="row"><code>ask_your_docs</code> · <code>vuln</code>, <code>bug_loc</code></th><td>Reachable through the knob's other two values. The <code>vuln</code> head walks from source to sink; the <code>bug_loc</code> head says "stopping at one plausible file is this task's most common failure". Both need several steps by design.</td><td><strong>No.</strong> No arm here runs a <code>vuln</code> or <code>bug_loc</code> slice.</td></tr>
+    <tr><th scope="row"><code>external</code> · <code>repo_qa</code>, <code>vuln</code>, <code>bug_loc</code></th><td>The external harness heads tell the agent to orient first, then "route per the backbone policy".</td><td><strong>No, and not possible today:</strong> no config binds the external harness to the before/after campaign.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>How it can be measured or guarded</h3>
+<div class="note"><p><span class="label">Open — to settle in the spec.</span> Max's answer requires that the spec say how this is measured or guarded. The list below is what exists today and what this review recommends. It is a proposal, not a decision.</p></div>
+<div class="table-wrap">
+<table>
+  <thead><tr><th style="width:18%">Kind</th><th>What</th><th style="width:26%">Covers</th></tr></thead>
+  <tbody>
+    <tr><th scope="row">Guard — scope</th><td>The rewrite lives in the eval-side candidate seed file until a winning PR. The packaged seed is the only text the other harnesses and tasks read, and it changes in that PR and nowhere else. A loss changes nothing for any head.</td><td>All heads, until a win.</td></tr>
+    <tr><th scope="row">Guard — $0 tests</th><td>In the experiment PR: the <code>TASK_HEAD: vuln</code>, <code>TASK_HEAD: bug_loc</code> and three <code>external.*</code> sections are byte-identical to HEAD; the stop rule sentence that <code>vuln</code>, <code>bug_loc</code> and the external heads depend on is still present; "graph walks and file reads do not count" toward the query limit is still present; BACKBONE is no longer than today; the token ledger covers all ten sections.</td><td>The text every head receives.</td></tr>
+    <tr><th scope="row">Guard — wording</th><td>Write each rewritten rule as trigger + action + reason, as a condition and not a deletion: the multi-step walks of <code>vuln</code> and <code>bug_loc</code> stay governed by their own task heads.</td><td><code>vuln</code>, <code>bug_loc</code>.</td></tr>
+    <tr><th scope="row">Measure — repo-QA</th><td>Add <code>search_codebase</code> calls per task as a pre-registered count in the #391 table, so a breadth effect is visible directly, beside Turns.</td><td><code>ask_your_docs</code> · <code>repo_qa</code>.</td></tr>
+    <tr><th scope="row">Measure — <code>bug_loc</code></th><td>The ledger has one bug-localization line: line 22, a ~10-task <code>lca-bug-loc/all</code> pilot ($0.50–1.50, rung 2, booked under step 8). Run it under both BACKBONE texts when it is scheduled. Whether that happens before the flip (gating) or after (informational) is Max's call.</td><td><code>bug_loc</code>, once that pilot exists.</td></tr>
+    <tr><th scope="row">Stated, not measured</th><td>The ledger has no <code>vuln</code> line and the external harness has no config. For those, the winning PR's changelog says the BACKBONE change is unmeasured there and that reverting the two passages restores the old text.</td><td><code>vuln</code>, external.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<!-- ───────────────────────────── 8 ───────────────────────────── -->
+<h2 id="acceptance">8. #391 — the acceptance rule</h2>
+<h3>The current rule, as coded</h3>
+<p>The compare verb returns PASS when all of these hold (<code>benchmarks/src/pydocs_eval/campaign/before_after_acceptance.py</code>):</p>
+<ul>
+  <li>penalised Turns-to-answer goes down — a point estimate, of any size;</li>
+  <li>the budget-exhausted rate does not rise;</li>
+  <li><code>needle cited</code> stays within the band below baseline: 0.050, one task of 20.</li>
+</ul>
+<h3>The three clauses added for this experiment</h3>
+<div class="table-wrap">
+<table>
+  <thead><tr><th style="width:6%"></th><th style="width:42%">Clause</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><th scope="row">(a)</th><td>A PASS whose tokens-in per task is above baseline flips the default only with Max's recorded sign-off.</td><td>The knob adds tokens to every Turn. Its break-even is a Turn reduction of about 12–15%, roughly 0.4–0.6 Turns per task. Below that, each question costs more while the rule still passes.</td></tr>
+    <tr><th scope="row">(b)</th><td>No unanswered outcome class may rise: token-limit stops (<code>starved_reply</code>) and timeouts, as well as budget exhaustion.</td><td>Today only turn-limit stops are guarded. A token-limit or timeout stop counts 13 in the mean, about +0.45 at 20 tasks, and can be outweighed by gains elsewhere. Long prompts are where token-limit stops appear.</td></tr>
+    <tr><th scope="row">(c)</th><td>A PASS whose Turn gain is under 0.6 is re-run on the 100-task <code>repoqa-qa/dev</code> slice before the flip.</td><td>Two identical arms moved 0.35 Turns apart, and a change under about ±0.6 is inside the noise at 20 tasks. A variant with no effect passes the Turns clause about half the time.</td></tr>
+  </tbody>
+</table>
+</div>
+<p><strong>One model stays.</strong> No second-model arm is added. The winning PR's changelog states that the evidence is one model on one slice and that <code>guidance_task: none</code> restores the old prompt.</p>
+
+<h3>How variant (a) is read</h3>
+<div class="table-wrap">
+<table>
+  <thead><tr><th style="width:46%">Result of variant (a)</th><th>What follows</th></tr></thead>
+  <tbody>
+    <tr><td>FAIL under the current rule</td><td>No flip. If (b) passed, the <code>system_v4</code> draft is revised. Otherwise the PR closes unmerged with its table in #366, v3 stays and the knob does not land.</td></tr>
+    <tr><td>PASS, and an unanswered outcome class rose</td><td>No flip (clause b).</td></tr>
+    <tr><td>PASS with a Turn gain under 0.6</td><td>Re-run the baseline and (a) on the 100-task slice before any flip (clause c).</td></tr>
+    <tr><td>PASS, tokens-in per task above baseline</td><td>Flips only with Max's recorded sign-off (clause a).</td></tr>
+    <tr><td>PASS with a gain of 0.6 or more, tokens-in per task at or below baseline, no unanswered class up</td><td>The winning PR flips the default.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<!-- ───────────────────────────── 9 ───────────────────────────── -->
+<h2 id="cost">9. Cost</h2>
+<div class="note"><p><span class="label">No spend go is requested in this PR.</span> The figures below are for the spec and for the go that will be asked later.</p></div>
+<div class="table-wrap">
+<table>
+  <thead><tr><th style="width:24%">Item</th><th style="width:22%">Ledger line</th><th class="num" style="width:14%">Ledger estimate</th><th>Now</th></tr></thead>
+  <tbody>
+    <tr><th scope="row">#394 pointer density</th><td>Line 15 — "pointer density, 2 variants"; first in the drop order</td><td class="num">$1.00–2.00</td><td><strong>$0.</strong> Below the floor: no paid arm.</td></tr>
+    <tr><th scope="row">#391 baseline + three variants</th><td>Line 17 — "<code>guidance_task</code> + candidate seed"; second in the drop order</td><td class="num">$0.60–1.20</td><td><strong>About $0.35–0.55</strong> at recorded prices: four 20-task arms at $0.08–0.13 each.</td></tr>
+    <tr><th scope="row">#391 re-run on 100 tasks</th><td>None of its own</td><td class="num">—</td><td><strong>About $1.0–1.3</strong>, only if variant (a) passes with a Turn gain under 0.6. Covers the baseline and (a) on <code>repoqa-qa/dev</code>.</td></tr>
+  </tbody>
+</table>
+</div>
+<ul>
+  <li><strong>Recorded prices.</strong> The four stored ladder arms reported $0.128, $0.103, $0.120 and $0.076.</li>
+  <li><strong>If the re-run happens,</strong> #391 totals about $1.35–1.85, above line 17's high of $1.20. The $1.00–2.00 that line 15 no longer needs is larger than the difference. Where the re-run is booked is for the spec to state and Max to approve.</li>
+  <li><strong>Program limits</strong> are unchanged: ceiling $35, stop-and-ask at $25, the owner's go before every paid run.</li>
+  <li><strong>The Bench VM cap does not apply.</strong> #434's US$10 cap is for GCP Bench VM runs. These arms spend at OpenRouter, which the model provider bills and each run's own <code>--max-usd</code> bounds.</li>
+</ul>
+
+<!-- ───────────────────────────── 10 ───────────────────────────── -->
+<h2 id="confirm">10. What to confirm, and what follows</h2>
+<h3>For Max, in this review</h3>
+<ol>
+  <li><strong>#394 closes on this count.</strong> It follows from your answer to question 1; confirm the reading of the table in <a href="#count">section 3</a>.</li>
+  <li><strong>Scope of question 4, option 3.</strong> The option was worded "<em>also</em> rewrite the BACKBONE breadth sentences". This page reads it as including option 2's two items: drop or condition "get_symbol where exact signatures matter" in the repo-QA task head (the clause step 5 removed from v3 as call-inducing), and count searches per task. Say so if you meant the BACKBONE rewrite alone.</li>
+  <li><strong>The BACKBONE guard</strong> in <a href="#backbone">section 7</a>: accept the guards as proposed, and say whether the <code>bug_loc</code> pilot under both texts must precede the flip or may follow it.</li>
+  <li><strong>The re-run clause.</strong> The spec will say that the 100-task re-run is read with the same rule as the 20-task arm, and where its cost is booked. Say so if you want a different test there.</li>
+</ol>
+<h3>After confirmation</h3>
+<ul>
+  <li><strong>#394</strong> needs no spec. Three actions remain, none taken here: post the prepared table to #366, close #394 unmerged, remove #394 from #396's blockers.</li>
+  <li><strong>#391</strong> goes to the spec with sections 5 to 8 as its design.</li>
+  <li><strong>Lookups for the spec writer</strong> (not decisions): the arm directory of the current accepted state, which the saved #366 material does not name; the <code>system_v4</code> sentence map; the placebo text; the candidate seed's token ledger.</li>
+  <li><strong>Drafts from the grill</strong>, not applied: glossary entries for <em>Search zero hit</em>, <em>Zero-hit pointer</em>, <em>Variant</em> and <em>Placebo guidance</em>. The draft ADR 0007 amendment for arm C is no longer needed.</li>
+</ul>
+
+<!-- ───────────────────────────── 11 ───────────────────────────── -->
+<h2 id="evidence">11. Evidence and files</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th style="width:38%">File</th><th>What it holds</th></tr></thead>
+  <tbody>
+    <tr><td><a href="394-zero-hit-count.md"><code>docs/review/394-zero-hit-count.md</code></a></td><td>The table prepared for #366, the short method and the caveats.</td></tr>
+    <tr><td><a href="GRILL-394-391.md"><code>docs/review/GRILL-394-391.md</code></a></td><td>The grill notes of 2026-11-22: every fact resolved from the code and the docs, with file and line evidence, and the five questions as they were put to Max.</td></tr>
+    <tr><td><a href="README.md"><code>docs/review/README.md</code></a></td><td>The index of this folder.</td></tr>
+    <tr><td><code>/workspace/claude-logs/experiments-2026-11-22/ZERO-HIT-COUNT.md</code></td><td>Outside the repository: the full count — per-task rows for all 80 task runs, every source path, the checks. The scripts are beside it in <code>count-scripts/</code>.</td></tr>
+    <tr><td><code>docs/superpowers/specs/2026-09-25-ask-turn-efficiency-decisions.md</code></td><td>The program's decision log (acceptance rule, B1–B4, budget).</td></tr>
+    <tr><td><code>docs/superpowers/specs/2026-09-25-ask-turn-efficiency-program-design.md</code></td><td>The program design: Experiments, the seed placement rules, the cost ledger.</td></tr>
+    <tr><td><code>docs/adr/0027-api-zero-hit-fallback-to-any.md</code></td><td>The fallback that answers an API zero hit with <code>kind="any"</code> rows.</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">The stored traces are not in the repository and must stay out of it.</p>
+
+<details>
+  <summary>The grill's design tree (full notes in <code>GRILL-394-391.md</code>)</summary>
+<pre>#366 turn-efficiency program (binding: decision log + owner comments on #366)
+├─ Shared measurement frame
+│  ├─ Slice ............................. RESOLVED   repoqa-qa only (2026-09-28), #393 precedent
+│  ├─ Chat model and settings ........... RESOLVED   the pinned block
+│  ├─ Acceptance rule as coded .......... RESOLVED   what it gates and what it does not
+│  ├─ Arm mechanics ..................... RESOLVED   variant arms on main; serving-copy + reused baseline
+│  ├─ Prerequisites ..................... RESOLVED   plumbing merged; fresh draw recorded
+│  └─ Spend go .......................... DEFERRED   not asked in this round
+├─ #394 zero-hit retarget
+│  ├─ What the model sees today (arm A) . RESOLVED   a Pointer; the Suggestion is metadata
+│  ├─ What arm B shows .................. RESOLVED   "No matches found." stays
+│  ├─ Can arm C be text-only / overlay .. RESOLVED   no
+│  ├─ Is there anything left to measure . ANSWERED   question 1 → option 1 → counted: BELOW the floor
+│  │   └─ arms, gate, rows if it runs ... ANSWERED   question 2 → option 1 → does not apply
+│  ├─ Model dependence, system-level slot RESOLVED
+│  └─ Rows after a zero hit ............. RESOLVED   reported for the stored arms in the count
+└─ #391 guidance_task + candidate seed
+   ├─ What the arm delivers ............. RESOLVED   the eval channel needs no product knob
+   ├─ What the knob costs per turn ...... RESOLVED   820–1,090 tokens, not 800–900
+   ├─ Tested arm vs shipped state ....... ANSWERED   question 3 → option 3: three variants, (a) decides
+   ├─ Seed sentences, call-adding or not  ANSWERED   question 4 → option 3: BACKBONE breadth rewritten
+   ├─ Which v3 sentences v4 must keep ... RESOLVED   sentence map; rules 8, 10, 15 flagged
+   ├─ Primary metric .................... RESOLVED   unchanged
+   ├─ Wording style ..................... RESOLVED   trigger + action + reason, no arm
+   ├─ Limit stops ....................... ANSWERED   question 5 → clause (b)
+   └─ Acceptance bar for a default flip . ANSWERED   question 5 → option 2: three clauses, one model</pre>
+</details>
+
+<footer>
+  <p>Prepared 2026-11-22 (Europe/Paris) by a headless Claude Code session on worktree <code>daa105be</code>, at $0: no model, embedding, GitHub or GCP call. Nothing was committed, pushed or posted. This page is self-contained: no script, no external stylesheet, font or image.</p>
+</footer>
+
+</div>
+</body>
+</html>
