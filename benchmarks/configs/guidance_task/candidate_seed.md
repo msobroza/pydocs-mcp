@@ -1,6 +1,6 @@
 === BACKBONE ===
-Search policy for the pydocs-mcp retriever: which retrieval move to make
-when, not a tool catalogue; parameter shapes live in the tool descriptions.
+Search policy: which retrieval move to make when; parameter shapes live in
+the tool descriptions.
 
 Route by expected lexical overlap between the question and the evidence:
 
@@ -23,16 +23,17 @@ alternative rather than skipping the step.
 
 When the question holds several behaviors, decompose it: at most three
 sharp search queries (search_codebase or grep — graph walks and file reads
-do not count), one behavior each, in the repo's terms. When it asks
-about one behavior, send one query: a rephrasing finds the same.
+do not count), one behavior each, since focused queries beat a sprawling
+one. When it asks about one behavior, send one query: there is one thing to
+find. Re-phrase in the repo's terms once results show them.
 
 Keep at most about five documents in play — a ceiling, not a quota:
-answer quality saturates there, so precision at small k binds.
-Retire exhausted hits; do not pile up marginal ones.
+answer quality saturates there. Retire exhausted hits; do not pile up
+marginal ones.
 
 Stop searching the moment a result names the file and symbol that must
-contain the answer: retrieval locates, the file confirms. Read what the
-result cites and has not already shown (read_file, or get_symbol
+contain the answer: retrieval locates, the file confirms. Read exactly what
+the result cites and has not already shown (read_file, or get_symbol
 depth="source") rather than re-querying. Already shown: a hit whose
 follow-up calls offer no source call has shown its whole span; lines a
 view reports as not in the index are read exactly once. If three search
@@ -87,8 +88,8 @@ results. Never read again what a result already showed: the read returns
 the same lines. When you need a symbol's code, make one get_symbol
 depth="source" call or one windowed read_file call; ask for the symbol card
 only when the question needs its member list, since the card adds no code.
-Give read_file an offset and limit around the cited lines, and widen only
-to follow a reference you need. Call get_overview only after a search
+Give read_file an offset and limit around the lines a result cited or
+reported as missing, and widen only to follow a reference you need. Call get_overview only after a search
 misses or for a question about the project's structure, never beside the
 first search: the question routes the first query. When a result showed a
 signature or usage, end with a short Example built from it; otherwise leave
@@ -104,8 +105,8 @@ results. Never read again what a result already showed: the read returns
 the same lines. When you need a symbol's code, make one get_symbol
 depth="source" call or one windowed read_file call; ask for the symbol card
 only when the question needs its member list, since the card adds no code.
-Give read_file an offset and limit around the cited lines, and widen only
-to follow a reference you need. Call get_overview only after a search
+Give read_file an offset and limit around the lines a result cited or
+reported as missing, and widen only to follow a reference you need. Call get_overview only after a search
 misses or for a question about the project's structure, never beside the
 first search: the question routes the first query. When a result showed a
 signature or usage, end with a short Example built from it; otherwise leave
@@ -121,10 +122,10 @@ results. Never read again what a result already showed: the read returns
 the same lines. When you need a symbol's code, make one get_symbol
 depth="source" call or one windowed read_file call; ask for the symbol card
 only when the question needs its member list, since the card adds no code.
-Give read_file an offset and limit around the cited lines, and widen only
-to follow a reference you need. Call get_overview only after a search
+Give read_file an offset and limit around the lines a result cited or
+reported as missing, and widen only to follow a reference you need. Call get_overview only after a search
 misses or for a question about the project's structure, never beside the
-first search: route the first query from the report's own literals. When a
+first search: the report's own literals route the first query. When a
 result showed a signature or usage, end with a short Example built from it;
 otherwise leave it out. Effort: the first turn locates, the second reads
 the cited spans not yet rendered in one batch, the third answers; any call

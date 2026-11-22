@@ -25,9 +25,12 @@ from pydocs_mcp.harness.core.skill_artifact_loader import (
     PER_HARNESS_TASK_HEAD_TOKEN_BUDGET,
     PER_TASK_HEAD_TOKEN_BUDGET,
     SKILL_ARTIFACT_HEADERS,
+    TASK_HEAD_SECTION_HEADERS,
     TASK_NAMES,
+    harness_task_head_section_header,
     load_packaged_skill,
     parse_skill_artifact,
+    task_head_section_header,
 )
 
 from pydocs_eval.campaign.before_after_arm_settings import load_arm_overlay
@@ -43,9 +46,10 @@ def _candidate_sections() -> dict[str, str]:
 
 
 def _cap(header: str) -> int:
-    if header == "BACKBONE":
+    """The loader's cap for one section, read from the loader's own constants."""
+    if header == BACKBONE_HEADER:
         return BACKBONE_TOKEN_BUDGET
-    if header.startswith("TASK_HEAD: "):
+    if header in TASK_HEAD_SECTION_HEADERS:
         return PER_TASK_HEAD_TOKEN_BUDGET
     return PER_HARNESS_TASK_HEAD_TOKEN_BUDGET
 
@@ -64,14 +68,13 @@ def test_every_candidate_section_is_under_its_cap() -> None:
 
 # --- The guard plan for the readers this experiment does not measure ----------
 
+_REPO_QA_TASK_HEAD = task_head_section_header("repo_qa")
+_ASK_HEADERS = tuple(harness_task_head_section_header("ask_your_docs", t) for t in TASK_NAMES)
 _UNTOUCHED_HEADERS = (
-    "TASK_HEAD: vuln",
-    "TASK_HEAD: bug_loc",
-    "HARNESS_TASK_HEAD: external.repo_qa",
-    "HARNESS_TASK_HEAD: external.vuln",
-    "HARNESS_TASK_HEAD: external.bug_loc",
+    task_head_section_header("vuln"),
+    task_head_section_header("bug_loc"),
+    *(harness_task_head_section_header("external", task) for task in TASK_NAMES),
 )
-_ASK_HEADERS = tuple(f"HARNESS_TASK_HEAD: ask_your_docs.{task}" for task in TASK_NAMES)
 # Quoted from the packaged seed, which hard-wraps; compared whitespace-collapsed.
 _STOP_RULE = (
     "Stop searching the moment a result names the file and symbol that must contain the answer"
@@ -99,7 +102,7 @@ def test_the_five_rewritten_sections_differ_from_the_packaged_seed() -> None:
     candidate, packaged = _candidate_sections(), _packaged_sections()
     rewritten = set(SKILL_ARTIFACT_HEADERS) - set(_UNTOUCHED_HEADERS)
 
-    assert rewritten == {BACKBONE_HEADER, "TASK_HEAD: repo_qa", *_ASK_HEADERS}
+    assert rewritten == {BACKBONE_HEADER, _REPO_QA_TASK_HEAD, *_ASK_HEADERS}
     for header in rewritten:
         assert candidate[header] != packaged[header], header
 
@@ -119,6 +122,7 @@ def test_backbone_keeps_the_stop_rule_and_the_walks_and_reads_clause_word_for_wo
 def test_backbone_defines_already_shown_and_keeps_the_re_orient_sentence() -> None:
     backbone = _collapsed(_candidate_sections()[BACKBONE_HEADER])
 
+    assert "Read exactly what the result cites and has not already shown" in backbone
     assert (
         "Already shown: a hit whose follow-up calls offer no source call has shown its whole span"
         in backbone
@@ -137,6 +141,10 @@ def test_backbone_breadth_passages_are_conditional_and_a_ceiling() -> None:
     assert "precision budget" not in backbone
     assert "When the question holds several behaviors, decompose it" in backbone
     assert "When it asks about one behavior, send one query" in backbone
+    # Each conditional carries its reason, and no permission is deleted.
+    assert "one behavior each, since focused queries beat a sprawling one" in backbone
+    assert "Re-phrase in the repo's terms once results show them" in backbone
+    assert "Retire exhausted hits" in backbone
     assert "at most about five documents in play — a ceiling, not a quota" in backbone
 
 
@@ -154,7 +162,7 @@ _SIGNATURE_TRIGGER = "the question asks for a signature that no result has shown
 
 
 def test_repo_qa_head_drops_the_unconditional_read_and_signature_clause() -> None:
-    head = _collapsed(_candidate_sections()["TASK_HEAD: repo_qa"])
+    head = _collapsed(_candidate_sections()[_REPO_QA_TASK_HEAD])
 
     assert "Confirm the candidate location by reading it" not in head
     assert "get_symbol where exact signatures matter" not in head
@@ -177,7 +185,9 @@ _MOVED_RULES = {
         'one get_symbol depth="source" call or one windowed read_file call',
         "ask for the symbol card only when the question needs its member list",
     ),
-    "windowed reads": ("Give read_file an offset and limit around the cited lines",),
+    "windowed reads": (
+        "Give read_file an offset and limit around the lines a result cited or reported as missing",
+    ),
     "get_overview after a miss or for structure": (
         "Call get_overview only after a search misses or for a question about the "
         "project's structure, never beside the first search",
@@ -265,7 +275,7 @@ def test_no_section_tells_the_agent_to_repeat_a_missed_search_under_another_kind
 # BACKBONE and in the task head, never in the external head (a deviation from
 # the ticket's "only inside BACKBONE", recorded in the ledger).
 _REWRITTEN_EXTERNAL_TIERS = {
-    "repo_qa": {BACKBONE_HEADER, "TASK_HEAD: repo_qa"},
+    "repo_qa": {BACKBONE_HEADER, _REPO_QA_TASK_HEAD},
     "vuln": {BACKBONE_HEADER},
     "bug_loc": {BACKBONE_HEADER},
 }
@@ -312,9 +322,12 @@ def test_an_overlay_naming_the_candidate_is_accepted_by_the_overlay_loader(
 LEDGER_PATH = _CONFIGS_DIR / "candidate_seed_ledger.md"
 _DELIVERED_FOR_REPO_QA = (
     BACKBONE_HEADER,
-    "TASK_HEAD: repo_qa",
-    "HARNESS_TASK_HEAD: ask_your_docs.repo_qa",
+    _REPO_QA_TASK_HEAD,
+    harness_task_head_section_header("ask_your_docs", "repo_qa"),
 )
+# The ledger's two tables, told apart by their column counts.
+_SECTION_TABLE_WIDTH = 7
+_SENTENCE_TABLE_WIDTH = 5
 _SENTENCE_LABELS = frozenset({"call-adding", "call-removing", "neutral"})
 _OPENING_WORDS = 5
 
@@ -339,7 +352,11 @@ def _sentences(body: str) -> list[str]:
 
 def test_ledger_counts_every_section_by_the_loader_arithmetic() -> None:
     candidate, packaged = _candidate_sections(), _packaged_sections()
-    rows = {row[0]: row for row in _ledger_rows(7) if row[0] in SKILL_ARTIFACT_HEADERS}
+    rows = {
+        row[0]: row
+        for row in _ledger_rows(_SECTION_TABLE_WIDTH)
+        if row[0] in SKILL_ARTIFACT_HEADERS
+    }
 
     assert tuple(rows) == SKILL_ARTIFACT_HEADERS
     for header, (_, status, chars, tokens, cap, packaged_chars, packaged_tokens) in rows.items():
@@ -355,21 +372,24 @@ def test_ledger_counts_every_section_by_the_loader_arithmetic() -> None:
 
 def test_ledger_labels_every_sentence_chat_receives_for_repo_qa() -> None:
     candidate = _candidate_sections()
-    rows = [row for row in _ledger_rows(5) if row[1].isdigit()]
+    rows = [row for row in _ledger_rows(_SENTENCE_TABLE_WIDTH) if row[1].isdigit()]
 
     for header in _DELIVERED_FOR_REPO_QA:
-        labelled = [row for row in rows if row[0] == header]
+        labelled = [row[1:4] for row in rows if row[0] == header]
         sentences = _sentences(candidate[header])
-        assert [int(row[1]) for row in labelled] == list(range(1, len(sentences) + 1)), header
-        for row, sentence in zip(labelled, sentences, strict=True):
-            assert row[2] == " ".join(sentence.split()[:_OPENING_WORDS]), (header, row[1])
-            assert row[3] in _SENTENCE_LABELS, (header, row[1])
+        assert len(labelled) == len(sentences), header
+        for position, ((number, opening, label), sentence) in enumerate(
+            zip(labelled, sentences, strict=True), start=1
+        ):
+            assert int(number) == position, (header, number)
+            assert opening == " ".join(sentence.split()[:_OPENING_WORDS]), (header, number)
+            assert label in _SENTENCE_LABELS, (header, number)
     assert {row[0] for row in rows} == set(_DELIVERED_FOR_REPO_QA)
 
 
 def test_ledger_records_which_form_of_the_signature_clause_was_written() -> None:
     ledger = LEDGER_PATH.read_text(encoding="utf-8")
-    head = _collapsed(_candidate_sections()["TASK_HEAD: repo_qa"])
+    head = _collapsed(_candidate_sections()[_REPO_QA_TASK_HEAD])
 
     expected = "conditional" if _SIGNATURE_TRIGGER in head else "dropped"
     assert f"**Signature clause form: {expected}.**" in ledger

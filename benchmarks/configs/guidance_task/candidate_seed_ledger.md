@@ -22,19 +22,19 @@ characters // `CHARS_PER_TOKEN` (4). The caps are the ones the loader enforces.
 
 | Section | Status | Characters | Tokens | Cap | Packaged characters | Packaged tokens |
 |---|---|---|---|---|---|---|
-| BACKBONE | replaced | 2171 | 542 | 1000 | 2173 | 543 |
+| BACKBONE | replaced | 2173 | 543 | 1000 | 2173 | 543 |
 | TASK_HEAD: repo_qa | replaced | 961 | 240 | 300 | 990 | 247 |
 | TASK_HEAD: vuln | byte-identical | 726 | 181 | 300 | 726 | 181 |
 | TASK_HEAD: bug_loc | byte-identical | 922 | 230 | 300 | 922 | 230 |
-| HARNESS_TASK_HEAD: ask_your_docs.repo_qa | replaced | 1151 | 287 | 300 | 115 | 28 |
-| HARNESS_TASK_HEAD: ask_your_docs.vuln | replaced | 1151 | 287 | 300 | 125 | 31 |
-| HARNESS_TASK_HEAD: ask_your_docs.bug_loc | replaced | 1168 | 292 | 300 | 189 | 47 |
+| HARNESS_TASK_HEAD: ask_your_docs.repo_qa | replaced | 1183 | 295 | 300 | 115 | 28 |
+| HARNESS_TASK_HEAD: ask_your_docs.vuln | replaced | 1183 | 295 | 300 | 125 | 31 |
+| HARNESS_TASK_HEAD: ask_your_docs.bug_loc | replaced | 1195 | 298 | 300 | 189 | 47 |
 | HARNESS_TASK_HEAD: external.repo_qa | byte-identical | 200 | 50 | 300 | 200 | 50 |
 | HARNESS_TASK_HEAD: external.vuln | byte-identical | 202 | 50 | 300 | 202 | 50 |
 | HARNESS_TASK_HEAD: external.bug_loc | byte-identical | 233 | 58 | 300 | 233 | 58 |
 
 What chat receives for `repo_qa` (`BACKBONE`, `TASK_HEAD: repo_qa`,
-`HARNESS_TASK_HEAD: ask_your_docs.repo_qa`) is 1,069 tokens, against 818 for
+`HARNESS_TASK_HEAD: ask_your_docs.repo_qa`) is 1,078 tokens, against 818 for
 the packaged seed's three sections, before the two `\n` tier separators.
 
 ## Decisions recorded here
@@ -48,8 +48,11 @@ the packaged seed's three sections, before the two `\n` tier separators.
   heads. Each is stated once.
 - **The three ask heads share one text** for the six moved rules, the effort
   shape and the label sentence. `ask_your_docs.bug_loc` differs in one reason
-  clause: its first query routes from the report's own literals. This keeps
-  the routing from the packaged head.
+  clause: the report's own literals route its first query. This keeps the
+  routing from the packaged head. The Example rule is carried by all three
+  heads as the spec asks ("rewritten on the same rules"); for `vuln` and
+  `bug_loc` its trigger (a result showed a usable signature) seldom fires,
+  and their task heads still set the answer's shape. Neither is measured.
 - **The label sentence** follows the product's finalize note: "end with one
   line that starts with `Not confirmed:`". The eval suite's outcome reader
   matches the label at the start of a line.
@@ -72,7 +75,7 @@ bullet. "Opening" is its first five words, whitespace-collapsed.
 
 | Section | # | Opening | Label | Note |
 |---|---|---|---|---|
-| BACKBONE | 1 | Search policy for the pydocs-mcp | neutral | Framing; tightened from the packaged three-line preamble, same meaning. |
+| BACKBONE | 1 | Search policy: which retrieval move | neutral | Framing; shortened from the packaged three-line preamble to make room for the "already shown" definition. It carries no policy. |
 | BACKBONE | 2 | Route by expected lexical overlap | neutral | Routing; unchanged. |
 | BACKBONE | 3 | - The question names things | neutral | Routing to lexical tools; unchanged. |
 | BACKBONE | 4 | - The question describes behavior | neutral | Routing to semantic search; unchanged. |
@@ -81,14 +84,15 @@ bullet. "Opening" is its first five words, whitespace-collapsed.
 | BACKBONE | 7 | Design rationale — get_why, before | call-adding | On change questions only; unchanged. |
 | BACKBONE | 8 | Context around known symbols — | call-removing | One call with all targets; unchanged. |
 | BACKBONE | 9 | If a tool named here | call-adding | Mildly: take the nearest bound tool; unchanged. |
-| BACKBONE | 10 | When the question holds several | call-adding | Rewritten as conditional: trigger (several behaviors) → decompose (at most three queries) → one behavior each. Was the unconditional "Decompose before retrieving". The walks-and-reads clause is kept word for word. |
-| BACKBONE | 11 | When it asks about one | call-removing | New: trigger (one behavior) → one query → reason (a rephrasing finds the same). |
-| BACKBONE | 12 | Keep at most about five | call-removing | Rewritten: five documents as a ceiling, not a quota. Was "Spend a ~5-document precision budget", which could read as a target. |
-| BACKBONE | 13 | Retire exhausted hits; do not | call-removing | Same meaning as the packaged sentence, shorter. |
-| BACKBONE | 14 | Stop searching the moment a | call-removing | The stop rule; word for word. |
-| BACKBONE | 15 | Read what the result cites | call-adding | One read, now conditional: only what the result has not already shown. Was unconditional "Read exactly what the result cites". |
-| BACKBONE | 16 | Already shown: a hit whose | call-removing | New: the definition of "already shown" (system_v3 rule 9's definition, stated once). |
-| BACKBONE | 17 | If three search queries surface | call-adding | After three misses only; the re-orient sentence keeps its meaning. |
+| BACKBONE | 10 | When the question holds several | call-adding | Rewritten as conditional: trigger (several behaviors) → decompose (at most three queries, one behavior each) → reason (focused queries beat a sprawling one). Was the unconditional "Decompose before retrieving". The walks-and-reads clause is kept word for word. |
+| BACKBONE | 11 | When it asks about one | call-removing | New: trigger (one behavior) → one query → reason (there is one thing to find). |
+| BACKBONE | 12 | Re-phrase in the repo's terms | call-adding | The packaged permission to learn the repo's vocabulary and re-phrase, kept (no permission is deleted) and shortened. |
+| BACKBONE | 13 | Keep at most about five | call-removing | Rewritten: five documents as a ceiling, not a quota. Was "Spend a ~5-document precision budget", which could read as a target. |
+| BACKBONE | 14 | Retire exhausted hits; do not | call-removing | Same meaning as the packaged sentence, shorter. |
+| BACKBONE | 15 | Stop searching the moment a | call-removing | The stop rule; word for word. |
+| BACKBONE | 16 | Read exactly what the result | call-adding | One read, now conditional: only what the result cites and has not already shown. Was the unconditional "Read exactly what the result cites". |
+| BACKBONE | 17 | Already shown: a hit whose | call-removing | New: the definition of "already shown" (system_v3 rule 9's definition, stated once). |
+| BACKBONE | 18 | If three search queries surface | call-adding | After three misses only; the re-orient sentence keeps its meaning. |
 | TASK_HEAD: repo_qa | 1 | Repository-comprehension QA across corpora. | neutral | Framing; unchanged. |
 | TASK_HEAD: repo_qa | 2 | Match the answer to the | call-adding | get_context on load-bearing symbols; get_why on why-questions. The signature clause is dropped (was call-adding). |
 | TASK_HEAD: repo_qa | 3 | Questions arrive in both shapes | neutral | Routing; unchanged. |
@@ -99,7 +103,7 @@ bullet. "Opening" is its first five words, whitespace-collapsed.
 | HARNESS_TASK_HEAD: ask_your_docs.repo_qa | 2 | Issue the calls on a | call-removing | system_v3 rule 7: "Together:" calls in one Turn, "Then:" later; each with its reason. |
 | HARNESS_TASK_HEAD: ask_your_docs.repo_qa | 3 | Never read again what a | call-removing | system_v3 rule 9's prohibition, with its reason (the read returns the same lines). |
 | HARNESS_TASK_HEAD: ask_your_docs.repo_qa | 4 | When you need a symbol's | call-removing | system_v3 rule 12: one source view; the Symbol card only when the question needs a member list (reason: the card adds no code). |
-| HARNESS_TASK_HEAD: ask_your_docs.repo_qa | 5 | Give read_file an offset and | call-removing | system_v3 rule 13: windowed reads; widen only to follow a needed reference. |
+| HARNESS_TASK_HEAD: ask_your_docs.repo_qa | 5 | Give read_file an offset and | call-removing | system_v3 rule 13: windowed reads around the lines a result cited or reported as missing; widen only to follow a needed reference. |
 | HARNESS_TASK_HEAD: ask_your_docs.repo_qa | 6 | Call get_overview only after a | call-removing | system_v3 rule 14: only after a miss or for a structure question, never beside the first search. Replaces the packaged "catalog is already in your prompt; skip orientation calls". |
 | HARNESS_TASK_HEAD: ask_your_docs.repo_qa | 7 | When a result showed a | neutral | system_v3 rule 5: an Example only from a signature or usage already shown; answer form. |
 | HARNESS_TASK_HEAD: ask_your_docs.repo_qa | 8 | Effort: the first turn locates, | call-removing | New: the effort shape (locate, read in one batch, answer; any further call names its claim). |
@@ -113,9 +117,9 @@ reworded. The label is the packaged sentence's own label.
 | Packaged sentence (short) | Label | What replaced it |
 |---|---|---|
 | "Decompose before retrieving: at most three sharp search queries … one behavior each." | call-adding | Sentences 10 and 11 of `BACKBONE`. |
-| "Learn the repo's own vocabulary from early results and re-phrase in its terms; two focused queries beat one sprawling sentence that mixes concerns." | call-adding | Folded into sentence 10 ("in the repo's terms"). The breadth claim is gone. |
-| "Spend a ~5-document precision budget: keep about five retrieved documents in play …" | call-adding (risk: read as a target) | Sentence 12 of `BACKBONE`. |
-| "Read exactly what the result cites … instead of re-querying for a cleaner phrasing." | call-adding (+1 read when already shown) | Sentences 15 and 16 of `BACKBONE`. |
+| "Learn the repo's own vocabulary from early results and re-phrase in its terms; two focused queries beat one sprawling sentence that mixes concerns." | call-adding | Sentence 12 keeps the permission; the reason moves into sentence 10, under the several-behaviors trigger. |
+| "Spend a ~5-document precision budget: keep about five retrieved documents in play …" | call-adding (risk: read as a target) | Sentence 13 of `BACKBONE`. |
+| "Read exactly what the result cites … instead of re-querying for a cleaner phrasing." | call-adding (+1 read when already shown) | Sentences 16 and 17 of `BACKBONE`. |
 | "… and get_symbol where exact signatures matter" | call-adding | Dropped. |
 | "Confirm the candidate location by reading it before committing to it …" | call-adding | Sentence 5 of `TASK_HEAD: repo_qa`. |
 | "The catalog is already in your prompt; skip orientation calls and route the first query straight from the question." | call-removing | Sentence 6 of the ask head. The catalog claim is dropped. |
