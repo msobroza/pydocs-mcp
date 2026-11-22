@@ -8,6 +8,7 @@ seed, and through the external harness's fold.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -36,7 +37,9 @@ CANDIDATE_PATH = _CONFIGS_DIR / "candidate_seed.md"
 
 
 def _candidate_sections() -> dict[str, str]:
-    return parse_sections(CANDIDATE_PATH.read_text(encoding="utf-8"), allowed=SKILL_ARTIFACT_HEADERS)
+    return parse_sections(
+        CANDIDATE_PATH.read_text(encoding="utf-8"), allowed=SKILL_ARTIFACT_HEADERS
+    )
 
 
 def _cap(header: str) -> int:
@@ -116,7 +119,10 @@ def test_backbone_keeps_the_stop_rule_and_the_walks_and_reads_clause_word_for_wo
 def test_backbone_defines_already_shown_and_keeps_the_re_orient_sentence() -> None:
     backbone = _collapsed(_candidate_sections()[BACKBONE_HEADER])
 
-    assert "Already shown: a hit whose follow-up calls offer no source call has shown its whole span" in backbone
+    assert (
+        "Already shown: a hit whose follow-up calls offer no source call has shown its whole span"
+        in backbone
+    )
     assert "lines a view reports as not in the index are read exactly once" in backbone
     assert (
         "If three search queries surface no location, re-orient — widen scope or map the layout"
@@ -299,3 +305,71 @@ def test_an_overlay_naming_the_candidate_is_accepted_by_the_overlay_loader(
     assert loaded.product == {}
     assert loaded.guidance_sections_path == str(CANDIDATE_PATH)
     assert dict(loaded.guidance_sections) == _candidate_sections()
+
+
+# --- The ledger -----------------------------------------------------------------------------
+
+LEDGER_PATH = _CONFIGS_DIR / "candidate_seed_ledger.md"
+_DELIVERED_FOR_REPO_QA = (
+    BACKBONE_HEADER,
+    "TASK_HEAD: repo_qa",
+    "HARNESS_TASK_HEAD: ask_your_docs.repo_qa",
+)
+_SENTENCE_LABELS = frozenset({"call-adding", "call-removing", "neutral"})
+_OPENING_WORDS = 5
+
+
+def _ledger_rows(width: int) -> list[list[str]]:
+    """The ledger's Markdown table rows with ``width`` cells, header and rule rows dropped."""
+    rows = []
+    for line in LEDGER_PATH.read_text(encoding="utf-8").splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if line.startswith("|") and len(cells) == width and not set(cells[0]) <= {"-"}:
+            rows.append(cells)
+    return rows
+
+
+def _sentences(body: str) -> list[str]:
+    """Spans ending in a full stop, inside one paragraph or one bullet."""
+    sentences: list[str] = []
+    for unit in re.split(r"\n\s*\n|\n(?=- )", body):
+        sentences += [s for s in re.split(r"(?<=\.)\s+", _collapsed(unit)) if s]
+    return sentences
+
+
+def test_ledger_counts_every_section_by_the_loader_arithmetic() -> None:
+    candidate, packaged = _candidate_sections(), _packaged_sections()
+    rows = {row[0]: row for row in _ledger_rows(7) if row[0] in SKILL_ARTIFACT_HEADERS}
+
+    assert tuple(rows) == SKILL_ARTIFACT_HEADERS
+    for header, (_, status, chars, tokens, cap, packaged_chars, packaged_tokens) in rows.items():
+        body = candidate[header]
+        expected_status = "byte-identical" if body == packaged[header] else "replaced"
+        assert status == expected_status, header
+        assert int(chars) == len(body), header
+        assert int(tokens) == len(body) // CHARS_PER_TOKEN, header
+        assert int(cap) == _cap(header), header
+        assert int(packaged_chars) == len(packaged[header]), header
+        assert int(packaged_tokens) == len(packaged[header]) // CHARS_PER_TOKEN, header
+
+
+def test_ledger_labels_every_sentence_chat_receives_for_repo_qa() -> None:
+    candidate = _candidate_sections()
+    rows = [row for row in _ledger_rows(5) if row[1].isdigit()]
+
+    for header in _DELIVERED_FOR_REPO_QA:
+        labelled = [row for row in rows if row[0] == header]
+        sentences = _sentences(candidate[header])
+        assert [int(row[1]) for row in labelled] == list(range(1, len(sentences) + 1)), header
+        for row, sentence in zip(labelled, sentences, strict=True):
+            assert row[2] == " ".join(sentence.split()[:_OPENING_WORDS]), (header, row[1])
+            assert row[3] in _SENTENCE_LABELS, (header, row[1])
+    assert {row[0] for row in rows} == set(_DELIVERED_FOR_REPO_QA)
+
+
+def test_ledger_records_which_form_of_the_signature_clause_was_written() -> None:
+    ledger = LEDGER_PATH.read_text(encoding="utf-8")
+    head = _collapsed(_candidate_sections()["TASK_HEAD: repo_qa"])
+
+    expected = "conditional" if _SIGNATURE_TRIGGER in head else "dropped"
+    assert f"**Signature clause form: {expected}.**" in ledger
