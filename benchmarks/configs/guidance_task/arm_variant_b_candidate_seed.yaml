@@ -1,0 +1,37 @@
+# Guidance-task experiment (issue #391), variant (b): `system_v3` plus the
+# candidate seed alone. A DIAGNOSTIC arm, it decides nothing: it measures the
+# cost or gain of carrying six rules twice, once in `system_v3` and once in the
+# guidance (spec docs/superpowers/specs/2026-11-22-guidance-task-experiment-design.md,
+# "The measurement"). The guidance file holds the ten skill sections of the
+# candidate seed and no SYSTEM_PROMPT section, so the system text stays
+# `system_v3`.
+#
+# This overlay is a candidate-arm overlay (--candidate-settings). It holds the
+# guidance_sections key and nothing else, so the arm differs from the baseline
+# only in the text it loads. Every other setting is the before/after default
+# the ladder's repoqa-qa arms use: the serving file below (which leaves
+# max_agent_turns at the product default, a 12-Turn budget), the pinned LLM
+# block, the pinned architecture and the citing scaffold. It sets no
+# guidance_task: on the eval path the binding hands the build an explicit task
+# name (repo_qa) whenever an arm carries guidance, and an explicit name wins
+# over the knob.
+#
+# How the arms fit together: baseline (no overlay), (a), (b), (c), all on one
+# commit, the head of the experiment branch. The baseline is run once and
+# reused by every other arm (--reuse-baseline <that baseline arm dir>). The
+# compare verb needs the baseline's A/A replicate: a fifth arm, the baseline
+# run again on the same commit under the same settings with --allow-identical.
+# If the program's $25 stop-and-ask bites, drop (c) first, then (b); never (a).
+#
+# Plan (free; prints the plan and spends nothing). The paid run adds
+# --confirm-spend, and only after the owner's go:
+#   python -m pydocs_eval.campaign before-after \
+#     --baseline <experiment head sha> --candidate <experiment head sha> \
+#     --candidate-settings benchmarks/configs/guidance_task/arm_variant_b_candidate_seed.yaml \
+#     --config benchmarks/configs/ask_openrouter_qwen3_4b.yaml \
+#     --llm-block benchmarks/configs/ask_openrouter_qwen3_8_27b_llm.yaml \
+#     --split repoqa-qa/small_dev --workspace ~/pydocs-index --model qwen/qwen3.8-27b
+#
+# A test drives this exact command against the suite's fakes
+# (benchmarks/tests/campaign/test_guidance_variant_overlays.py).
+guidance_sections: candidate_seed.md
