@@ -181,7 +181,9 @@ def _skill_sections_validated(path: Path, origin: str) -> dict[str, str]:
     try:
         text = path.read_text(encoding="utf-8")
         # Strict parse: any header but the prompt section and the ten is refused.
-        sections = parse_sections(text, allowed=(SYSTEM_PROMPT_SECTION_KEY, *SKILL_ARTIFACT_HEADERS))
+        sections = parse_sections(
+            text, allowed=(SYSTEM_PROMPT_SECTION_KEY, *SKILL_ARTIFACT_HEADERS)
+        )
         # The skill sections re-rendered alone: the document the binding validates
         # and writes beside each trajectory (``_write_candidate_skill``).
         skill = {key: value for key, value in sections.items() if key in SKILL_ARTIFACT_HEADERS}
