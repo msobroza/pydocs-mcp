@@ -442,7 +442,7 @@ exact string/regex → `grep`.*
 |---|---|---|---|
 | `pattern` | `str` | required | Regular expression, **Python `re` flavor** (the documented, single-implementation dialect — no alternate engine divergence). |
 | `path` | `str` | `""` | A directory, or one file, relative to the selected root(s). A file path is matched exactly, and before the directory rule, so `src/core` names neither `src/core.py` nor anything outside a `src/core/` directory. Empty = the whole corpus for the selected scope. Type and default unchanged *(ADR 0023 (g))*. |
-| `glob` | `str` | `""` | Glob filter on candidate file paths (e.g. `*.py`, `src/**/*.md`). |
+| `glob` | `str` | `""` | Glob filter on candidate file paths (e.g. `*.py`, `src/**/*.md`, `*.{py,pyi}`). |
 | `output_mode` | `Literal["content","files_with_matches","count"]` | `"files_with_matches"` | `content` = matching lines (`file:line:content` convention); `files_with_matches` = matching file paths only; `count` = per-file match counts. |
 | `-i` | `bool` | `false` | Case-insensitive matching. The parameter name is the literal string `-i`. |
 | `-n` | `bool` | `true` | Include line numbers in `content` output. Literal name `-n`. No effect in the other output modes. |
@@ -465,7 +465,7 @@ exact string/regex → `grep`.*
 
 | Parameter | Type | Default | Semantics |
 |---|---|---|---|
-| `pattern` | `str` | required | Glob syntax; `**` recursive matching supported (e.g. `**/*_test.py`). |
+| `pattern` | `str` | required | Glob syntax; `**` recursive matching supported (e.g. `**/*_test.py`), as are `{a,b}` alternatives and `[abc]` / `[!abc]` character sets. |
 | `path` | `str` | `""` | Directory to match under, relative to the project root. Empty = project root. |
 | `head_limit` | `int \| None` | YAML-wired | Cap on returned paths. |
 | `project` | `str` | `""` | Corpus selector. |

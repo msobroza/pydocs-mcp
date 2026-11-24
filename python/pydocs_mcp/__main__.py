@@ -515,7 +515,9 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_query_flags(p_grep)
 
     p_glob = _task_parser("glob", [])
-    p_glob.add_argument("pattern", help='Glob pattern; ** recurses (e.g. "**/*_test.py").')
+    p_glob.add_argument(
+        "pattern", help='Glob pattern; ** recurses, {a,b} and [abc] work (e.g. "**/*_test.py").'
+    )
     p_glob.add_argument(
         "--path",
         default="",

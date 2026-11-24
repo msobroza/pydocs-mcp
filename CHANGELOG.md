@@ -365,6 +365,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`glob` and grep's `glob` filter understand `{a,b}` and `[abc]`.** A pattern
+  such as `**/*.{py,pyi}` or `test_[ab].py` used to be read literally and matched
+  nothing, without an error. Braces now match any of their comma-separated
+  alternatives (they nest, and may hold `**`), and `[abc]` / `[!abc]` match one
+  character of a set, never `/`, as `rg --glob` does. An unclosed `[` or `{` is
+  still a literal character.
 - **A chat question that runs out of steps still gets an answer.** At its step
   limit (`ask_your_docs.max_agent_turns`, still 12) the agent used to show
   LangGraph's canned "Sorry, need more steps to process this request." Now the
